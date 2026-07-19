@@ -2539,11 +2539,11 @@ fn push_clause_matches(
         && let Some(candidate) = first_numeric
         && Some((candidate.start, candidate.end)) == clause_bounds
     {
-        push_parsed_match(matches, text, candidate, ctx);
+        let _ = push_parsed_match(matches, text, candidate, ctx);
         return;
     }
 
-    push_parsed_match(
+    match push_parsed_match(
         matches,
         text,
         CandidateSpan {
@@ -2552,14 +2552,20 @@ fn push_clause_matches(
             parser: CandidateParser::Broad,
         },
         ctx,
-    );
+    ) {
+        Some(true) => return,
+        Some(false) if numeric_count > 0 => {
+            matches.pop();
+        }
+        _ => {}
+    }
 
     if let Some(candidate) = first_numeric {
         if numeric_count == 1 {
-            push_parsed_match(matches, text, candidate, ctx);
+            let _ = push_parsed_match(matches, text, candidate, ctx);
         } else {
             for_numeric_candidate_spans(text, start, end, |candidate| {
-                push_parsed_match(matches, text, candidate, ctx);
+                let _ = push_parsed_match(matches, text, candidate, ctx);
             });
         }
     }
@@ -2603,7 +2609,7 @@ fn push_parsed_match(
     source: &str,
     candidate: CandidateSpan,
     ctx: &ParseCtx,
-) {
+) -> Option<bool> {
     let start = candidate.start;
     let end = candidate.end;
     if start >= end
@@ -2611,21 +2617,20 @@ fn push_parsed_match(
             .last()
             .is_some_and(|item| item.start == start && item.end == end)
     {
-        return;
+        return None;
     }
-    let Some(text) = source.get(start..end).map(str::trim) else {
-        return;
-    };
+    let text = source.get(start..end).map(str::trim)?;
     if text.is_empty() {
-        return;
+        return None;
     }
     let parsed = match candidate.parser {
         CandidateParser::Broad => parse(text, Some(ctx.clone())),
         CandidateParser::TokenWindow => parse_token_window(text, ctx),
     };
     if !parsed_has_actionable_match(&parsed) {
-        return;
+        return None;
     }
+    let suppresses_inner_tokens = parsed_suppresses_inner_tokens(&parsed);
     let leading = source[start..end].len() - source[start..end].trim_start().len();
     let trailing = source[start..end].len() - source[start..end].trim_end().len();
     matches.push(ParsedMatch {
@@ -2634,6 +2639,23 @@ fn push_parsed_match(
         text: text.to_owned(),
         parsed,
     });
+    Some(suppresses_inner_tokens)
+}
+
+fn parsed_suppresses_inner_tokens(parsed: &Parsed) -> bool {
+    parsed.best.is_some()
+        || !parsed.alternatives.is_empty()
+        || !parsed.findings.ambiguities.is_empty()
+        || !parsed.findings.approximations.is_empty()
+        || parsed.findings.skipped.iter().any(|issue| {
+            matches!(
+                issue.code,
+                IssueCode::Approximation
+                    | IssueCode::TypoCorrected
+                    | IssueCode::TimezoneUnsupported
+                    | IssueCode::RecurrenceUnsupported
+            )
+        })
 }
 
 fn push_editor_dimension_match(

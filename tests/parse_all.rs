@@ -48,6 +48,12 @@ fn scanner_keeps_sorted_non_overlapping_matches() {
 
     let single = parse_all("3m", None);
     assert_eq!(texts(&single), vec!["3m"]);
+
+    let range = parse_all("between 5 and 10 kg", None);
+    assert_eq!(texts(&range), vec!["between 5 and 10 kg"]);
+
+    let typo_then_dimension = parse_all("mebers 3m", None);
+    assert_eq!(texts(&typo_then_dimension), vec!["3m"]);
 }
 
 #[test]
