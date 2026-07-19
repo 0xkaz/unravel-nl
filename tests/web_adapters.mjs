@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import {
   applyParseState,
+  canonicalizeFieldsForUi,
+  canonicalizeValuesForUi,
   createUnravelFieldController,
+  parseAllForUi,
   parseForUi,
   rankIssues,
 } from "../web/unravel-adapters.js";
@@ -28,6 +31,7 @@ const timezoneParsed = {
 };
 
 assert.equal(parseForUi(() => cleanParsed, "180cm").ok, true);
+assert.equal(parseForUi(() => JSON.stringify(cleanParsed), "180cm").ok, true);
 
 const state = parseForUi(() => timezoneParsed, "3pm Europe/Paris");
 assert.equal(state.ok, false);
@@ -69,6 +73,58 @@ assert.deepEqual(
   issues.map((issue) => issue.code),
   ["AMBIGUOUS_UNIT", "APPROXIMATION"],
 );
+
+const parsedMatches = parseAllForUi(
+  () =>
+    JSON.stringify([
+      { start: 0, end: 2, text: "3m", parsed: cleanParsed },
+      {
+        start: 3,
+        end: 5,
+        text: "4m",
+        parsed: { best: { kind: "quantity", value: 4, unit: "m" }, issues: [] },
+      },
+    ]),
+  "3m×4m",
+);
+assert.equal(parsedMatches.length, 2);
+assert.equal(parsedMatches[0].start, 0);
+assert.equal(parsedMatches[0].ok, true);
+
+const fields = canonicalizeFieldsForUi(() => cleanParsed, [
+  { field: "height", text: "180cm" },
+]);
+assert.equal(fields[0].field, "height");
+assert.equal(fields[0].canonical.unit, "m");
+
+const values = canonicalizeValuesForUi(
+  () =>
+    JSON.stringify([
+      {
+        field: "width",
+        input: "3640",
+        ok: false,
+        canonical: null,
+        parsed: {
+          best: { kind: "number", value: 3640 },
+          findings: {
+            skipped: [],
+            ambiguities: [
+              {
+                code: "UNIT_ASSUMED",
+                ref_text: "3640",
+                reason: "unitless",
+                span: { start: 0, end: 4, text: "3640" },
+              },
+            ],
+            approximations: [],
+          },
+        },
+      },
+    ]),
+  [],
+);
+assert.equal(values[0].issues[0].code, "UNIT_ASSUMED");
 
 function mockElement(value) {
   const listeners = new Map();

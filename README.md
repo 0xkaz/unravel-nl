@@ -54,7 +54,8 @@ The first slice focuses on:
   custom-unit adapter layers
 - Custom unit kind metadata, custom fuzzy vocabulary profiles, and
   `describe_*` resource views for UI/tool adapters
-- Feature-gated WASM exports for browser or Node package adapters
+- Feature-gated WASM exports for browser or Node package adapters, including
+  single-value JSON parsing and span-preserving multi-value extraction
 - No-Silent-Loss findings for skipped, ambiguous, and approximate readings
 - A normalized parser dispatch path and exact-first unit alias lookup to keep
   no-match and typo-heavy inputs bounded as the locale catalog grows
@@ -125,6 +126,27 @@ assert_eq!(matches.len(), 3);
 assert_eq!(matches[0].text, "延床100㎡");
 assert_eq!(matches[0].parsed.best.as_ref().unwrap().dimension, Some(Dimension::Area));
 assert_eq!(matches[2].text, "3.5m");
+```
+
+The scanner preserves byte spans and uses a token-window dispatch path for
+dimension-like substrings:
+
+```rust
+use unravel_nl::{parse_all, Dimension, Locale, ParseCtx};
+
+let matches = parse_all(
+    "3m×4m のLDK",
+    Some(ParseCtx {
+        locale: Some(Locale::Ja),
+        expected_dimension: Some(Dimension::Length),
+        ..ParseCtx::default()
+    }),
+);
+
+assert_eq!(matches[0].text, "3m");
+assert_eq!(matches[0].start, 0);
+assert_eq!(matches[1].text, "4m");
+assert_eq!(matches[1].start, 4);
 ```
 
 ## Date Parsing
@@ -202,10 +224,12 @@ assert_eq!(issues[0].rank, 90);
 ```
 
 Browser-facing adapters live in `web/unravel-adapters.js`. They are dependency
-free ESM helpers for DOM inputs, React integration by injection, and a custom
-element wrapper; the parser function is injected so the same code can sit on top
-of a WASM bundle or a server bridge. The React adapter is covered by an actual
-React server-render runtime smoke test under `tests/react_adapter_runtime.mjs`.
+free ESM helpers for DOM inputs, span-preserving `parseAllForUi()`,
+field-list `canonicalizeFieldsForUi()`, canonicalizer-result normalization,
+React integration by injection, and a custom element wrapper; parser functions
+are injected so the same code can sit on top of a WASM bundle or a server
+bridge. The React adapter is covered by an actual React server-render runtime
+smoke test under `tests/react_adapter_runtime.mjs`.
 
 ## WASM
 
@@ -215,8 +239,11 @@ wasm-pack build --target nodejs --out-dir pkg-node -- --features wasm
 node tests/wasm_node_smoke.mjs
 ```
 
-The browser smoke page is `tests/wasm_browser_e2e.html`; serve the repository
-root and open `/tests/wasm_browser_e2e.html` after generating `pkg/`.
+The WASM package exports `parse_json*` and `parse_all_json*` functions, with
+locale-only and minimal context variants for `expected_dimension` and
+`strictness`. The browser smoke page is `tests/wasm_browser_e2e.html`; serve the
+repository root and open `/tests/wasm_browser_e2e.html` after generating
+`pkg/`.
 
 ## Unit Registry And Strictness
 

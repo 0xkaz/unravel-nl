@@ -66,6 +66,52 @@ pub fn parse_json_with_locale(text: &str, locale: &str) -> String {
     ))
 }
 
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn parse_json_with_context(
+    text: &str,
+    locale: &str,
+    expected_dimension: &str,
+    strictness: &str,
+) -> String {
+    parsed_summary_json(&parse(
+        text,
+        Some(parse_wasm_context(locale, expected_dimension, strictness)),
+    ))
+}
+
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn parse_all_json(text: &str) -> String {
+    parsed_matches_summary_json(&parse_all(text, None))
+}
+
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn parse_all_json_with_locale(text: &str, locale: &str) -> String {
+    parsed_matches_summary_json(&parse_all(
+        text,
+        Some(ParseCtx {
+            locale: parse_locale_tag(locale),
+            ..ParseCtx::default()
+        }),
+    ))
+}
+
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn parse_all_json_with_context(
+    text: &str,
+    locale: &str,
+    expected_dimension: &str,
+    strictness: &str,
+) -> String {
+    parsed_matches_summary_json(&parse_all(
+        text,
+        Some(parse_wasm_context(locale, expected_dimension, strictness)),
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnitDef {
     pub id: &'static str,
@@ -1568,6 +1614,57 @@ fn parse_locale_tag(text: &str) -> Option<Locale> {
     }
 }
 
+#[cfg(feature = "wasm")]
+fn parse_wasm_context(locale: &str, expected_dimension: &str, strictness: &str) -> ParseCtx {
+    ParseCtx {
+        locale: parse_locale_tag(locale),
+        expected_dimension: parse_dimension_tag(expected_dimension),
+        strictness: parse_strictness_tag(strictness),
+        ..ParseCtx::default()
+    }
+}
+
+#[cfg(feature = "wasm")]
+fn parse_dimension_tag(text: &str) -> Option<Dimension> {
+    match text {
+        "" => None,
+        "length" => Some(Dimension::Length),
+        "area" => Some(Dimension::Area),
+        "mass" => Some(Dimension::Mass),
+        "time" => Some(Dimension::Time),
+        "volume" => Some(Dimension::Volume),
+        "currency" => Some(Dimension::Currency),
+        "temperature" => Some(Dimension::Temperature),
+        "speed" => Some(Dimension::Speed),
+        "data" => Some(Dimension::Data),
+        "data_rate" => Some(Dimension::DataRate),
+        "flow_rate" => Some(Dimension::FlowRate),
+        "concentration" => Some(Dimension::Concentration),
+        "acceleration" => Some(Dimension::Acceleration),
+        "force" => Some(Dimension::Force),
+        "torque" => Some(Dimension::Torque),
+        "pressure" => Some(Dimension::Pressure),
+        "power" => Some(Dimension::Power),
+        "charge" => Some(Dimension::Charge),
+        "voltage" => Some(Dimension::Voltage),
+        "current" => Some(Dimension::Current),
+        "resistance" => Some(Dimension::Resistance),
+        "illuminance" => Some(Dimension::Illuminance),
+        "radiation_equivalent_dose" => Some(Dimension::RadiationEquivalentDose),
+        "radioactivity" => Some(Dimension::Radioactivity),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "wasm")]
+fn parse_strictness_tag(text: &str) -> Strictness {
+    match text {
+        "confirm" => Strictness::Confirm,
+        "strict" => Strictness::Strict,
+        _ => Strictness::Forgiving,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Quantity,
@@ -2250,7 +2347,7 @@ pub fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         parsed.alternatives = ambiguous.alternatives;
         parsed.findings.ambiguities.push(ambiguous.ambiguity);
     } else if let Some(reading) = parse_plain_number_ctx(trimmed, &ctx) {
-        parsed.best = Some(reading);
+        set_plain_number_result(trimmed, &ctx, reading, &mut parsed);
     } else {
         parsed
             .findings
@@ -2326,8 +2423,8 @@ fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
 
 pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
     let mut matches = Vec::new();
-    for (start, end) in parse_all_candidate_spans(text) {
-        push_parsed_match(&mut matches, text, start, end, ctx.clone());
+    for candidate in parse_all_candidate_spans(text) {
+        push_parsed_match(&mut matches, text, candidate, ctx.clone());
     }
     matches.sort_by(|left, right| {
         left.start
@@ -2350,10 +2447,11 @@ pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
 fn push_parsed_match(
     matches: &mut Vec<ParsedMatch>,
     source: &str,
-    start: usize,
-    end: usize,
+    candidate: CandidateSpan,
     ctx: Option<ParseCtx>,
 ) {
+    let start = candidate.start;
+    let end = candidate.end;
     if start >= end
         || matches
             .iter()
@@ -2367,8 +2465,11 @@ fn push_parsed_match(
     if text.is_empty() {
         return;
     }
-    let parsed = parse(text, ctx);
-    if parsed.best.is_none() {
+    let parsed = match candidate.parser {
+        CandidateParser::Broad => parse(text, ctx),
+        CandidateParser::TokenWindow => parse_token_window(text, ctx),
+    };
+    if !parsed_has_actionable_match(&parsed) {
         return;
     }
     let leading = source[start..end].len() - source[start..end].trim_start().len();
@@ -2381,15 +2482,50 @@ fn push_parsed_match(
     });
 }
 
-fn parse_all_candidate_spans(text: &str) -> Vec<(usize, usize)> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CandidateSpan {
+    start: usize,
+    end: usize,
+    parser: CandidateParser,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CandidateParser {
+    Broad,
+    TokenWindow,
+}
+
+fn parse_all_candidate_spans(text: &str) -> Vec<CandidateSpan> {
     let mut spans = Vec::new();
     for (start, end) in clause_spans(text) {
-        spans.push((start, end));
+        if should_broad_parse_clause(&text[start..end]) {
+            spans.push(CandidateSpan {
+                start,
+                end,
+                parser: CandidateParser::Broad,
+            });
+        }
         for span in numeric_candidate_spans(text, start, end) {
             spans.push(span);
         }
     }
     spans
+}
+
+fn should_broad_parse_clause(clause: &str) -> bool {
+    let trimmed = clause.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = ascii_lower_cow(trimmed);
+    trimmed.split_whitespace().count() <= 3
+        || lower.starts_with("between ")
+        || lower.starts_with("from ")
+        || lower.starts_with("about ")
+        || lower.starts_with("around ")
+        || lower.starts_with("roughly ")
+        || lower.starts_with("approximately ")
+        || trimmed.starts_with('約')
 }
 
 fn clause_spans(text: &str) -> Vec<(usize, usize)> {
@@ -2423,7 +2559,7 @@ fn is_clause_separator(text: &str, idx: usize, ch: char) -> bool {
     }
 }
 
-fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<(usize, usize)> {
+fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<CandidateSpan> {
     let mut spans = Vec::new();
     let mut cursor = start;
     while cursor < end {
@@ -2431,10 +2567,14 @@ fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<(usize, 
             break;
         };
         let abs = cursor + idx;
-        if is_candidate_start(ch) {
+        if is_candidate_start_at(text, abs, ch) {
             let candidate_end = candidate_end(text, abs, end);
             if candidate_end > abs {
-                spans.push((abs, candidate_end));
+                spans.push(CandidateSpan {
+                    start: abs,
+                    end: candidate_end,
+                    parser: CandidateParser::TokenWindow,
+                });
             }
             cursor = candidate_end.max(abs + ch.len_utf8());
         } else {
@@ -2444,7 +2584,39 @@ fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<(usize, 
     spans
 }
 
-fn is_candidate_start(ch: char) -> bool {
+fn parse_token_window(text: &str, ctx: Option<ParseCtx>) -> Parsed {
+    let quantity = parse_quantity_fast(text, ctx.clone());
+    if parsed_has_actionable_match(&quantity) {
+        return quantity;
+    }
+    parse_number_fast(text, ctx)
+}
+
+fn parsed_has_actionable_match(parsed: &Parsed) -> bool {
+    parsed.best.is_some()
+        || !parsed.alternatives.is_empty()
+        || !parsed.suggestions.is_empty()
+        || !parsed.findings.ambiguities.is_empty()
+        || !parsed.findings.approximations.is_empty()
+        || parsed
+            .findings
+            .skipped
+            .iter()
+            .any(|issue| !matches!(issue.code, IssueCode::NoValue | IssueCode::UnknownUnit))
+}
+
+fn is_candidate_start_at(text: &str, idx: usize, ch: char) -> bool {
+    ch.is_ascii_digit()
+        || matches!(ch, '０'..='９' | '$' | '€' | '£' | '¥' | '￥')
+        || is_cjk_number_char(ch)
+        || (ch == '約'
+            && text[idx + ch.len_utf8()..]
+                .chars()
+                .next()
+                .is_some_and(is_candidate_number_start))
+}
+
+fn is_candidate_number_start(ch: char) -> bool {
     ch.is_ascii_digit()
         || matches!(ch, '０'..='９' | '$' | '€' | '£' | '¥' | '￥')
         || is_cjk_number_char(ch)
@@ -2452,18 +2624,170 @@ fn is_candidate_start(ch: char) -> bool {
 
 fn candidate_end(text: &str, start: usize, limit: usize) -> usize {
     let mut end = start;
+    let mut saw_unit = false;
+    let mut saw_number = false;
+    let mut previous_was_digit = false;
+    let mut after_number_gap = false;
+
     for (idx, ch) in text[start..limit].char_indices() {
         let abs = start + idx;
-        if idx > 0 && is_candidate_boundary(ch) {
+        if idx > 0 && is_candidate_boundary(text, abs, ch) {
             break;
         }
-        end = abs + ch.len_utf8();
+        if idx == 0 && ch == '約' {
+            end = abs + ch.len_utf8();
+            continue;
+        }
+        if is_numeric_body_char(ch) {
+            saw_number = true;
+            previous_was_digit = is_digit_like(ch);
+            after_number_gap = false;
+            end = abs + ch.len_utf8();
+            continue;
+        }
+        if is_candidate_space(ch) {
+            if previous_was_digit && next_nonspace_is_digit(text, abs + ch.len_utf8(), limit) {
+                end = abs + ch.len_utf8();
+                continue;
+            }
+            if saw_number && !saw_unit && next_nonspace_is_unit(text, abs + ch.len_utf8(), limit) {
+                after_number_gap = true;
+                end = abs + ch.len_utf8();
+                continue;
+            }
+            break;
+        }
+        if saw_number && is_candidate_unit_char(ch) {
+            saw_unit = true;
+            previous_was_digit = false;
+            after_number_gap = false;
+            end = abs + ch.len_utf8();
+            continue;
+        }
+        if after_number_gap {
+            break;
+        }
+        if idx == 0 && matches!(ch, '$' | '€' | '£' | '¥' | '￥') {
+            end = abs + ch.len_utf8();
+            continue;
+        }
+        break;
+    }
+
+    while end > start
+        && text[start..end]
+            .chars()
+            .last()
+            .is_some_and(char::is_whitespace)
+    {
+        let Some((idx, _)) = text[start..end].char_indices().last() else {
+            break;
+        };
+        end = start + idx;
+    }
+
+    if !saw_number {
+        return start;
     }
     end
 }
 
-fn is_candidate_boundary(ch: char) -> bool {
-    matches!(ch, '、' | ';' | '；' | '\n' | '\t' | '(' | ')' | '[' | ']')
+fn is_digit_like(ch: char) -> bool {
+    ch.is_ascii_digit() || matches!(ch, '０'..='９') || is_cjk_number_char(ch)
+}
+
+fn is_numeric_body_char(ch: char) -> bool {
+    is_digit_like(ch)
+        || matches!(
+            ch,
+            '.' | ',' | '+' | '-' | '．' | '，' | '万' | '億' | '兆' | '/' | '／'
+        )
+}
+
+fn is_candidate_space(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '\u{00A0}' | '\u{202F}' | '\u{2009}' | '\u{2007}')
+}
+
+fn next_nonspace_is_digit(text: &str, mut cursor: usize, limit: usize) -> bool {
+    while cursor < limit {
+        let Some(ch) = text[cursor..limit].chars().next() else {
+            return false;
+        };
+        if is_candidate_space(ch) {
+            cursor += ch.len_utf8();
+            continue;
+        }
+        return is_digit_like(ch);
+    }
+    false
+}
+
+fn next_nonspace_is_unit(text: &str, mut cursor: usize, limit: usize) -> bool {
+    while cursor < limit {
+        let Some(ch) = text[cursor..limit].chars().next() else {
+            return false;
+        };
+        if is_candidate_space(ch) {
+            cursor += ch.len_utf8();
+            continue;
+        }
+        return is_candidate_unit_char(ch);
+    }
+    false
+}
+
+fn is_candidate_unit_char(ch: char) -> bool {
+    ch.is_ascii_alphabetic()
+        || matches!(ch, 'Ａ'..='Ｚ' | 'ａ'..='ｚ')
+        || matches!(
+            ch,
+            'μ' | 'µ'
+                | '°'
+                | '%'
+                | '/'
+                | '^'
+                | '²'
+                | '³'
+                | '₂'
+                | '尺'
+                | '寸'
+                | '間'
+                | '帖'
+                | '畳'
+                | '坪'
+                | '平'
+                | '米'
+                | '㎡'
+                | '円'
+                | '度'
+                | 'キ'
+                | 'ロ'
+                | 'グ'
+                | 'ラ'
+                | 'ム'
+                | '公'
+                | '斤'
+                | '千'
+                | '克'
+                | 'リ'
+                | 'ッ'
+                | 'ト'
+                | 'ル'
+                | '半'
+        )
+}
+
+fn is_candidate_boundary(text: &str, idx: usize, ch: char) -> bool {
+    if matches!(ch, '、' | ';' | '；' | '\n' | '\t' | '(' | ')' | '[' | ']') {
+        return true;
+    }
+    if matches!(ch, '×' | '*') {
+        return text[idx + ch.len_utf8()..]
+            .chars()
+            .find(|next| !next.is_whitespace())
+            .is_some_and(is_candidate_number_start);
+    }
+    false
 }
 
 fn spans_overlap(left_start: usize, left_end: usize, right_start: usize, right_end: usize) -> bool {
@@ -2741,23 +3065,7 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     if features.maybe_number
         && let Some(reading) = parse_plain_number_ctx(trimmed, ctx)
     {
-        if ctx.expect == Some(Kind::Quantity) || ctx.expected_dimension == Some(Dimension::Length) {
-            parsed.alternatives.push(Reading::quantity(
-                reading.value.unwrap_or_default(),
-                "mm",
-                Dimension::Length,
-                Provenance::SiMultiple,
-                false,
-                0.41,
-            ));
-            parsed.findings.ambiguities.push(ambiguity(
-                trimmed,
-                "Plain number could be unitless or a context-implied millimeter length.",
-                Some(2),
-                IssueCode::UnitAssumed,
-            ));
-        }
-        parsed.best = Some(reading);
+        set_plain_number_result(trimmed, ctx, reading, parsed);
         return;
     }
 
@@ -2866,6 +3174,12 @@ fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) 
         parse_feet_inches,
     ] {
         if let Some(reading) = parser(trimmed) {
+            if reading.approximate == Some(true) {
+                parsed
+                    .findings
+                    .approximations
+                    .push(approximation(trimmed, "Approximate quantity conversion."));
+            }
             parsed.best = Some(reading);
             return;
         }
@@ -2936,6 +3250,26 @@ fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) 
         .findings
         .skipped
         .push(skipped(trimmed, "no supported quantity matched"));
+}
+
+fn set_plain_number_result(text: &str, ctx: &ParseCtx, reading: Reading, parsed: &mut Parsed) {
+    if ctx.expect == Some(Kind::Quantity) || ctx.expected_dimension == Some(Dimension::Length) {
+        parsed.alternatives.push(Reading::quantity(
+            reading.value.unwrap_or_default(),
+            "mm",
+            Dimension::Length,
+            Provenance::SiMultiple,
+            false,
+            0.41,
+        ));
+        parsed.findings.ambiguities.push(ambiguity(
+            text,
+            "Plain number could be unitless or a context-implied millimeter length.",
+            Some(2),
+            IssueCode::UnitAssumed,
+        ));
+    }
+    parsed.best = Some(reading);
 }
 
 fn reject_candidate(parsed: &mut Parsed, text: &str, reading: Reading, reason: &str) {
@@ -7189,6 +7523,28 @@ fn parsed_summary_json(parsed: &Parsed) -> String {
         json.push('}');
     }
     json.push_str("]}");
+    json
+}
+
+#[cfg(feature = "wasm")]
+fn parsed_matches_summary_json(matches: &[ParsedMatch]) -> String {
+    let mut json = String::new();
+    json.push('[');
+    for (idx, parsed_match) in matches.iter().enumerate() {
+        if idx > 0 {
+            json.push(',');
+        }
+        json.push_str("{\"start\":");
+        json.push_str(&parsed_match.start.to_string());
+        json.push_str(",\"end\":");
+        json.push_str(&parsed_match.end.to_string());
+        json.push_str(",\"text\":");
+        push_json_string(&mut json, &parsed_match.text);
+        json.push_str(",\"parsed\":");
+        json.push_str(&parsed_summary_json(&parsed_match.parsed));
+        json.push('}');
+    }
+    json.push(']');
     json
 }
 

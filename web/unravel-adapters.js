@@ -1,7 +1,7 @@
 const DEFAULT_DELAY_MS = 0;
 
 export function parseForUi(parser, text, ctx = undefined) {
-  const parsed = parser(text, ctx);
+  const parsed = parseAdapterResult(parser(text, ctx));
   const issues = rankIssues(parsed);
   const best = parsed && parsed.best ? parsed.best : null;
 
@@ -12,6 +12,52 @@ export function parseForUi(parser, text, ctx = undefined) {
     issues,
     message: issues.length > 0 ? formatIssue(issues[0]) : null,
   };
+}
+
+export function parseAllForUi(parser, text, ctx = undefined) {
+  const matches = parseAdapterResult(parser(text, ctx)) || [];
+  return matches.map((match) => {
+    const parsed = match.parsed || match;
+    const issues = rankIssues(parsed);
+    const best = parsed && parsed.best ? parsed.best : null;
+    const ok = Boolean(best) && !issues.some((issue) => issue.severity === "error");
+    return {
+      ...match,
+      ok,
+      parsed,
+      best,
+      issues,
+      message: issues.length > 0 ? formatIssue(issues[0]) : null,
+    };
+  });
+}
+
+export function canonicalizeFieldsForUi(parser, requests) {
+  return requests.map((request) => {
+    const input = request.text ?? request.input ?? "";
+    const state = parseForUi(parser, input, request.ctx);
+    return {
+      field: request.field,
+      input,
+      ok: state.ok,
+      canonical: state.ok ? state.best : null,
+      parsed: state.parsed,
+      issues: state.issues,
+      message: state.message,
+    };
+  });
+}
+
+export function canonicalizeValuesForUi(canonicalizer, requests) {
+  const values = parseAdapterResult(canonicalizer(requests)) || [];
+  return values.map((value) => {
+    const issues = rankIssues(value.parsed);
+    return {
+      ...value,
+      issues,
+      message: value.message ?? (issues.length > 0 ? formatIssue(issues[0]) : null),
+    };
+  });
 }
 
 export function applyParseState(element, state) {
@@ -178,6 +224,19 @@ export function defineUnravelElement(parser, options = {}) {
 }
 
 export function rankIssues(parsed) {
+  if (parsed && Array.isArray(parsed.issues)) {
+    return parsed.issues
+      .map((issue) => ({
+        code: issue.code,
+        severity: issue.severity ?? issueSeverity(issue.code),
+        rank: issue.rank ?? issueRank(issue.code),
+        recoverable: issue.recoverable ?? issueRecoverable(issue.code),
+        ref_text: issue.ref_text,
+        reason: issue.reason,
+        span: issue.span,
+      }))
+      .sort((a, b) => b.rank - a.rank || String(a.ref_text || "").localeCompare(String(b.ref_text || "")));
+  }
   const findings = (parsed && parsed.findings) || {};
   const issues = [
     ...mapIssues(findings.skipped || []),
@@ -206,6 +265,7 @@ function issueSeverity(code) {
     case "UNKNOWN_UNIT":
     case "TIMEZONE_UNSUPPORTED":
     case "RECURRENCE_UNSUPPORTED":
+    case "REJECTED_BY_POLICY":
       return "error";
     case "UNIT_ASSUMED":
       return "info";
@@ -221,6 +281,7 @@ function issueRank(code) {
       return 100;
     case "TIMEZONE_UNSUPPORTED":
     case "RECURRENCE_UNSUPPORTED":
+    case "REJECTED_BY_POLICY":
       return 90;
     case "UNKNOWN_UNIT":
       return 80;
@@ -254,4 +315,11 @@ function setDatasetValue(element, key, value) {
 
 function formatIssue(issue) {
   return `[${issue.code}] ${issue.reason}`;
+}
+
+function parseAdapterResult(value) {
+  if (typeof value === "string") {
+    return JSON.parse(value);
+  }
+  return value;
 }

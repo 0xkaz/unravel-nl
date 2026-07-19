@@ -1,4 +1,4 @@
-use unravel_nl::{Dimension, Kind, Locale, ParseCtx, parse_all};
+use unravel_nl::{Dimension, IssueCode, Kind, Locale, ParseCtx, Strictness, parse_all};
 
 #[test]
 fn extracts_multiple_values_with_spans() {
@@ -45,6 +45,72 @@ fn extracts_full_width_and_cjk_number_values() {
     assert_quantity(&matches[0], 1.5, "m", Dimension::Length);
     assert_quantity(&matches[1], 5.0, "kg", Dimension::Mass);
     assert_quantity(&matches[2], 120.0, "m2", Dimension::Area);
+}
+
+#[test]
+fn extracts_bim_hub_editor_dimension_windows() {
+    let ctx = Some(ParseCtx {
+        locale: Some(Locale::Ja),
+        expected_dimension: Some(Dimension::Length),
+        ..ParseCtx::default()
+    });
+
+    let room = parse_all("3m×4m のLDK", ctx.clone());
+    assert_eq!(texts(&room), vec!["3m", "4m"]);
+    assert_quantity(&room[0], 3.0, "m", Dimension::Length);
+    assert_quantity(&room[1], 4.0, "m", Dimension::Length);
+
+    let wall = parse_all("壁厚105mm", ctx.clone());
+    assert_eq!(texts(&wall), vec!["105mm"]);
+    assert_quantity(&wall[0], 0.105, "m", Dimension::Length);
+
+    let height = parse_all("高さ2.9m", ctx.clone());
+    assert_eq!(texts(&height), vec!["2.9m"]);
+    assert_quantity(&height[0], 2.9, "m", Dimension::Length);
+
+    let plain = parse_all("寸法3640", ctx);
+    assert_eq!(texts(&plain), vec!["3640"]);
+    let best = plain[0].parsed.best.as_ref().expect("plain number");
+    assert_eq!(best.kind, Kind::Number);
+    assert_eq!(best.value, Some(3640.0));
+    assert_eq!(plain[0].parsed.alternatives[0].unit.as_deref(), Some("mm"));
+}
+
+#[test]
+fn extracts_bim_hub_area_and_strict_approximation_policy() {
+    let areas = parse_all(
+        "6帖 / 4畳半",
+        Some(ParseCtx {
+            locale: Some(Locale::Ja),
+            ..ParseCtx::default()
+        }),
+    );
+    assert_eq!(texts(&areas), vec!["6帖", "4畳半"]);
+    assert_quantity(&areas[0], 9.72, "m2", Dimension::Area);
+    assert_quantity(&areas[1], 7.29, "m2", Dimension::Area);
+    assert!(!areas[0].parsed.findings.approximations.is_empty());
+    assert!(!areas[1].parsed.findings.approximations.is_empty());
+
+    let strict = parse_all(
+        "約3m",
+        Some(ParseCtx {
+            strictness: Strictness::Strict,
+            ..ParseCtx::default()
+        }),
+    );
+    assert_eq!(texts(&strict), vec!["約3m"]);
+    assert!(strict[0].parsed.best.is_none());
+    assert_eq!(
+        strict[0].parsed.findings.skipped[0].code,
+        IssueCode::Approximation
+    );
+}
+
+fn texts(matches: &[unravel_nl::ParsedMatch]) -> Vec<&str> {
+    matches
+        .iter()
+        .map(|parsed_match| parsed_match.text.as_str())
+        .collect()
 }
 
 fn assert_quantity(

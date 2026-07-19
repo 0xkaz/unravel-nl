@@ -18,14 +18,14 @@ Measured on the development machine on 2026-07-20:
 
 | Command | Corpus | Iterations | Result |
 | --- | --- | ---: | --- |
-| `target/release/examples/bench 500000` | default corpus | 500,000 | 6.489 us/input, 154,110 parses/s |
-| `target/release/examples/bench 500000` | hostile no-match corpus | 500,000 | 9.749 us/input, 102,572 parses/s |
-| `target/release/examples/bench 500000` | date corpus | 500,000 | 3.253 us/input, 307,390 parses/s |
-| `target/release/examples/entry_bench 500000` | broad `parse()` quantity corpus | 500,000 | 4.684 us/input, 213,478 parses/s |
-| `target/release/examples/entry_bench 500000` | `parse_quantity_fast()` corpus | 500,000 | 1.786 us/input, 560,030 parses/s |
-| `target/release/examples/entry_bench 500000` | broad `parse()` date corpus | 500,000 | 1.854 us/input, 539,380 parses/s |
-| `target/release/examples/entry_bench 500000` | `parse_date_fast()` corpus | 500,000 | 0.309 us/input, 3,238,781 parses/s |
-| `target/release/examples/entry_bench 500000` | `parse_all()` sentence corpus | 500,000 | 107.016 us/input, 9,344 parses/s |
+| `target/release/examples/bench 500000` | default corpus | 500,000 | 6.031 us/input, 165,798 parses/s |
+| `target/release/examples/bench 500000` | hostile no-match corpus | 500,000 | 7.628 us/input, 131,104 parses/s |
+| `target/release/examples/bench 500000` | date corpus | 500,000 | 2.456 us/input, 407,203 parses/s |
+| `target/release/examples/entry_bench 500000` | broad `parse()` quantity corpus | 500,000 | 5.253 us/input, 190,378 parses/s |
+| `target/release/examples/entry_bench 500000` | `parse_quantity_fast()` corpus | 500,000 | 1.750 us/input, 571,565 parses/s |
+| `target/release/examples/entry_bench 500000` | broad `parse()` date corpus | 500,000 | 1.519 us/input, 658,466 parses/s |
+| `target/release/examples/entry_bench 500000` | `parse_date_fast()` corpus | 500,000 | 0.210 us/input, 4,765,863 parses/s |
+| `target/release/examples/entry_bench 500000` | `parse_all()` sentence corpus | 500,000 | 28.884 us/input, 34,622 parses/s |
 
 The default corpus now includes Unicode normalization, locale number formats,
 Japanese large-number notation, business-day recurrence, and technical unit
@@ -37,3 +37,7 @@ The split entry-point benchmark shows why callers should use narrower APIs
 when a UI field already knows the expected shape. Broad `parse()` remains the
 compatibility entry; `parse_quantity_fast()` and `parse_date_fast()` avoid
 unrelated grammar families and rich ambiguity checks.
+
+The sentence scanner uses token-window dispatch for numeric and dimension-like
+substrings before falling back to broad clause parsing. This keeps byte spans
+stable while avoiding broad grammar checks for every long sentence fragment.

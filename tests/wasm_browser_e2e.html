@@ -7,18 +7,43 @@
   <body>
     <pre id="status">pending</pre>
     <script type="module">
-      import init, { parse_json, parse_json_with_locale } from "../pkg/unravel_nl.js";
+      import init, {
+        parse_all_json_with_context,
+        parse_all_json_with_locale,
+        parse_json,
+        parse_json_with_context,
+        parse_json_with_locale,
+      } from "../pkg/unravel_nl.js";
 
       const status = document.getElementById("status");
 
       try {
         await init();
         const length = JSON.parse(parse_json_with_locale("5尺3寸", "ja"));
+        const room = JSON.parse(parse_all_json_with_locale("3m×4m のLDK", "ja"));
+        const plainLength = JSON.parse(
+          parse_all_json_with_context("寸法3640", "ja", "length", ""),
+        );
+        const strictApproximation = JSON.parse(
+          parse_json_with_context("約3m", "ja", "length", "strict"),
+        );
         const recurrence = JSON.parse(parse_json("every third business day"));
         const failure = JSON.parse(parse_json("3pm Europe/Paris"));
 
         if (length.best.unit !== "m" || length.best.dimension !== "length") {
           throw new Error("length parse failed");
+        }
+        if (room.length !== 2 || room[0].text !== "3m" || room[1].text !== "4m") {
+          throw new Error("room dimension scan failed");
+        }
+        if (
+          plainLength.length !== 1 ||
+          plainLength[0].parsed.issues[0].code !== "UNIT_ASSUMED"
+        ) {
+          throw new Error("unitless length context failed");
+        }
+        if (strictApproximation.issues[0].code !== "APPROXIMATION") {
+          throw new Error("strict approximation issue missing");
         }
         if (
           recurrence.best.recurrence !==
@@ -33,6 +58,9 @@
         status.textContent = JSON.stringify({
           ok: true,
           length: length.best,
+          room,
+          plainLength,
+          strictApproximation,
           recurrence: recurrence.best,
           issue: failure.issues[0],
         });
