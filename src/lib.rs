@@ -1382,6 +1382,33 @@ const FAST_UNIT_ALIASES: &[(&str, &str)] = &[
     ("kgf/cm²", "kgf/cm2"),
 ];
 
+const EDITOR_DIMENSION_LABELS: &[(&str, Dimension)] = &[
+    ("延床", Dimension::Area),
+    ("延べ床", Dimension::Area),
+    ("床面積", Dimension::Area),
+    ("敷地面積", Dimension::Area),
+    ("面積", Dimension::Area),
+    ("area", Dimension::Area),
+    ("floorarea", Dimension::Area),
+    ("sitearea", Dimension::Area),
+    ("寸法", Dimension::Length),
+    ("幅", Dimension::Length),
+    ("高さ", Dimension::Length),
+    ("壁厚", Dimension::Length),
+    ("厚さ", Dimension::Length),
+    ("長さ", Dimension::Length),
+    ("奥行", Dimension::Length),
+    ("奥行き", Dimension::Length),
+    ("w", Dimension::Length),
+    ("h", Dimension::Length),
+    ("d", Dimension::Length),
+    ("width", Dimension::Length),
+    ("height", Dimension::Length),
+    ("depth", Dimension::Length),
+    ("length", Dimension::Length),
+    ("wallthickness", Dimension::Length),
+];
+
 const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://0xkaz.github.io/unravel-nl/schema/parse-input.json",
@@ -2774,47 +2801,26 @@ fn editor_dimension_hint(
         .filter(|ch| !ch.is_whitespace())
         .collect::<String>();
 
-    if [
-        "延床",
-        "延べ床",
-        "床面積",
-        "敷地面積",
-        "面積",
-        "area",
-        "floorarea",
-        "sitearea",
-    ]
-    .iter()
-    .any(|label| compact.ends_with(label))
-    {
-        return Some(Dimension::Area);
-    }
+    EDITOR_DIMENSION_LABELS
+        .iter()
+        .find_map(|(label, dimension)| {
+            editor_label_matches(before, &compact, label).then_some(*dimension)
+        })
+}
 
-    if [
-        "寸法",
-        "幅",
-        "高さ",
-        "壁厚",
-        "厚さ",
-        "長さ",
-        "奥行",
-        "奥行き",
-        "w",
-        "h",
-        "d",
-        "width",
-        "height",
-        "depth",
-        "length",
-        "wallthickness",
-    ]
-    .iter()
-    .any(|label| compact.ends_with(label))
-    {
-        return Some(Dimension::Length);
+fn editor_label_matches(before: &str, compact: &str, label: &str) -> bool {
+    if label.len() == 1 && label.as_bytes()[0].is_ascii_alphabetic() {
+        let trimmed = before.trim_end();
+        let Some((idx, ch)) = trimmed.char_indices().next_back() else {
+            return false;
+        };
+        return ch.eq_ignore_ascii_case(&char::from(label.as_bytes()[0]))
+            && trimmed[..idx]
+                .chars()
+                .next_back()
+                .is_none_or(|previous| !previous.is_ascii_alphanumeric());
     }
-
-    None
+    compact.ends_with(label)
 }
 
 fn is_candidate_start_at(text: &str, idx: usize, ch: char) -> bool {

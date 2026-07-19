@@ -10,6 +10,7 @@
       import init, {
         parse_all_json_with_context,
         parse_all_json_with_locale,
+        parse_dimensions_for_editor_json_with_context,
         parse_json,
         parse_json_with_context,
         parse_json_with_locale,
@@ -23,6 +24,14 @@
         const room = JSON.parse(parse_all_json_with_locale("3m×4m のLDK", "ja"));
         const plainLength = JSON.parse(
           parse_all_json_with_context("寸法3640", "ja", "length", ""),
+        );
+        const editorDimensions = JSON.parse(
+          parse_dimensions_for_editor_json_with_context(
+            "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640",
+            "ja",
+            "",
+            "",
+          ),
         );
         const strictApproximation = JSON.parse(
           parse_json_with_context("約3m", "ja", "length", "strict"),
@@ -42,6 +51,12 @@
         ) {
           throw new Error("unitless length context failed");
         }
+        if (
+          editorDimensions.length !== 4 ||
+          editorDimensions.map((match) => match.text).join(",") !== "3m,4m,6帖,3640"
+        ) {
+          throw new Error("editor dimension scan failed");
+        }
         if (strictApproximation.issues[0].code !== "APPROXIMATION") {
           throw new Error("strict approximation issue missing");
         }
@@ -60,6 +75,7 @@
           length: length.best,
           room,
           plainLength,
+          editorDimensions,
           strictApproximation,
           recurrence: recurrence.best,
           issue: failure.issues[0],

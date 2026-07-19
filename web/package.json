@@ -1,11 +1,14 @@
 {
   "type": "module",
   "private": true,
+  "types": "./unravel-adapters.d.ts",
   "scripts": {
+    "test:types": "tsc --ignoreConfig --noEmit --strict --target es2022 --module nodenext --moduleResolution nodenext --lib dom,es2022 ../tests/typescript_adapter_smoke.ts",
     "test:react": "node ../tests/react_adapter_runtime.mjs"
   },
   "devDependencies": {
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "typescript": "^7.0.2"
   }
 }

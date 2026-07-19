@@ -21,6 +21,10 @@ byte spans, character spans, original text, and a compact parsed summary. The
 Rust core uses byte spans; browser adapters should use `codeUnitStart` /
 `codeUnitEnd` from `parseAllForUi()` when slicing JavaScript strings.
 
+The browser adapter files are `web/unravel-adapters.js` and
+`web/unravel-adapters.d.ts`. A Method A browser artifact should include those
+adapter files plus the generated `pkg/` web target and a checksum manifest.
+
 ## Local Snapshot
 
 Measured on the development machine on 2026-07-20:
@@ -28,8 +32,8 @@ Measured on the development machine on 2026-07-20:
 | Command | Output | Size / digest |
 | --- | --- | --- |
 | `wasm-pack build --target web --out-dir pkg -- --features wasm` | `pkg/` | 328K |
-| same | `pkg/unravel_nl_bg.wasm` | 280,435 bytes |
-| same | `pkg/unravel_nl_bg.wasm` sha256 | `38bde97f8f6d5a8725860f4c81abe824357792ed9b0375e19a43d68254521833` |
+| same | `pkg/unravel_nl_bg.wasm` | 280,511 bytes |
+| same | `pkg/unravel_nl_bg.wasm` sha256 | `b8b3353d8fa7c12266cd058b77214f010a9ce8f435a6fc689ba93d4a9f3250d3` |
 
 Smoke checks:
 

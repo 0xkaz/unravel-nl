@@ -57,6 +57,7 @@ The first slice focuses on:
   `describe_*` resource views for UI/tool adapters
 - Feature-gated WASM exports for browser or Node package adapters, including
   single-value JSON parsing and span-preserving multi-value extraction
+- Browser adapter TypeScript definitions for UI integration
 - No-Silent-Loss findings for skipped, ambiguous, and approximate readings
 - A normalized parser dispatch path and exact-first unit alias lookup to keep
   no-match and typo-heavy inputs bounded as the locale catalog grows
@@ -254,8 +255,9 @@ free ESM helpers for DOM inputs, span-preserving `parseAllForUi()`,
 field-list `canonicalizeFieldsForUi()`, canonicalizer-result normalization,
 React integration by injection, and a custom element wrapper; parser functions
 are injected so the same code can sit on top of a WASM bundle or a server
-bridge. The React adapter is covered by an actual React server-render runtime
-smoke test under `tests/react_adapter_runtime.mjs`.
+bridge. TypeScript definitions live in `web/unravel-adapters.d.ts`. The React
+adapter is covered by an actual React server-render runtime smoke test under
+`tests/react_adapter_runtime.mjs`.
 
 ## WASM
 
@@ -265,11 +267,13 @@ wasm-pack build --target nodejs --out-dir pkg-node -- --features wasm
 node tests/wasm_node_smoke.mjs
 ```
 
-The WASM package exports `parse_json*` and `parse_all_json*` functions, with
-locale-only and minimal context variants for `expected_dimension` and
-`strictness`. The browser smoke page is `tests/wasm_browser_e2e.html`; serve the
-repository root and open `/tests/wasm_browser_e2e.html` after generating
-`pkg/`.
+The WASM package exports `parse_json*`, `parse_all_json*`, and
+`parse_dimensions_for_editor_json*` functions, with locale-only and minimal
+context variants for `expected_dimension` and `strictness`. The browser smoke
+page is `tests/wasm_browser_e2e.html`; serve the repository root and open
+`/tests/wasm_browser_e2e.html` after generating `pkg/`. Browser-target Method A
+artifacts can be assembled from `pkg/` plus `web/unravel-adapters.*` and
+checksummed before vendoring.
 
 ## Unit Registry And Strictness
 
