@@ -1197,7 +1197,7 @@ const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
     },
     "expect": {
       "type": "string",
-      "enum": ["quantity", "date", "range", "number"],
+      "enum": ["quantity", "date", "range", "number", "recurrence"],
       "description": "Optional expected top-level reading kind."
     },
     "expected_dimension": {
@@ -1249,7 +1249,7 @@ const PARSED_OUTPUT_SCHEMA_JSON: &str = r##"{
     "findings": { "$ref": "#/$defs/findings" }
   },
   "$defs": {
-    "kind": { "type": "string", "enum": ["quantity", "date", "range", "number"] },
+    "kind": { "type": "string", "enum": ["quantity", "date", "range", "number", "recurrence"] },
     "dimension": {
       "type": "string",
       "enum": ["length", "area", "mass", "time", "volume", "currency", "temperature", "speed", "data", "data_rate", "flow_rate", "concentration", "acceleration", "force", "torque", "pressure", "power", "charge", "voltage", "current", "resistance", "illuminance", "radiation_equivalent_dose", "radioactivity"]
@@ -1273,6 +1273,7 @@ const PARSED_OUTPUT_SCHEMA_JSON: &str = r##"{
           ]
         },
         "date": { "type": ["string", "null"], "format": "date" },
+        "recurrence": { "type": ["string", "null"], "description": "RRULE-style recurrence string for recurring expressions." },
         "range": {
           "anyOf": [
             { "$ref": "#/$defs/range" },
@@ -1409,6 +1410,7 @@ pub enum Kind {
     Date,
     Range,
     Number,
+    Recurrence,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1603,6 +1605,7 @@ pub struct Reading {
     pub unit: Option<String>,
     pub dimension: Option<Dimension>,
     pub date: Option<String>,
+    pub recurrence: Option<String>,
     pub range: Option<Box<RangeReading>>,
     pub provenance: Option<Provenance>,
     pub approximate: Option<bool>,
@@ -1624,6 +1627,7 @@ impl Reading {
             unit: Some(unit.to_owned()),
             dimension: Some(dimension),
             date: None,
+            recurrence: None,
             range: None,
             provenance: Some(provenance),
             approximate: Some(approximate),
@@ -1638,6 +1642,7 @@ impl Reading {
             unit: None,
             dimension: None,
             date: None,
+            recurrence: None,
             range: None,
             provenance: None,
             approximate: Some(false),
@@ -1652,6 +1657,7 @@ impl Reading {
             unit: None,
             dimension: None,
             date: Some(date.iso()),
+            recurrence: None,
             range: None,
             provenance: None,
             approximate: Some(false),
@@ -1666,7 +1672,23 @@ impl Reading {
             unit: None,
             dimension: None,
             date: None,
+            recurrence: None,
             range: Some(Box::new(RangeReading { from, to })),
+            provenance: None,
+            approximate: Some(false),
+            confidence: Some(confidence),
+        }
+    }
+
+    pub fn recurrence(rrule: &str, confidence: f64) -> Self {
+        Self {
+            kind: Kind::Recurrence,
+            value: None,
+            unit: None,
+            dimension: None,
+            date: None,
+            recurrence: Some(rrule.to_owned()),
+            range: None,
             provenance: None,
             approximate: Some(false),
             confidence: Some(confidence),
@@ -1845,6 +1867,11 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         return parsed;
     }
 
+    if let Some(reading) = parse_recurrence(trimmed) {
+        parsed.best = Some(reading);
+        return parsed;
+    }
+
     if let Some(reading) = parse_plus_minus_range(trimmed, &ctx) {
         parsed.best = Some(reading);
         return parsed;
@@ -1898,6 +1925,11 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     }
 
     if let Some(reading) = parse_temperature(trimmed) {
+        parsed.best = Some(reading);
+        return parsed;
+    }
+
+    if let Some(reading) = parse_compound_registered_quantity(trimmed) {
         parsed.best = Some(reading);
         return parsed;
     }
@@ -2271,6 +2303,10 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
             .date
             .clone()
             .unwrap_or_else(|| "unknown date".to_owned()),
+        (_, Kind::Recurrence, _, _) => value
+            .recurrence
+            .clone()
+            .unwrap_or_else(|| "unknown recurrence".to_owned()),
         (_, Kind::Range, _, _) => value.range.as_ref().map_or_else(
             || "unresolved range".to_owned(),
             |range| {
@@ -2510,6 +2546,44 @@ fn parse_registered_quantity(text: &str, ctx: &ParseCtx) -> Option<Reading> {
         Provenance::TradeCustom,
         unit.approximate,
         0.93,
+    ))
+}
+
+fn parse_compound_registered_quantity(text: &str) -> Option<Reading> {
+    let parts: Vec<&str> = text.split_whitespace().collect();
+    if parts.len() < 4 || !parts.len().is_multiple_of(2) {
+        return None;
+    }
+
+    let mut total = 0.0;
+    let mut dimension = None;
+    let mut canonical_unit = None;
+    let mut provenance = Provenance::SiMultiple;
+    let mut approximate = false;
+
+    for pair in parts.chunks_exact(2) {
+        let value = parse_number(pair[0])?;
+        let unit = unit_by_alias(pair[1])?;
+        if let Some(current_dimension) = dimension {
+            if current_dimension != unit.dimension || canonical_unit != Some(unit.canonical_unit) {
+                return None;
+            }
+        } else {
+            dimension = Some(unit.dimension);
+            canonical_unit = Some(unit.canonical_unit);
+            provenance = unit.provenance;
+        }
+        total += value * unit.factor;
+        approximate |= unit.approximate;
+    }
+
+    Some(Reading::quantity(
+        total,
+        canonical_unit?,
+        dimension?,
+        provenance,
+        approximate,
+        0.94,
     ))
 }
 
@@ -2990,6 +3064,74 @@ fn unsupported_recurrence_phrase(text: &str) -> Option<&str> {
         return trimmed.get(.."毎".len());
     }
     None
+}
+
+fn parse_recurrence(text: &str) -> Option<Reading> {
+    let trimmed = text.trim();
+    if is_supported_rrule(trimmed) {
+        return Some(Reading::recurrence(trimmed, 0.99));
+    }
+
+    let lowered = trimmed.to_ascii_lowercase();
+    let rrule = if matches!(lowered.as_str(), "every day" | "daily") || trimmed == "毎日" {
+        "FREQ=DAILY"
+    } else if matches!(lowered.as_str(), "every month" | "monthly") || trimmed == "毎月" {
+        "FREQ=MONTHLY"
+    } else if let Some(weekday_text) = lowered.strip_prefix("every ") {
+        let day = recurrence_weekday(weekday_text.trim())?;
+        return Some(Reading::recurrence(
+            &format!("FREQ=WEEKLY;BYDAY={day}"),
+            0.9,
+        ));
+    } else if let Some(weekday_text) = trimmed.strip_prefix("毎週") {
+        let day = recurrence_weekday(weekday_text.trim())?;
+        return Some(Reading::recurrence(
+            &format!("FREQ=WEEKLY;BYDAY={day}"),
+            0.9,
+        ));
+    } else if let Some(weekday_text) = trimmed.strip_prefix("每周") {
+        let day = recurrence_weekday(weekday_text.trim())?;
+        return Some(Reading::recurrence(
+            &format!("FREQ=WEEKLY;BYDAY={day}"),
+            0.9,
+        ));
+    } else {
+        return None;
+    };
+    Some(Reading::recurrence(rrule, 0.92))
+}
+
+fn is_supported_rrule(text: &str) -> bool {
+    matches!(text, "FREQ=DAILY" | "FREQ=MONTHLY")
+        || text
+            .strip_prefix("FREQ=WEEKLY;BYDAY=")
+            .is_some_and(|day| matches!(day, "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU"))
+}
+
+fn recurrence_weekday(text: &str) -> Option<&'static str> {
+    match text {
+        "monday" | "mon" | "月曜日" | "月曜" | "月" | "周一" | "星期一" | "一" => {
+            Some("MO")
+        }
+        "tuesday" | "tue" | "tues" | "火曜日" | "火曜" | "火" | "周二" | "星期二" | "二" => {
+            Some("TU")
+        }
+        "wednesday" | "wed" | "水曜日" | "水曜" | "水" | "周三" | "星期三" | "三" => {
+            Some("WE")
+        }
+        "thursday" | "thu" | "thur" | "thurs" | "木曜日" | "木曜" | "木" | "周四" | "星期四"
+        | "四" => Some("TH"),
+        "friday" | "fri" | "金曜日" | "金曜" | "金" | "周五" | "星期五" | "五" => {
+            Some("FR")
+        }
+        "saturday" | "sat" | "土曜日" | "土曜" | "土" | "周六" | "星期六" | "六" => {
+            Some("SA")
+        }
+        "sunday" | "sun" | "日曜日" | "日曜" | "日" | "周日" | "星期日" | "星期天" | "天" => {
+            Some("SU")
+        }
+        _ => None,
+    }
 }
 
 fn parse_clock_seconds(text: &str) -> Option<f64> {
@@ -4473,6 +4615,7 @@ fn completion_allowed(kind: CompletionKind, dimension: Option<Dimension>, ctx: &
 
     match ctx.expect {
         Some(Kind::Date) => kind == CompletionKind::Date,
+        Some(Kind::Recurrence) => false,
         Some(Kind::Number) => false,
         Some(Kind::Quantity) => matches!(
             kind,
@@ -4868,6 +5011,7 @@ mod tests {
         assert!(parsed_output_schema_json().contains("\"findings\""));
         assert!(parsed_output_schema_json().contains("\"currency\""));
         assert!(parsed_output_schema_json().contains("\"temperature\""));
+        assert!(parsed_output_schema_json().contains("\"recurrence\""));
         assert!(mcp_tool_schema_json().contains("unravel_nl_parse"));
         assert!(mcp_tool_schema_json().contains("inputSchema"));
         assert!(mcp_tool_schema_json().contains("outputSchema"));

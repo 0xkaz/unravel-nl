@@ -11,6 +11,8 @@ an hour and a half	en	quantity	time	s	5400
 twenty-five kg	en	quantity	mass	kg	25			
 1½ cups	en	quantity	volume	L	0.35488235475			
 2 lb 3 oz	en	quantity	mass	kg	0.992233309375			
+3 yd 2 ft	en	quantity	length	m	3.3528
+4 stone 6 lb	en-GB	quantity	mass	kg	28.12272694
 500 KB	en	quantity	data	B	500000			
 5 Mbps	en	quantity	data_rate	bit/s	5000000			
 5 gpm	en	quantity	flow_rate	m3/s	0.000315450982			

@@ -10,6 +10,8 @@ fn humanized_core_values_parse_back_to_same_canonical_value() {
         RoundTripCase::new("5尺3寸", Some(Locale::Ja), Some(Locale::Ja)),
         RoundTripCase::new("1坪", Some(Locale::Ja), Some(Locale::Ja)),
         RoundTripCase::new("午後3時", Some(Locale::Ja), None),
+        RoundTripCase::new("every monday", None, None),
+        RoundTripCase::new("毎週月曜日", Some(Locale::Ja), None),
     ] {
         let parsed = parse(case.input, case.parse_ctx());
         let first = parsed.best.expect(case.input);
@@ -99,6 +101,9 @@ fn assert_same_canonical(first: &Reading, second: &Reading, input: &str, rendere
             );
         }
         Kind::Date => assert_eq!(first.date, second.date, "{input} -> {rendered}"),
+        Kind::Recurrence => {
+            assert_eq!(first.recurrence, second.recurrence, "{input} -> {rendered}")
+        }
         Kind::Range => {
             let first_range = first.range.as_ref().expect("first range");
             let second_range = second.range.as_ref().expect("second range");

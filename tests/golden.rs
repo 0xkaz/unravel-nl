@@ -111,6 +111,7 @@ fn parse_kind(value: &str) -> Kind {
         "date" => Kind::Date,
         "range" => Kind::Range,
         "number" => Kind::Number,
+        "recurrence" => Kind::Recurrence,
         other => panic!("unknown kind {other:?}"),
     }
 }

@@ -15,10 +15,13 @@ The first slice focuses on:
 - An expanding unit registry for length, mass, area, duration, volume, speed,
   data, data-rate, flow-rate, pressure, power, electrical, lighting, and
   radiation aliases
+- Mixed same-dimension compound units such as `3 yd 2 ft` and `4 stone 6 lb`
 - Registry-backed unit typo correction such as `5 meterz`
 - Forgiving, confirm, and strict parse modes for correction policy
 - Compact and ISO-style durations such as `1h30`, `2d4h`, and `PT1H30M`
 - Clock times and slots such as `3pm`, `14:30`, and `3pm-4pm`
+- Simple recurrence readings such as `every monday`, `毎週月曜日`, and `毎日`,
+  normalized to RRULE-style strings
 - Approximate, tolerance, and bounded input such as `about 20C`, `約20kg`,
   `10 ± 0.5 mm`, `a few minutes`, `under 10 minutes`, `10mm以下`, and
   temperature phrases like `it's hot`
@@ -107,6 +110,18 @@ The core parser never reads the host system clock or timezone. Relative dates
 must be given an explicit `reference_date`; adapter layers can pass a `timezone`
 hint, and timezone-qualified wall-clock strings such as `3pm EST` fail loudly
 until an adapter defines a policy for them.
+
+Simple recurring expressions are canonicalized as RRULE-style strings:
+
+```rust
+use unravel_nl::{parse, Kind};
+
+let parsed = parse("every monday", None);
+let best = parsed.best.unwrap();
+
+assert_eq!(best.kind, Kind::Recurrence);
+assert_eq!(best.recurrence.as_deref(), Some("FREQ=WEEKLY;BYDAY=MO"));
+```
 
 ## Unit Registry And Strictness
 
