@@ -3574,18 +3574,22 @@ fn parse_editor_dimension_into(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) 
 }
 
 fn parse_editor_dimension_number_into(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
-    let mut number_ctx = ctx.clone();
-    number_ctx.expect = Some(Kind::Quantity);
-    if number_ctx.expected_dimension.is_none() {
-        number_ctx.expected_dimension = Some(Dimension::Length);
+    let expected_dimension = ctx.expected_dimension.unwrap_or(Dimension::Length);
+    let mut number = parsed_shell(text, ctx);
+    if let Some(ambiguous) = parse_ambiguous_number(text, ctx) {
+        number.best = ambiguous.best;
+        number.alternatives = ambiguous.alternatives;
+        number.findings.ambiguities.push(ambiguous.ambiguity);
+    } else if let Some(reading) = parse_plain_number_ctx(text, ctx) {
+        set_editor_plain_number_result(text, expected_dimension, reading, &mut number);
+    } else {
+        number
+            .findings
+            .skipped
+            .push(skipped(text, "no supported number matched"));
     }
-    let mut number = parsed_shell(text, &number_ctx);
-    parse_number_fast_into(text, &number_ctx, &mut number);
-    if parsed_is_editor_dimension(
-        &number,
-        number_ctx.expected_dimension,
-        number_ctx.expected_dimension,
-    ) {
+
+    if parsed_is_editor_dimension(&number, Some(expected_dimension), Some(expected_dimension)) {
         *parsed = number;
         return;
     }
@@ -3598,6 +3602,31 @@ fn parse_editor_dimension_number_into(text: &str, ctx: &ParseCtx, parsed: &mut P
         .findings
         .skipped
         .push(skipped(text, "no supported editor dimension matched"));
+}
+
+fn set_editor_plain_number_result(
+    text: &str,
+    expected_dimension: Dimension,
+    reading: Reading,
+    parsed: &mut Parsed,
+) {
+    if expected_dimension == Dimension::Length {
+        parsed.alternatives.push(Reading::quantity(
+            reading.value.unwrap_or_default(),
+            "mm",
+            Dimension::Length,
+            Provenance::SiMultiple,
+            false,
+            0.41,
+        ));
+        parsed.findings.ambiguities.push(ambiguity(
+            text,
+            "Plain number could be unitless or a context-implied millimeter length.",
+            Some(2),
+            IssueCode::UnitAssumed,
+        ));
+    }
+    parsed.best = Some(reading);
 }
 
 fn is_editor_plain_number_candidate(text: &str) -> bool {
