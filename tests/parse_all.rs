@@ -184,16 +184,20 @@ fn extracts_editor_dimensions_without_general_values() {
 #[test]
 fn editor_dimension_scanner_does_not_guess_unknown_unitless_labels() {
     let matches = parse_dimensions_for_editor(
-        "部材3640、備考1234、north 800、room w 900",
+        "部材3640、備考1234、north 800、somewidth 700、room width 900、room w 910",
         Some(ParseCtx {
             locale: Some(Locale::Ja),
             ..ParseCtx::default()
         }),
     );
 
-    assert_eq!(texts(&matches), vec!["900"]);
+    assert_eq!(texts(&matches), vec!["900", "910"]);
     assert_eq!(
         matches[0].parsed.alternatives[0].unit.as_deref(),
+        Some("mm")
+    );
+    assert_eq!(
+        matches[1].parsed.alternatives[0].unit.as_deref(),
         Some("mm")
     );
 }

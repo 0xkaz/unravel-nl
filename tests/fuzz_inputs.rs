@@ -1,4 +1,6 @@
-use unravel_nl::{Locale, ParseCtx, complete, parse, parse_all, ranked_findings};
+use unravel_nl::{
+    Locale, ParseCtx, complete, parse, parse_all, parse_dimensions_for_editor, ranked_findings,
+};
 
 #[test]
 fn hostile_unicode_inputs_do_not_panic() {
@@ -23,7 +25,8 @@ fn hostile_unicode_inputs_do_not_panic() {
         });
         let parsed = parse(&input, ctx.clone());
         let _issues = ranked_findings(&parsed);
-        let _matches = parse_all(&input, ctx);
+        let _matches = parse_all(&input, ctx.clone());
+        let _editor_matches = parse_dimensions_for_editor(&input, ctx);
         let _completions = complete(&input, None);
     }
 }

@@ -2969,7 +2969,23 @@ fn editor_label_matches(before: &str, compact: &str, label: &str) -> bool {
                 .next_back()
                 .is_none_or(|previous| !previous.is_ascii_alphanumeric());
     }
+    if matches!(label, "area" | "width" | "height" | "depth" | "length") {
+        return ascii_label_suffix_matches(before, label);
+    }
     compact.ends_with(label)
+}
+
+fn ascii_label_suffix_matches(before: &str, label: &str) -> bool {
+    let lower = ascii_lower_cow(before);
+    let lower = lower.trim_end();
+    if !lower.ends_with(label) {
+        return false;
+    }
+    let prefix = &lower[..lower.len() - label.len()];
+    prefix
+        .chars()
+        .next_back()
+        .is_none_or(|previous| !previous.is_ascii_alphanumeric())
 }
 
 fn is_candidate_start_at(text: &str, idx: usize, ch: char) -> bool {
