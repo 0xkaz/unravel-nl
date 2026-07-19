@@ -20,8 +20,9 @@ The first slice focuses on:
 - Forgiving, confirm, and strict parse modes for correction policy
 - Compact and ISO-style durations such as `1h30`, `2d4h`, and `PT1H30M`
 - Clock times and slots such as `3pm`, `14:30`, and `3pm-4pm`
-- Simple recurrence readings such as `every monday`, `毎週月曜日`, and `毎日`,
-  normalized to RRULE-style strings
+- Recurrence readings such as `every monday`, `every 2 weeks`,
+  `monthly on the 15th`, `毎週月曜日`, `毎月15日`, and `毎日`, normalized to
+  RRULE-style strings
 - Approximate, tolerance, and bounded input such as `about 20C`, `約20kg`,
   `10 ± 0.5 mm`, `a few minutes`, `under 10 minutes`, `10mm以下`, and
   temperature phrases like `it's hot`
@@ -108,8 +109,11 @@ assert_eq!(parsed.best.unwrap().date.as_deref(), Some("2026-07-24"));
 
 The core parser never reads the host system clock or timezone. Relative dates
 must be given an explicit `reference_date`; adapter layers can pass a `timezone`
-hint, and timezone-qualified wall-clock strings such as `3pm EST` fail loudly
-until an adapter defines a policy for them.
+hint, but the core does not derive behavior from the Rust process environment.
+Timezone-qualified wall-clock strings with explicit offsets or known fixed
+abbreviations, such as `3pm EST` or `9:30 JST`, are normalized to UTC seconds.
+Unsupported IANA-zone conversion such as `3pm Europe/Paris` fails loudly until
+an adapter supplies a real timezone policy.
 
 Simple recurring expressions are canonicalized as RRULE-style strings:
 
@@ -122,6 +126,23 @@ let best = parsed.best.unwrap();
 assert_eq!(best.kind, Kind::Recurrence);
 assert_eq!(best.recurrence.as_deref(), Some("FREQ=WEEKLY;BYDAY=MO"));
 ```
+
+UI adapters can turn parser findings into stable severity and rank metadata:
+
+```rust
+use unravel_nl::{parse, ranked_findings, IssueSeverity};
+
+let parsed = parse("3pm Europe/Paris", None);
+let issues = ranked_findings(&parsed);
+
+assert_eq!(issues[0].severity, IssueSeverity::Error);
+assert_eq!(issues[0].rank, 90);
+```
+
+Browser-facing adapters live in `web/unravel-adapters.js`. They are dependency
+free ESM helpers for DOM inputs, React integration by injection, and a custom
+element wrapper; the parser function is injected so the same code can sit on top
+of a WASM bundle or a server bridge.
 
 ## Unit Registry And Strictness
 

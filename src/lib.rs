@@ -1274,6 +1274,7 @@ const PARSED_OUTPUT_SCHEMA_JSON: &str = r##"{
         },
         "date": { "type": ["string", "null"], "format": "date" },
         "recurrence": { "type": ["string", "null"], "description": "RRULE-style recurrence string for recurring expressions." },
+        "timezone": { "type": ["string", "null"], "description": "Canonical timezone for timezone-normalized readings." },
         "range": {
           "anyOf": [
             { "$ref": "#/$defs/range" },
@@ -1606,6 +1607,7 @@ pub struct Reading {
     pub dimension: Option<Dimension>,
     pub date: Option<String>,
     pub recurrence: Option<String>,
+    pub timezone: Option<String>,
     pub range: Option<Box<RangeReading>>,
     pub provenance: Option<Provenance>,
     pub approximate: Option<bool>,
@@ -1628,6 +1630,7 @@ impl Reading {
             dimension: Some(dimension),
             date: None,
             recurrence: None,
+            timezone: None,
             range: None,
             provenance: Some(provenance),
             approximate: Some(approximate),
@@ -1643,6 +1646,7 @@ impl Reading {
             dimension: None,
             date: None,
             recurrence: None,
+            timezone: None,
             range: None,
             provenance: None,
             approximate: Some(false),
@@ -1658,6 +1662,7 @@ impl Reading {
             dimension: None,
             date: Some(date.iso()),
             recurrence: None,
+            timezone: None,
             range: None,
             provenance: None,
             approximate: Some(false),
@@ -1673,6 +1678,7 @@ impl Reading {
             dimension: None,
             date: None,
             recurrence: None,
+            timezone: None,
             range: Some(Box::new(RangeReading { from, to })),
             provenance: None,
             approximate: Some(false),
@@ -1688,6 +1694,7 @@ impl Reading {
             dimension: None,
             date: None,
             recurrence: Some(rrule.to_owned()),
+            timezone: None,
             range: None,
             provenance: None,
             approximate: Some(false),
@@ -1791,6 +1798,118 @@ pub struct Approximation {
     pub reason: String,
     pub relative_error: Option<f64>,
     pub span: Span,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IssueSeverity {
+    Info,
+    Warning,
+    Error,
+}
+
+impl IssueSeverity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RankedIssue {
+    pub code: IssueCode,
+    pub severity: IssueSeverity,
+    pub rank: u16,
+    pub recoverable: bool,
+    pub ref_text: String,
+    pub reason: String,
+    pub span: Span,
+}
+
+pub fn ranked_findings(parsed: &Parsed) -> Vec<RankedIssue> {
+    let mut issues = Vec::new();
+
+    for issue in &parsed.findings.skipped {
+        issues.push(ranked_issue(
+            issue.code,
+            issue.ref_text.clone(),
+            issue.reason.clone(),
+            issue.span.clone(),
+        ));
+    }
+    for issue in &parsed.findings.ambiguities {
+        issues.push(ranked_issue(
+            issue.code,
+            issue.ref_text.clone(),
+            issue.reason.clone(),
+            issue.span.clone(),
+        ));
+    }
+    for issue in &parsed.findings.approximations {
+        issues.push(ranked_issue(
+            issue.code,
+            issue.ref_text.clone(),
+            issue.reason.clone(),
+            issue.span.clone(),
+        ));
+    }
+
+    issues.sort_by(|a, b| {
+        b.rank
+            .cmp(&a.rank)
+            .then_with(|| a.ref_text.cmp(&b.ref_text))
+    });
+    issues
+}
+
+fn ranked_issue(code: IssueCode, ref_text: String, reason: String, span: Span) -> RankedIssue {
+    RankedIssue {
+        code,
+        severity: issue_severity(code),
+        rank: issue_rank(code),
+        recoverable: issue_recoverable(code),
+        ref_text,
+        reason,
+        span,
+    }
+}
+
+fn issue_severity(code: IssueCode) -> IssueSeverity {
+    match code {
+        IssueCode::Empty
+        | IssueCode::NoValue
+        | IssueCode::UnknownUnit
+        | IssueCode::TimezoneUnsupported
+        | IssueCode::RecurrenceUnsupported => IssueSeverity::Error,
+        IssueCode::TypoCorrected
+        | IssueCode::AmbiguousNumber
+        | IssueCode::AmbiguousDate
+        | IssueCode::AmbiguousUnit
+        | IssueCode::AmbiguousCurrency
+        | IssueCode::Approximation => IssueSeverity::Warning,
+        IssueCode::UnitAssumed => IssueSeverity::Info,
+    }
+}
+
+fn issue_rank(code: IssueCode) -> u16 {
+    match code {
+        IssueCode::Empty | IssueCode::NoValue => 100,
+        IssueCode::TimezoneUnsupported | IssueCode::RecurrenceUnsupported => 90,
+        IssueCode::UnknownUnit => 80,
+        IssueCode::TypoCorrected => 65,
+        IssueCode::AmbiguousDate
+        | IssueCode::AmbiguousNumber
+        | IssueCode::AmbiguousUnit
+        | IssueCode::AmbiguousCurrency => 55,
+        IssueCode::UnitAssumed => 40,
+        IssueCode::Approximation => 30,
+    }
+}
+
+fn issue_recoverable(code: IssueCode) -> bool {
+    !matches!(code, IssueCode::Empty | IssueCode::NoValue)
 }
 
 struct AmbiguousParse {
@@ -1949,6 +2068,11 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         return parsed;
     }
 
+    if let Some(reading) = parse_timezone_clock_time(trimmed) {
+        parsed.best = Some(reading);
+        return parsed;
+    }
+
     if let Some(reading) = parse_clock_time(trimmed) {
         parsed.best = Some(reading);
         return parsed;
@@ -2036,7 +2160,7 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     if let Some(timezone) = unsupported_timezone_suffix(trimmed) {
         parsed.findings.skipped.push(skipped_with_span(
             timezone,
-            "timezone-qualified times require an explicit adapter policy and are not interpreted by the core parser",
+            "unsupported timezone conversion requires an explicit adapter policy",
             IssueCode::TimezoneUnsupported,
             span_token_in(trimmed, timezone),
         ));
@@ -2999,6 +3123,25 @@ fn parse_clock_time(text: &str) -> Option<Reading> {
     ))
 }
 
+fn parse_timezone_clock_time(text: &str) -> Option<Reading> {
+    let trimmed = text.trim();
+    let zone = trimmed.split_whitespace().last()?;
+    let head = trimmed.strip_suffix(zone)?.trim_end();
+    let seconds = parse_clock_seconds(head)?;
+    let offset = timezone_offset_seconds(zone)?;
+    let utc_seconds = modulo_day(seconds - f64::from(offset));
+    let mut reading = Reading::quantity(
+        utc_seconds,
+        "s",
+        Dimension::Time,
+        Provenance::TradeCustom,
+        false,
+        0.9,
+    );
+    reading.timezone = Some("UTC".to_owned());
+    Some(reading)
+}
+
 fn unsupported_timezone_suffix(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     let timezone = trimmed.split_whitespace().last()?;
@@ -3007,7 +3150,71 @@ fn unsupported_timezone_suffix(text: &str) -> Option<&str> {
     is_timezone_token(timezone).then_some(timezone)
 }
 
+fn timezone_offset_seconds(text: &str) -> Option<i32> {
+    match text {
+        "UTC" | "GMT" => Some(0),
+        "EST" => Some(-5 * 3600),
+        "EDT" => Some(-4 * 3600),
+        "CST" => Some(-6 * 3600),
+        "CDT" => Some(-5 * 3600),
+        "MST" => Some(-7 * 3600),
+        "MDT" => Some(-6 * 3600),
+        "PST" => Some(-8 * 3600),
+        "PDT" => Some(-7 * 3600),
+        "JST" | "Asia/Tokyo" => Some(9 * 3600),
+        "KST" | "Asia/Seoul" => Some(9 * 3600),
+        "CET" => Some(3600),
+        "CEST" => Some(2 * 3600),
+        "BST" => Some(3600),
+        "AEST" => Some(10 * 3600),
+        "AEDT" => Some(11 * 3600),
+        _ => parse_utc_offset_seconds(text),
+    }
+}
+
+fn parse_utc_offset_seconds(text: &str) -> Option<i32> {
+    let offset = text
+        .strip_prefix("UTC")
+        .or_else(|| text.strip_prefix("GMT"))?;
+    let (sign, signless) = if let Some(signless) = offset.strip_prefix('+') {
+        (1, signless)
+    } else if let Some(signless) = offset.strip_prefix('-') {
+        (-1, signless)
+    } else {
+        return None;
+    };
+    let (hours, minutes) = signless.split_once(':').unwrap_or((signless, "00"));
+    if hours.is_empty()
+        || hours.len() > 2
+        || minutes.len() != 2
+        || !hours.chars().all(|ch| ch.is_ascii_digit())
+        || !minutes.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return None;
+    }
+    let hours = hours.parse::<i32>().ok()?;
+    let minutes = minutes.parse::<i32>().ok()?;
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+    Some(sign * (hours * 3600 + minutes * 60))
+}
+
+fn modulo_day(seconds: f64) -> f64 {
+    seconds.rem_euclid(86_400.0)
+}
+
 fn is_timezone_token(text: &str) -> bool {
+    if timezone_offset_seconds(text).is_some() {
+        return true;
+    }
+    if text.contains('/')
+        && text
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '+'))
+    {
+        return true;
+    }
     if matches!(
         text,
         "UTC"
@@ -3073,16 +3280,39 @@ fn parse_recurrence(text: &str) -> Option<Reading> {
     }
 
     let lowered = trimmed.to_ascii_lowercase();
+    if let Some(day_text) = lowered.strip_prefix("monthly on the ") {
+        let day = parse_ordinal_month_day(day_text.trim())?;
+        return Some(Reading::recurrence(
+            &format!("FREQ=MONTHLY;BYMONTHDAY={day}"),
+            0.88,
+        ));
+    }
+    if let Some(day_text) = lowered.strip_prefix("every month on the ") {
+        let day = parse_ordinal_month_day(day_text.trim())?;
+        return Some(Reading::recurrence(
+            &format!("FREQ=MONTHLY;BYMONTHDAY={day}"),
+            0.88,
+        ));
+    }
+    if let Some(day_text) = trimmed
+        .strip_prefix("毎月")
+        .and_then(|tail| tail.strip_suffix('日'))
+    {
+        let day = parse_whole_i64(day_text.trim())?;
+        if (1..=31).contains(&day) {
+            return Some(Reading::recurrence(
+                &format!("FREQ=MONTHLY;BYMONTHDAY={day}"),
+                0.88,
+            ));
+        }
+    }
+
     let rrule = if matches!(lowered.as_str(), "every day" | "daily") || trimmed == "毎日" {
         "FREQ=DAILY"
     } else if matches!(lowered.as_str(), "every month" | "monthly") || trimmed == "毎月" {
         "FREQ=MONTHLY"
     } else if let Some(weekday_text) = lowered.strip_prefix("every ") {
-        let day = recurrence_weekday(weekday_text.trim())?;
-        return Some(Reading::recurrence(
-            &format!("FREQ=WEEKLY;BYDAY={day}"),
-            0.9,
-        ));
+        return parse_english_every_recurrence(weekday_text.trim());
     } else if let Some(weekday_text) = trimmed.strip_prefix("毎週") {
         let day = recurrence_weekday(weekday_text.trim())?;
         return Some(Reading::recurrence(
@@ -3104,8 +3334,96 @@ fn parse_recurrence(text: &str) -> Option<Reading> {
 fn is_supported_rrule(text: &str) -> bool {
     matches!(text, "FREQ=DAILY" | "FREQ=MONTHLY")
         || text
+            .strip_prefix("FREQ=DAILY;INTERVAL=")
+            .is_some_and(valid_positive_i64)
+        || text
+            .strip_prefix("FREQ=WEEKLY;INTERVAL=")
+            .is_some_and(valid_positive_i64)
+        || text
+            .strip_prefix("FREQ=MONTHLY;INTERVAL=")
+            .is_some_and(valid_positive_i64)
+        || text
+            .strip_prefix("FREQ=MONTHLY;BYMONTHDAY=")
+            .is_some_and(valid_month_day)
+        || text
             .strip_prefix("FREQ=WEEKLY;BYDAY=")
-            .is_some_and(|day| matches!(day, "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU"))
+            .is_some_and(valid_weekly_byday)
+}
+
+fn parse_english_every_recurrence(text: &str) -> Option<Reading> {
+    if let Some((base, count)) = split_recurrence_count(text) {
+        let day = recurrence_weekday(base.trim())?;
+        return Some(Reading::recurrence(
+            &format!("FREQ=WEEKLY;BYDAY={day};COUNT={count}"),
+            0.86,
+        ));
+    }
+
+    let mut parts = text.split_whitespace();
+    let first = parts.next()?;
+    let second = parts.next();
+    if parts.next().is_none()
+        && let Some(unit) = second
+    {
+        let interval = parse_whole_i64(first)?;
+        if interval <= 0 {
+            return None;
+        }
+        let freq = match unit {
+            "day" | "days" => "DAILY",
+            "week" | "weeks" => "WEEKLY",
+            "month" | "months" => "MONTHLY",
+            _ => return None,
+        };
+        return Some(Reading::recurrence(
+            &format!("FREQ={freq};INTERVAL={interval}"),
+            0.88,
+        ));
+    }
+
+    let day = recurrence_weekday(text.trim())?;
+    Some(Reading::recurrence(
+        &format!("FREQ=WEEKLY;BYDAY={day}"),
+        0.9,
+    ))
+}
+
+fn split_recurrence_count(text: &str) -> Option<(&str, i64)> {
+    let (base, count_text) = text.rsplit_once(" for ")?;
+    let count = count_text
+        .strip_suffix(" times")
+        .or_else(|| count_text.strip_suffix(" occurrences"))
+        .or_else(|| count_text.strip_suffix(" occurrence"))?;
+    let count = parse_whole_i64(count.trim())?;
+    (count > 0).then_some((base, count))
+}
+
+fn parse_ordinal_month_day(text: &str) -> Option<i64> {
+    let lower = text.trim().to_ascii_lowercase();
+    let number_text = lower
+        .strip_suffix("st")
+        .or_else(|| lower.strip_suffix("nd"))
+        .or_else(|| lower.strip_suffix("rd"))
+        .or_else(|| lower.strip_suffix("th"))
+        .unwrap_or(lower.as_str());
+    let day = parse_whole_i64(number_text.trim())?;
+    (1..=31).contains(&day).then_some(day)
+}
+
+fn valid_positive_i64(text: &str) -> bool {
+    parse_whole_i64(text).is_some_and(|value| value > 0)
+}
+
+fn valid_month_day(text: &str) -> bool {
+    parse_whole_i64(text).is_some_and(|value| (1..=31).contains(&value))
+}
+
+fn valid_weekly_byday(text: &str) -> bool {
+    if let Some((day, count_text)) = text.split_once(";COUNT=") {
+        return matches!(day, "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU")
+            && valid_positive_i64(count_text);
+    }
+    matches!(text, "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU")
 }
 
 fn recurrence_weekday(text: &str) -> Option<&'static str> {
@@ -5012,6 +5330,7 @@ mod tests {
         assert!(parsed_output_schema_json().contains("\"currency\""));
         assert!(parsed_output_schema_json().contains("\"temperature\""));
         assert!(parsed_output_schema_json().contains("\"recurrence\""));
+        assert!(parsed_output_schema_json().contains("\"timezone\""));
         assert!(mcp_tool_schema_json().contains("unravel_nl_parse"));
         assert!(mcp_tool_schema_json().contains("inputSchema"));
         assert!(mcp_tool_schema_json().contains("outputSchema"));
@@ -5391,16 +5710,30 @@ mod tests {
     }
 
     #[test]
-    fn rejects_timezone_qualified_clock_without_adapter_policy() {
+    fn parses_timezone_qualified_clock_to_utc() {
         let parsed = parse("3pm EST", None);
+        let best = parsed.best.expect("timezone clock");
+        assert_eq!(best.unit.as_deref(), Some("s"));
+        assert_eq!(best.dimension, Some(Dimension::Time));
+        assert_eq!(best.timezone.as_deref(), Some("UTC"));
+        assert_close(best.value.unwrap(), 20.0 * 3600.0);
+
+        let tokyo = parse("9:30 JST", None).best.expect("JST clock");
+        assert_eq!(tokyo.timezone.as_deref(), Some("UTC"));
+        assert_close(tokyo.value.unwrap(), 30.0 * 60.0);
+    }
+
+    #[test]
+    fn rejects_unsupported_timezone_policy() {
+        let parsed = parse("3pm Europe/Paris", None);
         assert!(parsed.best.is_none());
         assert_eq!(
             parsed.findings.skipped[0].code,
             IssueCode::TimezoneUnsupported
         );
-        assert_eq!(parsed.findings.skipped[0].ref_text, "EST");
+        assert_eq!(parsed.findings.skipped[0].ref_text, "Europe/Paris");
         assert_eq!(parsed.findings.skipped[0].span.start, 4);
-        assert_eq!(parsed.findings.skipped[0].span.end, 7);
+        assert_eq!(parsed.findings.skipped[0].span.end, 16);
     }
 
     #[test]

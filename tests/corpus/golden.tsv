@@ -1,45 +1,174 @@
 # input	locale	kind	dimension	unit	value	date	range_from	range_to
-5尺3寸	ja	quantity	length	m	1.6060606061			
-6帖	ja	quantity	area	m2	9.72			
-延床100㎡	ja	quantity	area	m2	100			
-1,234	en	number			1234			
-5ft 11	en-US	quantity	length	m	1.8034			
-1.5 cups	en	quantity	volume	L	0.35488235475			
-90 min	en	quantity	time	s	5400			
-an hour and a half	en	quantity	time	s	5400			
-1,5 kg	en	quantity	mass	kg	1.5			
-twenty-five kg	en	quantity	mass	kg	25			
-1½ cups	en	quantity	volume	L	0.35488235475			
-2 lb 3 oz	en	quantity	mass	kg	0.992233309375			
+5尺3寸	ja	quantity	length	m	1.6060606061
+6帖	ja	quantity	area	m2	9.72
+延床100㎡	ja	quantity	area	m2	100
+1,234	en	number			1234
+5ft 11	en-US	quantity	length	m	1.8034
+1.5 cups	en	quantity	volume	L	0.35488235475
+90 min	en	quantity	time	s	5400
+an hour and a half	en	quantity	time	s	5400
+1,5 kg	en	quantity	mass	kg	1.5
+twenty-five kg	en	quantity	mass	kg	25
+1½ cups	en	quantity	volume	L	0.35488235475
+2 lb 3 oz	en	quantity	mass	kg	0.992233309375
 3 yd 2 ft	en	quantity	length	m	3.3528
 4 stone 6 lb	en-GB	quantity	mass	kg	28.12272694
-500 KB	en	quantity	data	B	500000			
-5 Mbps	en	quantity	data_rate	bit/s	5000000			
-5 gpm	en	quantity	flow_rate	m3/s	0.000315450982			
-500 mAh	en	quantity	charge	C	1800			
-10 inH₂O	en	quantity	pressure	Pa	2490.8891			
-1 kgf/cm²	en	quantity	pressure	Pa	98066.5			
-about 20C	en	quantity	temperature	C	20			
-約20kg	ja	quantity	mass	kg	20			
-10平目	ja	quantity	area	m2	10			
-約3坪	ja	quantity	area	m2	9.9173553719			
-4畳半	ja	quantity	area	m2	7.29			
-1間半	ja	quantity	length	m	2.7272727273			
+500 KB	en	quantity	data	B	500000
+5 Mbps	en	quantity	data_rate	bit/s	5000000
+5 gpm	en	quantity	flow_rate	m3/s	0.000315450982
+500 mAh	en	quantity	charge	C	1800
+10 inH₂O	en	quantity	pressure	Pa	2490.8891
+1 kgf/cm²	en	quantity	pressure	Pa	98066.5
+about 20C	en	quantity	temperature	C	20
+約20kg	ja	quantity	mass	kg	20
+10平目	ja	quantity	area	m2	10
+約3坪	ja	quantity	area	m2	9.9173553719
+4畳半	ja	quantity	area	m2	7.29
+1間半	ja	quantity	length	m	2.7272727273
 2〜3時間	ja	range	time	s			7200	10800
-12 metrs	en	quantity	length	m	12			
-1,234 kg	en-GB	quantity	mass	kg	1234			
-1,5 litros	es	quantity	volume	L	1.5			
-2 metros cuadrados	es	quantity	area	m2	2			
-3 kilogrmos	es	quantity	mass	kg	3			
-1,5 litre	fr	quantity	volume	L	1.5			
-2 mètres carrés	fr	quantity	area	m2	2			
-10 quilômetros	pt	quantity	length	m	10000			
-5 quilometors	pt	quantity	length	m	5000			
-3公斤	zh	quantity	mass	kg	3			
+12 metrs	en	quantity	length	m	12
+1,234 kg	en-GB	quantity	mass	kg	1234
+1,5 litros	es	quantity	volume	L	1.5
+2 metros cuadrados	es	quantity	area	m2	2
+3 kilogrmos	es	quantity	mass	kg	3
+1,5 litre	fr	quantity	volume	L	1.5
+2 mètres carrés	fr	quantity	area	m2	2
+10 quilômetros	pt	quantity	length	m	10000
+5 quilometors	pt	quantity	length	m	5000
+3公斤	zh	quantity	mass	kg	3
 100-120㎡	ja	range	area	m2			100	120
 10 ± 0.5 mm	en	range	length	m			0.0095	0.0105
 under 10 minutes	en	range	time	s			0	600
 10mm以下	ja	range	length	m			0	0.01
-3pm	en	quantity	time	s	54000			
-午後3時	ja	quantity	time	s	54000			
-午前9時30分	ja	quantity	time	s	34200			
+3pm	en	quantity	time	s	54000
+午後3時	ja	quantity	time	s	54000
+午前9時30分	ja	quantity	time	s	34200
+1 meter	en	quantity	length	m	1
+2 meters	en	quantity	length	m	2
+3 metre	en-GB	quantity	length	m	3
+4 metros	es	quantity	length	m	4
+5 mètres	fr	quantity	length	m	5
+6 米	zh	quantity	length	m	6
+7 km	en	quantity	length	m	7000
+8 kilometers	en	quantity	length	m	8000
+9 kilometres	en-GB	quantity	length	m	9000
+10 klicks	en	quantity	length	m	10000
+11 kilómetros	es	quantity	length	m	11000
+12 quilometros	pt	quantity	length	m	12000
+13 公里	zh	quantity	length	m	13000
+14 cm	en	quantity	length	m	0.14
+15 centimeters	en	quantity	length	m	0.15
+16 millimetres	en-GB	quantity	length	m	0.016
+17 μm	en	quantity	length	m	0.000017
+18 microns	en	quantity	length	m	0.000018
+19 inches	en	quantity	length	m	0.4826
+20 ft.	en	quantity	length	m	6.096
+21 yards	en	quantity	length	m	19.2024
+22 miles	en	quantity	length	m	35405.568
+23 nautical miles	en	quantity	length	m	42596
+24 hands	en	quantity	length	m	2.4384
+25 thou	en	quantity	length	m	0.000635
+26 fathoms	en	quantity	length	m	47.5488
+1 kilogramme	en-GB	quantity	mass	kg	1
+2 kilos	en	quantity	mass	kg	2
+3 キロ	ja	quantity	mass	kg	3
+4 grams	en	quantity	mass	kg	0.004
+5 lbs	en	quantity	mass	kg	2.26796185
+6 ounces	en	quantity	mass	kg	0.17009713875
+7 stones	en-GB	quantity	mass	kg	44.45205226
+8 grains	en	quantity	mass	kg	0.00051839128
+9 troy ounces	en	quantity	mass	kg	0.2799312912
+10 carats	en	quantity	mass	kg	0.002
+11 micrograms	en	quantity	mass	kg	0.000000011
+12 tonnes	en-GB	quantity	mass	kg	12000
+1 second	en	quantity	time	s	1
+2 minutes	en	quantity	time	s	120
+3 hours	en	quantity	time	s	10800
+4日	ja	quantity	time	s	345600
+5 weeks	en	quantity	time	s	3024000
+6 fortnights	en-GB	quantity	time	s	7257600
+7 months	en	quantity	time	s	18408222
+8 years	en	quantity	time	s	252455616
+1 m²	en	quantity	area	m2	1
+2 sqm	en	quantity	area	m2	2
+3 square feet	en	quantity	area	m2	0.27870912
+4 acres	en	quantity	area	m2	16187.4256896
+5 hectares	en	quantity	area	m2	50000
+6 平米	ja	quantity	area	m2	6
+7 metros quadrados	pt	quantity	area	m2	7
+8 平方米	zh	quantity	area	m2	8
+1 liter	en	quantity	volume	L	1
+2 litres	en-GB	quantity	volume	L	2
+3 litros	es	quantity	volume	L	3
+4 升	zh	quantity	volume	L	4
+5 ml	en	quantity	volume	L	0.005
+6 millilitres	en-GB	quantity	volume	L	0.006
+7 cc	en	quantity	volume	L	0.007
+8 m³	en	quantity	volume	L	8000
+9 cubic meters	en	quantity	volume	L	9000
+10 tablespoons	en	quantity	volume	L	0.1478676478125
+11 teaspoons	en	quantity	volume	L	0.05421813753125
+12 fluid ounces	en	quantity	volume	L	0.35488235475
+13 pints	en	quantity	volume	L	6.151294149
+14 quarts	en	quantity	volume	L	13.248941244
+15 gallons	en	quantity	volume	L	56.78117676
+1 m/s	en	quantity	speed	m/s	1
+2 meters per second	en	quantity	speed	m/s	2
+3 km/h	en	quantity	speed	m/s	0.8333333333333333
+4 kph	en	quantity	speed	m/s	1.1111111111111112
+5 mph	en	quantity	speed	m/s	2.2352
+6 knots	en	quantity	speed	m/s	3.086666666666667
+1 byte	en	quantity	data	B	1
+2 bits	en	quantity	data	B	0.25
+3 kB	en	quantity	data	B	3000
+4 megabytes	en	quantity	data	B	4000000
+5 gigs	en	quantity	data	B	5000000000
+6 TB	en	quantity	data	B	6000000000000
+7 megabits	en	quantity	data	B	875000
+8 tebibytes	en	quantity	data	B	8796093022208
+1 Mbps	en	quantity	data_rate	bit/s	1000000
+2 kbps	en	quantity	data_rate	bit/s	2000
+3 Gbps	en	quantity	data_rate	bit/s	3000000000
+4 bits/sec	en	quantity	data_rate	bit/s	4
+5 MBps	en	quantity	data_rate	bit/s	40000000
+6 MiBps	en	quantity	data_rate	bit/s	50331648
+1 m³/s	en	quantity	flow_rate	m3/s	1
+2 m3/h	en	quantity	flow_rate	m3/s	0.0005555555555555556
+3 L/s	en	quantity	flow_rate	m3/s	0.003
+4 lpm	en	quantity	flow_rate	m3/s	0.00006666666666666667
+5 ml/min	en	quantity	flow_rate	m3/s	0.00000008333333333333333
+6 cfm	en	quantity	flow_rate	m3/s	0.0028316846592
+7 gpm	en	quantity	flow_rate	m3/s	0.0004416313748
+1 uM	en	quantity	concentration	mol/m3	0.001
+2 millimolar	en	quantity	concentration	mol/m3	2
+3 m/s²	en	quantity	acceleration	m/s2	3
+4 gees	en	quantity	acceleration	m/s2	39.2266
+5 newtons	en	quantity	force	N	5
+6 kgf	en	quantity	force	N	58.8399
+7 lbf	en	quantity	force	N	31.1375513068235
+8 Nm	en	quantity	torque	N*m	8
+9 lb-ft	en	quantity	torque	N*m	12.202361534982604
+1 Pa	en	quantity	pressure	Pa	1
+2 kPa	en	quantity	pressure	Pa	2000
+3 psi	en	quantity	pressure	Pa	20684.271879504
+4 in water	en	quantity	pressure	Pa	996.35564
+5 kgf/cm²	en	quantity	pressure	Pa	490332.5
+1 watt	en	quantity	power	W	1
+2 horsepower	en	quantity	power	W	1491.399744
+3 volts	en	quantity	voltage	V	3
+4 amps	en	quantity	current	A	4
+5 milliamps	en	quantity	current	A	0.005
+6 ohms	en	quantity	resistance	Ω	6
+7 coulombs	en	quantity	charge	C	7
+8 mAh	en	quantity	charge	C	28.8
+9 lux	en	quantity	illuminance	lx	9
+10 foot candles	en	quantity	illuminance	lx	107.63910416709722
+11 sieverts	en	quantity	radiation_equivalent_dose	Sv	11
+12 millisieverts	en	quantity	radiation_equivalent_dose	Sv	0.012
+13 becquerels	en	quantity	radioactivity	Bq	13
+14 megabecquerels	en	quantity	radioactivity	Bq	14000000
+3pm EST	en	quantity	time	s	72000
+9:30 JST	en	quantity	time	s	1800
+every 2 weeks	en	recurrence
+monthly on the 15th	en	recurrence
+毎月15日	ja	recurrence

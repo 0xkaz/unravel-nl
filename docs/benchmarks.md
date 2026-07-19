@@ -13,15 +13,13 @@ and parses per second.
 
 ## Local Snapshot
 
-Measured on the development machine on 2026-07-19:
+Measured on the development machine on 2026-07-20:
 
 | Command | Corpus | Iterations | Result |
 | --- | --- | ---: | --- |
-| `cargo run --release --example bench -- 100000` | default corpus | 100,000 | 7.111 us/input, 140,623 parses/s |
-| `cargo run --release --example bench -- 100000` | hostile no-match corpus | 100,000 | 18.233 us/input, 54,847 parses/s |
-| `cargo run --release --all-features --example bench -- 100000` | default corpus | 100,000 | 5.652 us/input, 176,921 parses/s |
-| `cargo run --release --all-features --example bench -- 100000` | hostile no-match corpus | 100,000 | 14.200 us/input, 70,422 parses/s |
-| `cargo run --release --all-features --example bench -- 100000` | date corpus | 100,000 | 1.070 us/input, 934,885 parses/s |
+| `cargo run --release --all-features --example bench -- 200000` | default corpus | 200,000 | 9.566 us/input, 104,532 parses/s |
+| `cargo run --release --all-features --example bench -- 200000` | hostile no-match corpus | 200,000 | 11.142 us/input, 89,752 parses/s |
+| `cargo run --release --all-features --example bench -- 200000` | date corpus | 200,000 | 1.377 us/input, 726,054 parses/s |
 
 These numbers are a local snapshot, not a universal performance promise. They
 exist to catch order-of-magnitude regressions as the grammar expands.

@@ -58,8 +58,8 @@ fn canonicalize_values_accepts_clean_values_and_rejects_strict_assumptions() {
 
 #[test]
 fn repair_tool_call_message_surfaces_timezone_policy() {
-    let message = repair_tool_call_message("starts_at", "3pm EST", None).expect("message");
+    let message = repair_tool_call_message("starts_at", "3pm Europe/Paris", None).expect("message");
     assert!(message.contains("[TIMEZONE_UNSUPPORTED]"));
     assert!(message.contains("starts_at"));
-    assert!(message.contains("EST"));
+    assert!(message.contains("Europe/Paris"));
 }
