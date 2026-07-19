@@ -11,7 +11,9 @@ categories = ["parser-implementations", "value-formatting"]
 
 [dependencies]
 jiff = { version = "0.2.33", default-features = false, optional = true }
+jiff-tzdb = { version = "0.1.6", default-features = false, optional = true }
 
 [features]
 default = []
 dates-jiff = ["dep:jiff"]
+timezones-jiff = ["dates-jiff", "dep:jiff-tzdb", "jiff/std"]

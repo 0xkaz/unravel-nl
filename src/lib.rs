@@ -2068,7 +2068,7 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         return parsed;
     }
 
-    if let Some(reading) = parse_timezone_clock_time(trimmed) {
+    if let Some(reading) = parse_timezone_clock_time(trimmed, &ctx) {
         parsed.best = Some(reading);
         return parsed;
     }
@@ -3123,12 +3123,13 @@ fn parse_clock_time(text: &str) -> Option<Reading> {
     ))
 }
 
-fn parse_timezone_clock_time(text: &str) -> Option<Reading> {
+fn parse_timezone_clock_time(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     let trimmed = text.trim();
     let zone = trimmed.split_whitespace().last()?;
     let head = trimmed.strip_suffix(zone)?.trim_end();
     let seconds = parse_clock_seconds(head)?;
-    let offset = timezone_offset_seconds(zone)?;
+    let offset = timezone_offset_seconds(zone)
+        .or_else(|| iana_timezone_offset_seconds(zone, seconds, ctx.reference_date))?;
     let utc_seconds = modulo_day(seconds - f64::from(offset));
     let mut reading = Reading::quantity(
         utc_seconds,
@@ -3161,8 +3162,8 @@ fn timezone_offset_seconds(text: &str) -> Option<i32> {
         "MDT" => Some(-6 * 3600),
         "PST" => Some(-8 * 3600),
         "PDT" => Some(-7 * 3600),
-        "JST" | "Asia/Tokyo" => Some(9 * 3600),
-        "KST" | "Asia/Seoul" => Some(9 * 3600),
+        "JST" => Some(9 * 3600),
+        "KST" => Some(9 * 3600),
         "CET" => Some(3600),
         "CEST" => Some(2 * 3600),
         "BST" => Some(3600),
@@ -3200,6 +3201,40 @@ fn parse_utc_offset_seconds(text: &str) -> Option<i32> {
     Some(sign * (hours * 3600 + minutes * 60))
 }
 
+#[cfg(feature = "timezones-jiff")]
+fn iana_timezone_offset_seconds(
+    zone: &str,
+    seconds: f64,
+    reference_date: Option<Date>,
+) -> Option<i32> {
+    if !is_iana_timezone_name(zone) {
+        return None;
+    }
+    let date = reference_date?;
+    let year = i16::try_from(date.year).ok()?;
+    let clock_seconds = seconds.round() as i64;
+    let hour = i8::try_from(clock_seconds / 3600).ok()?;
+    let minute = i8::try_from((clock_seconds % 3600) / 60).ok()?;
+    let second = i8::try_from(clock_seconds % 60).ok()?;
+    let datetime =
+        jiff::civil::date(year, date.month as i8, date.day as i8).at(hour, minute, second, 0);
+    let (canonical_name, data) = jiff_tzdb::get(zone)?;
+    let timezone = jiff::tz::TimeZone::tzif(canonical_name, data).ok()?;
+    datetime
+        .to_zoned(timezone)
+        .ok()
+        .map(|zoned| zoned.offset().seconds())
+}
+
+#[cfg(not(feature = "timezones-jiff"))]
+fn iana_timezone_offset_seconds(
+    _zone: &str,
+    _seconds: f64,
+    _reference_date: Option<Date>,
+) -> Option<i32> {
+    None
+}
+
 fn modulo_day(seconds: f64) -> f64 {
     seconds.rem_euclid(86_400.0)
 }
@@ -3208,11 +3243,7 @@ fn is_timezone_token(text: &str) -> bool {
     if timezone_offset_seconds(text).is_some() {
         return true;
     }
-    if text.contains('/')
-        && text
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '+'))
-    {
+    if is_iana_timezone_name(text) {
         return true;
     }
     if matches!(
@@ -3258,6 +3289,13 @@ fn is_timezone_token(text: &str) -> bool {
         && minutes.chars().all(|ch| ch.is_ascii_digit())
 }
 
+fn is_iana_timezone_name(text: &str) -> bool {
+    text.contains('/')
+        && text
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '+'))
+}
+
 fn unsupported_recurrence_phrase(text: &str) -> Option<&str> {
     let trimmed = text.trim();
     let lowered = trimmed.to_ascii_lowercase();
@@ -3281,6 +3319,12 @@ fn parse_recurrence(text: &str) -> Option<Reading> {
 
     let lowered = trimmed.to_ascii_lowercase();
     if let Some(day_text) = lowered.strip_prefix("monthly on the ") {
+        if let Some(byday) = parse_english_ordinal_weekday(day_text.trim()) {
+            return Some(Reading::recurrence(
+                &format!("FREQ=MONTHLY;BYDAY={byday}"),
+                0.84,
+            ));
+        }
         let day = parse_ordinal_month_day(day_text.trim())?;
         return Some(Reading::recurrence(
             &format!("FREQ=MONTHLY;BYMONTHDAY={day}"),
@@ -3288,10 +3332,25 @@ fn parse_recurrence(text: &str) -> Option<Reading> {
         ));
     }
     if let Some(day_text) = lowered.strip_prefix("every month on the ") {
+        if let Some(byday) = parse_english_ordinal_weekday(day_text.trim()) {
+            return Some(Reading::recurrence(
+                &format!("FREQ=MONTHLY;BYDAY={byday}"),
+                0.84,
+            ));
+        }
         let day = parse_ordinal_month_day(day_text.trim())?;
         return Some(Reading::recurrence(
             &format!("FREQ=MONTHLY;BYMONTHDAY={day}"),
             0.88,
+        ));
+    }
+    if let Some(byday) = trimmed
+        .strip_prefix("毎月")
+        .and_then(parse_japanese_ordinal_weekday)
+    {
+        return Some(Reading::recurrence(
+            &format!("FREQ=MONTHLY;BYDAY={byday}"),
+            0.84,
         ));
     }
     if let Some(day_text) = trimmed
@@ -3340,11 +3399,17 @@ fn is_supported_rrule(text: &str) -> bool {
             .strip_prefix("FREQ=WEEKLY;INTERVAL=")
             .is_some_and(valid_positive_i64)
         || text
+            .strip_prefix("FREQ=WEEKLY;INTERVAL=")
+            .is_some_and(valid_weekly_interval_byday)
+        || text
             .strip_prefix("FREQ=MONTHLY;INTERVAL=")
             .is_some_and(valid_positive_i64)
         || text
             .strip_prefix("FREQ=MONTHLY;BYMONTHDAY=")
             .is_some_and(valid_month_day)
+        || text
+            .strip_prefix("FREQ=MONTHLY;BYDAY=")
+            .is_some_and(valid_monthly_byday)
         || text
             .strip_prefix("FREQ=WEEKLY;BYDAY=")
             .is_some_and(valid_weekly_byday)
@@ -3356,6 +3421,22 @@ fn parse_english_every_recurrence(text: &str) -> Option<Reading> {
         return Some(Reading::recurrence(
             &format!("FREQ=WEEKLY;BYDAY={day};COUNT={count}"),
             0.86,
+        ));
+    }
+
+    if let Some(weekday_text) = text.strip_prefix("other ") {
+        let day = recurrence_weekday(weekday_text.trim())?;
+        return Some(Reading::recurrence(
+            &format!("FREQ=WEEKLY;INTERVAL=2;BYDAY={day}"),
+            0.84,
+        ));
+    }
+    if let Some(day_text) = text.strip_prefix("month on the ")
+        && let Some(byday) = parse_english_ordinal_weekday(day_text.trim())
+    {
+        return Some(Reading::recurrence(
+            &format!("FREQ=MONTHLY;BYDAY={byday}"),
+            0.84,
         ));
     }
 
@@ -3410,6 +3491,41 @@ fn parse_ordinal_month_day(text: &str) -> Option<i64> {
     (1..=31).contains(&day).then_some(day)
 }
 
+fn parse_english_ordinal_weekday(text: &str) -> Option<String> {
+    let text = text.strip_suffix(" of the month").unwrap_or(text).trim();
+    let (ordinal_text, weekday_text) = text.split_once(' ')?;
+    let ordinal = parse_recurrence_ordinal(ordinal_text)?;
+    let weekday = recurrence_weekday(weekday_text.trim())?;
+    Some(format!("{ordinal}{weekday}"))
+}
+
+fn parse_japanese_ordinal_weekday(text: &str) -> Option<String> {
+    let text = text.strip_prefix('第')?;
+    let digit_end = text
+        .char_indices()
+        .find(|(_, ch)| !ch.is_ascii_digit())
+        .map(|(idx, _)| idx)?;
+    let ordinal = parse_whole_i64(&text[..digit_end])?;
+    if !(1..=5).contains(&ordinal) {
+        return None;
+    }
+    let weekday = recurrence_weekday(text[digit_end..].trim())?;
+    Some(format!("{ordinal}{weekday}"))
+}
+
+fn parse_recurrence_ordinal(text: &str) -> Option<String> {
+    let ordinal = match text {
+        "first" => 1,
+        "second" => 2,
+        "third" => 3,
+        "fourth" => 4,
+        "fifth" => 5,
+        "last" => return Some("-1".to_owned()),
+        _ => parse_ordinal_month_day(text)?,
+    };
+    (1..=5).contains(&ordinal).then(|| ordinal.to_string())
+}
+
 fn valid_positive_i64(text: &str) -> bool {
     parse_whole_i64(text).is_some_and(|value| value > 0)
 }
@@ -3424,6 +3540,22 @@ fn valid_weekly_byday(text: &str) -> bool {
             && valid_positive_i64(count_text);
     }
     matches!(text, "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU")
+}
+
+fn valid_weekly_interval_byday(text: &str) -> bool {
+    let Some((interval_text, byday)) = text.split_once(";BYDAY=") else {
+        return false;
+    };
+    valid_positive_i64(interval_text) && valid_weekly_byday(byday)
+}
+
+fn valid_monthly_byday(text: &str) -> bool {
+    if text.len() < 3 {
+        return false;
+    }
+    let (ordinal_text, weekday_text) = text.split_at(text.len() - 2);
+    matches!(weekday_text, "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU")
+        && matches!(ordinal_text, "-1" | "1" | "2" | "3" | "4" | "5")
 }
 
 fn recurrence_weekday(text: &str) -> Option<&'static str> {
@@ -4766,7 +4898,6 @@ fn cjk_digit(ch: char) -> Option<i64> {
     }
 }
 
-#[cfg(feature = "dates-jiff")]
 fn parse_whole_i64(text: &str) -> Option<i64> {
     if text.is_empty() || !text.chars().all(|ch| ch.is_ascii_digit()) {
         return None;
@@ -5721,6 +5852,34 @@ mod tests {
         let tokyo = parse("9:30 JST", None).best.expect("JST clock");
         assert_eq!(tokyo.timezone.as_deref(), Some("UTC"));
         assert_close(tokyo.value.unwrap(), 30.0 * 60.0);
+    }
+
+    #[cfg(feature = "timezones-jiff")]
+    #[test]
+    fn parses_iana_timezone_with_explicit_reference_date() {
+        let summer = parse(
+            "3pm Europe/Paris",
+            Some(ParseCtx {
+                reference_date: Date::new(2026, 7, 20),
+                ..ParseCtx::default()
+            }),
+        )
+        .best
+        .expect("summer IANA timezone");
+        assert_eq!(summer.timezone.as_deref(), Some("UTC"));
+        assert_close(summer.value.unwrap(), 13.0 * 3600.0);
+
+        let winter = parse(
+            "3pm Europe/Paris",
+            Some(ParseCtx {
+                reference_date: Date::new(2026, 1, 20),
+                ..ParseCtx::default()
+            }),
+        )
+        .best
+        .expect("winter IANA timezone");
+        assert_eq!(winter.timezone.as_deref(), Some("UTC"));
+        assert_close(winter.value.unwrap(), 14.0 * 3600.0);
     }
 
     #[test]

@@ -21,8 +21,8 @@ The first slice focuses on:
 - Compact and ISO-style durations such as `1h30`, `2d4h`, and `PT1H30M`
 - Clock times and slots such as `3pm`, `14:30`, and `3pm-4pm`
 - Recurrence readings such as `every monday`, `every 2 weeks`,
-  `monthly on the 15th`, `毎週月曜日`, `毎月15日`, and `毎日`, normalized to
-  RRULE-style strings
+  `every other monday`, `monthly on the second monday`, `毎週月曜日`,
+  `毎月第2月曜日`, and `毎日`, normalized to RRULE-style strings
 - Approximate, tolerance, and bounded input such as `about 20C`, `約20kg`,
   `10 ± 0.5 mm`, `a few minutes`, `under 10 minutes`, `10mm以下`, and
   temperature phrases like `it's hot`
@@ -112,8 +112,10 @@ must be given an explicit `reference_date`; adapter layers can pass a `timezone`
 hint, but the core does not derive behavior from the Rust process environment.
 Timezone-qualified wall-clock strings with explicit offsets or known fixed
 abbreviations, such as `3pm EST` or `9:30 JST`, are normalized to UTC seconds.
-Unsupported IANA-zone conversion such as `3pm Europe/Paris` fails loudly until
-an adapter supplies a real timezone policy.
+With the `timezones-jiff` feature and an explicit `reference_date`, IANA-zone
+conversion such as `3pm Europe/Paris` uses bundled timezone data and remains
+independent of the Rust host environment. IANA-zone input without an explicit
+date fails loudly.
 
 Simple recurring expressions are canonicalized as RRULE-style strings:
 
