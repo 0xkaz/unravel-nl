@@ -118,6 +118,23 @@ fn extracts_editor_dimension_windows() {
     assert_eq!(best.kind, Kind::Number);
     assert_eq!(best.value, Some(3640.0));
     assert_eq!(plain[0].parsed.alternatives[0].unit.as_deref(), Some("mm"));
+
+    let grouped = parse_all(
+        "寸法１ ２００",
+        Some(ParseCtx {
+            locale: Some(Locale::Ja),
+            expected_dimension: Some(Dimension::Length),
+            ..ParseCtx::default()
+        }),
+    );
+    assert_eq!(texts(&grouped), vec!["１ ２００"]);
+    let best = grouped[0].parsed.best.as_ref().expect("grouped number");
+    assert_eq!(best.kind, Kind::Number);
+    assert_eq!(best.value, Some(1200.0));
+    assert_eq!(
+        grouped[0].parsed.alternatives[0].unit.as_deref(),
+        Some("mm")
+    );
 }
 
 #[test]

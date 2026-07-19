@@ -3560,18 +3560,27 @@ fn parse_editor_dimension_into(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) 
     let normalized_input = normalize_input_cow(text);
     let trimmed = normalized_input.trim();
 
+    if is_editor_plain_number_candidate(trimmed) {
+        parse_editor_dimension_number_into(trimmed, ctx, parsed);
+        return;
+    }
+
     parse_quantity_fast_into(trimmed, ctx, parsed);
     if parsed_is_editor_dimension(parsed, ctx.expected_dimension, ctx.expected_dimension) {
         return;
     }
 
+    parse_editor_dimension_number_into(trimmed, ctx, parsed);
+}
+
+fn parse_editor_dimension_number_into(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     let mut number_ctx = ctx.clone();
     number_ctx.expect = Some(Kind::Quantity);
     if number_ctx.expected_dimension.is_none() {
         number_ctx.expected_dimension = Some(Dimension::Length);
     }
-    let mut number = parsed_shell(trimmed, &number_ctx);
-    parse_number_fast_into(trimmed, &number_ctx, &mut number);
+    let mut number = parsed_shell(text, &number_ctx);
+    parse_number_fast_into(text, &number_ctx, &mut number);
     if parsed_is_editor_dimension(
         &number,
         number_ctx.expected_dimension,
@@ -3588,7 +3597,40 @@ fn parse_editor_dimension_into(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) 
     parsed
         .findings
         .skipped
-        .push(skipped(trimmed, "no supported editor dimension matched"));
+        .push(skipped(text, "no supported editor dimension matched"));
+}
+
+fn is_editor_plain_number_candidate(text: &str) -> bool {
+    let mut saw_number = false;
+    for ch in text.chars() {
+        if is_digit_like(ch) {
+            saw_number = true;
+            continue;
+        }
+        if matches!(
+            ch,
+            '.' | ','
+                | '+'
+                | '-'
+                | '．'
+                | '，'
+                | '/'
+                | '／'
+                | '万'
+                | '億'
+                | '兆'
+                | ' '
+                | '_'
+                | '\''
+                | '\u{00A0}'
+                | '\u{202F}'
+                | '\u{2009}'
+        ) {
+            continue;
+        }
+        return false;
+    }
+    saw_number
 }
 
 fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
