@@ -55,6 +55,9 @@ fn scanner_keeps_sorted_non_overlapping_matches() {
     let approximate = parse_all("about 3m", None);
     assert_eq!(texts(&approximate), vec!["about 3m"]);
 
+    let uppercase_approximate = parse_all("ABOUT 3m", None);
+    assert_eq!(texts(&uppercase_approximate), vec!["ABOUT 3m"]);
+
     let approximate_many = parse_all("about 3m and 4m", None);
     assert_eq!(texts(&approximate_many), vec!["3m", "4m"]);
 

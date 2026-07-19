@@ -2493,22 +2493,7 @@ pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
     for_clause_spans(text, |start, end| {
         push_clause_matches(&mut matches, text, start, end, &ctx);
     });
-    matches.sort_by(|left, right| {
-        left.start
-            .cmp(&right.start)
-            .then_with(|| right.end.cmp(&left.end))
-    });
-
-    let mut non_overlapping: Vec<ParsedMatch> = Vec::new();
-    for candidate in matches {
-        if non_overlapping.last().is_some_and(|existing| {
-            spans_overlap(existing.start, existing.end, candidate.start, candidate.end)
-        }) {
-            continue;
-        }
-        non_overlapping.push(candidate);
-    }
-    non_overlapping
+    sorted_non_overlapping_matches(matches)
 }
 
 fn push_clause_matches(
@@ -2518,22 +2503,24 @@ fn push_clause_matches(
     end: usize,
     ctx: &ParseCtx,
 ) {
-    if !should_broad_parse_clause(&text[start..end]) {
-        push_numeric_window_matches(matches, text, start, end, ctx);
-        return;
-    }
-
-    if clause_starts_with_broad_operator(&text[start..end]) {
-        match push_broad_clause_match(matches, text, start, end, ctx) {
-            Some(true) => return,
-            Some(false) if clause_has_numeric_candidate(text, start, end) => {
-                matches.pop();
-            }
-            Some(false) => return,
-            None => {}
+    match broad_clause_dispatch(&text[start..end]) {
+        BroadClauseDispatch::None => {
+            push_numeric_window_matches(matches, text, start, end, ctx);
+            return;
         }
-        push_numeric_window_matches(matches, text, start, end, ctx);
-        return;
+        BroadClauseDispatch::Prefix => {
+            match push_broad_clause_match(matches, text, start, end, ctx) {
+                Some(true) => return,
+                Some(false) if clause_has_numeric_candidate(text, start, end) => {
+                    matches.pop();
+                }
+                Some(false) => return,
+                None => {}
+            }
+            push_numeric_window_matches(matches, text, start, end, ctx);
+            return;
+        }
+        BroadClauseDispatch::Short => {}
     }
 
     let mut first_numeric = None;
@@ -2543,6 +2530,7 @@ fn push_clause_matches(
         if first_numeric.is_none() {
             first_numeric = Some(candidate);
         }
+        true
     });
 
     let clause_bounds = trimmed_bounds(text, start, end);
@@ -2599,6 +2587,7 @@ fn push_numeric_window_matches(
 ) {
     for_numeric_candidate_spans(text, start, end, |candidate| {
         let _ = push_parsed_match(matches, text, candidate, ctx);
+        true
     });
 }
 
@@ -2611,11 +2600,20 @@ pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<Par
     for_clause_spans(text, |clause_start, clause_end| {
         for_numeric_candidate_spans(text, clause_start, clause_end, |candidate| {
             if candidate_starts_with_currency(text, candidate.start) {
-                return;
+                return true;
             }
             push_editor_dimension_match(&mut matches, text, candidate, clause_start, &ctx);
+            true
         });
     });
+
+    sorted_non_overlapping_matches(matches)
+}
+
+fn sorted_non_overlapping_matches(mut matches: Vec<ParsedMatch>) -> Vec<ParsedMatch> {
+    if matches.len() <= 1 {
+        return matches;
+    }
 
     matches.sort_by(|left, right| {
         left.start
@@ -2623,7 +2621,7 @@ pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<Par
             .then_with(|| right.end.cmp(&left.end))
     });
 
-    let mut non_overlapping: Vec<ParsedMatch> = Vec::new();
+    let mut non_overlapping: Vec<ParsedMatch> = Vec::with_capacity(matches.len());
     for candidate in matches {
         if non_overlapping.last().is_some_and(|existing| {
             spans_overlap(existing.start, existing.end, candidate.start, candidate.end)
@@ -2755,40 +2753,46 @@ enum CandidateParser {
     TokenWindow,
 }
 
-fn should_broad_parse_clause(clause: &str) -> bool {
-    let trimmed = clause.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let lower = ascii_lower_cow(trimmed);
-    trimmed.split_whitespace().count() <= 3
-        || lower.starts_with("between ")
-        || lower.starts_with("from ")
-        || lower.starts_with("about ")
-        || lower.starts_with("around ")
-        || lower.starts_with("roughly ")
-        || lower.starts_with("approximately ")
-        || trimmed.starts_with('約')
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BroadClauseDispatch {
+    None,
+    Short,
+    Prefix,
 }
 
-fn clause_starts_with_broad_operator(clause: &str) -> bool {
+fn broad_clause_dispatch(clause: &str) -> BroadClauseDispatch {
     let trimmed = clause.trim();
+    if trimmed.is_empty() {
+        return BroadClauseDispatch::None;
+    }
     if trimmed.starts_with('約') {
-        return true;
+        return BroadClauseDispatch::Prefix;
     }
     let lower = ascii_lower_cow(trimmed);
-    lower.starts_with("between ")
+    if lower.starts_with("between ")
         || lower.starts_with("from ")
         || lower.starts_with("about ")
         || lower.starts_with("around ")
         || lower.starts_with("roughly ")
         || lower.starts_with("approximately ")
+    {
+        BroadClauseDispatch::Prefix
+    } else if has_at_most_three_words(trimmed) {
+        BroadClauseDispatch::Short
+    } else {
+        BroadClauseDispatch::None
+    }
+}
+
+fn has_at_most_three_words(text: &str) -> bool {
+    text.split_whitespace().take(4).count() <= 3
 }
 
 fn clause_has_numeric_candidate(text: &str, start: usize, end: usize) -> bool {
     let mut found = false;
     for_numeric_candidate_spans(text, start, end, |_| {
         found = true;
+        false
     });
     found
 }
@@ -2836,7 +2840,7 @@ fn is_clause_separator(text: &str, idx: usize, ch: char) -> bool {
 
 fn for_numeric_candidate_spans<F>(text: &str, start: usize, end: usize, mut emit: F)
 where
-    F: FnMut(CandidateSpan),
+    F: FnMut(CandidateSpan) -> bool,
 {
     let mut cursor = start;
     while cursor < end {
@@ -2847,11 +2851,14 @@ where
         if is_candidate_start_at(text, abs, ch) {
             let candidate_end = candidate_end(text, abs, end);
             if candidate_end > abs {
-                emit(CandidateSpan {
+                let should_continue = emit(CandidateSpan {
                     start: abs,
                     end: candidate_end,
                     parser: CandidateParser::TokenWindow,
                 });
+                if !should_continue {
+                    return;
+                }
             }
             cursor = candidate_end.max(abs + ch.len_utf8());
         } else {
