@@ -2953,11 +2953,11 @@ fn editor_dimension_hint(
     EDITOR_DIMENSION_LABELS
         .iter()
         .find_map(|(label, dimension)| {
-            editor_label_matches(before, &compact, label).then_some(*dimension)
+            editor_label_matches(before, lower.as_ref(), &compact, label).then_some(*dimension)
         })
 }
 
-fn editor_label_matches(before: &str, compact: &str, label: &str) -> bool {
+fn editor_label_matches(before: &str, lower_before: &str, compact: &str, label: &str) -> bool {
     if label.len() == 1 && label.as_bytes()[0].is_ascii_alphabetic() {
         let trimmed = before.trim_end();
         let Some((idx, ch)) = trimmed.char_indices().next_back() else {
@@ -2970,14 +2970,13 @@ fn editor_label_matches(before: &str, compact: &str, label: &str) -> bool {
                 .is_none_or(|previous| !previous.is_ascii_alphanumeric());
     }
     if matches!(label, "area" | "width" | "height" | "depth" | "length") {
-        return ascii_label_suffix_matches(before, label);
+        return ascii_label_suffix_matches(lower_before, label);
     }
     compact.ends_with(label)
 }
 
-fn ascii_label_suffix_matches(before: &str, label: &str) -> bool {
-    let lower = ascii_lower_cow(before);
-    let lower = lower.trim_end();
+fn ascii_label_suffix_matches(lower_before: &str, label: &str) -> bool {
+    let lower = lower_before.trim_end();
     if !lower.ends_with(label) {
         return false;
     }
