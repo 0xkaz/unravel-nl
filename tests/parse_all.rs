@@ -111,7 +111,7 @@ fn extracts_area_and_strict_approximation_policy() {
 
 #[test]
 fn extracts_editor_dimensions_without_general_values() {
-    let input = "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640、壁厚105mm";
+    let input = "幅3m×奥行4m、予算1234、予算¥999、next friday、6帖、寸法3640、壁厚105mm";
     let matches = parse_dimensions_for_editor(
         input,
         Some(ParseCtx {

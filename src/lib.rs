@@ -2518,9 +2518,12 @@ pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<Par
 
     let mut matches = Vec::new();
     for (clause_start, clause_end) in clause_spans(text) {
-        for candidate in numeric_candidate_spans(text, clause_start, clause_end) {
+        for_numeric_candidate_spans(text, clause_start, clause_end, |candidate| {
+            if candidate_starts_with_currency(text, candidate.start) {
+                return;
+            }
             push_editor_dimension_match(&mut matches, text, candidate, clause_start, &ctx);
-        }
+        });
     }
 
     matches.sort_by(|left, right| {
@@ -2702,6 +2705,14 @@ fn is_clause_separator(text: &str, idx: usize, ch: char) -> bool {
 
 fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<CandidateSpan> {
     let mut spans = Vec::new();
+    for_numeric_candidate_spans(text, start, end, |span| spans.push(span));
+    spans
+}
+
+fn for_numeric_candidate_spans<F>(text: &str, start: usize, end: usize, mut emit: F)
+where
+    F: FnMut(CandidateSpan),
+{
     let mut cursor = start;
     while cursor < end {
         let Some((idx, ch)) = text[cursor..end].char_indices().next() else {
@@ -2711,7 +2722,7 @@ fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<Candidat
         if is_candidate_start_at(text, abs, ch) {
             let candidate_end = candidate_end(text, abs, end);
             if candidate_end > abs {
-                spans.push(CandidateSpan {
+                emit(CandidateSpan {
                     start: abs,
                     end: candidate_end,
                     parser: CandidateParser::TokenWindow,
@@ -2722,7 +2733,6 @@ fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<Candidat
             cursor = abs + ch.len_utf8();
         }
     }
-    spans
 }
 
 fn parse_token_window(text: &str, ctx: &ParseCtx) -> Parsed {
@@ -2744,6 +2754,13 @@ fn parsed_has_actionable_match(parsed: &Parsed) -> bool {
             .skipped
             .iter()
             .any(|issue| !matches!(issue.code, IssueCode::NoValue | IssueCode::UnknownUnit))
+}
+
+fn candidate_starts_with_currency(text: &str, start: usize) -> bool {
+    text[start..]
+        .chars()
+        .next()
+        .is_some_and(|ch| matches!(ch, '$' | '€' | '£' | '¥' | '￥'))
 }
 
 fn parsed_is_editor_dimension(
