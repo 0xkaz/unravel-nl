@@ -19,6 +19,9 @@ The first slice focuses on:
 - Forgiving, confirm, and strict parse modes for correction policy
 - Compact and ISO-style durations such as `1h30`, `2d4h`, and `PT1H30M`
 - Clock times and slots such as `3pm`, `14:30`, and `3pm-4pm`
+- Approximate, tolerance, and bounded input such as `about 20C`, `約20kg`,
+  `10 ± 0.5 mm`, `a few minutes`, `under 10 minutes`, `10mm以下`, and
+  temperature phrases like `it's hot`
 - Currency amounts such as `USD 12.34`, `12 bucks`, `99 pence`, `¥1,234`, and
   ambiguous `$12`
 - Temperature input such as `20°C`, `68 F`, `293.15 K`, and `摂氏20度`
@@ -166,6 +169,28 @@ let best = parsed.best.expect("temperature");
 
 assert_eq!(best.unit.as_deref(), Some("C"));
 assert_eq!(humanize(&best, None), "20 °C");
+```
+
+## Approximate And Fuzzy Input
+
+```rust
+use unravel_nl::{parse, Dimension, ParseCtx};
+
+let tolerance = parse("10 ± 0.5 mm", None);
+assert!(tolerance.best.unwrap().range.is_some());
+
+let bounded = parse("10mm以下", None);
+assert!(bounded.best.unwrap().range.is_some());
+
+let hot = parse(
+    "it's hot",
+    Some(ParseCtx {
+        expected_dimension: Some(Dimension::Temperature),
+        ..ParseCtx::default()
+    }),
+);
+
+assert!(hot.best.unwrap().range.is_some());
 ```
 
 ## Currency Rates
