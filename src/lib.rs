@@ -46,6 +46,24 @@ pub fn mcp_tool_schema_json() -> &'static str {
     MCP_TOOL_SCHEMA_JSON
 }
 
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn parse_json(text: &str) -> String {
+    parsed_summary_json(&parse(text, None))
+}
+
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn parse_json_with_locale(text: &str, locale: &str) -> String {
+    parsed_summary_json(&parse(
+        text,
+        Some(ParseCtx {
+            locale: parse_locale_tag(locale),
+            ..ParseCtx::default()
+        }),
+    ))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnitDef {
     pub id: &'static str,
@@ -1402,6 +1420,18 @@ impl Locale {
             Self::EnGb => "en-GB",
             Self::Other(value) => value,
         }
+    }
+}
+
+#[cfg(feature = "wasm")]
+fn parse_locale_tag(text: &str) -> Option<Locale> {
+    match text {
+        "" => None,
+        "ja" | "ja-JP" => Some(Locale::Ja),
+        "en" => Some(Locale::En),
+        "en-US" => Some(Locale::EnUs),
+        "en-GB" | "en-UK" => Some(Locale::EnGb),
+        other => Some(Locale::Other(other.to_owned())),
     }
 }
 
@@ -3318,6 +3348,18 @@ fn parse_recurrence(text: &str) -> Option<Reading> {
     }
 
     let lowered = trimmed.to_ascii_lowercase();
+    if let Some(bysetpos) = parse_english_business_day_recurrence(&lowered) {
+        return Some(Reading::recurrence(
+            &format!("FREQ=MONTHLY;BYSETPOS={bysetpos};BYDAY=MO,TU,WE,TH,FR"),
+            0.8,
+        ));
+    }
+    if let Some(bysetpos) = parse_japanese_business_day_recurrence(trimmed) {
+        return Some(Reading::recurrence(
+            &format!("FREQ=MONTHLY;BYSETPOS={bysetpos};BYDAY=MO,TU,WE,TH,FR"),
+            0.8,
+        ));
+    }
     if let Some(day_text) = lowered.strip_prefix("monthly on the ") {
         if let Some(byday) = parse_english_ordinal_weekday(day_text.trim()) {
             return Some(Reading::recurrence(
@@ -3410,6 +3452,9 @@ fn is_supported_rrule(text: &str) -> bool {
         || text
             .strip_prefix("FREQ=MONTHLY;BYDAY=")
             .is_some_and(valid_monthly_byday)
+        || text
+            .strip_prefix("FREQ=MONTHLY;BYSETPOS=")
+            .is_some_and(valid_monthly_business_day)
         || text
             .strip_prefix("FREQ=WEEKLY;BYDAY=")
             .is_some_and(valid_weekly_byday)
@@ -3526,6 +3571,28 @@ fn parse_recurrence_ordinal(text: &str) -> Option<String> {
     (1..=5).contains(&ordinal).then(|| ordinal.to_string())
 }
 
+fn parse_english_business_day_recurrence(text: &str) -> Option<String> {
+    let text = text
+        .strip_prefix("every ")
+        .or_else(|| text.strip_prefix("monthly on the "))
+        .or_else(|| text.strip_prefix("every month on the "))?;
+    let text = text.strip_suffix(" of the month").unwrap_or(text).trim();
+    let ordinal_text = text
+        .strip_suffix(" business day")
+        .or_else(|| text.strip_suffix(" business days"))?
+        .trim();
+    parse_recurrence_ordinal(ordinal_text)
+}
+
+fn parse_japanese_business_day_recurrence(text: &str) -> Option<String> {
+    let text = text.strip_prefix("毎月第")?;
+    let ordinal_text = text
+        .strip_suffix("営業日")
+        .or_else(|| text.strip_suffix("業務日"))?;
+    let ordinal = parse_whole_i64(ordinal_text)?;
+    (1..=5).contains(&ordinal).then(|| ordinal.to_string())
+}
+
 fn valid_positive_i64(text: &str) -> bool {
     parse_whole_i64(text).is_some_and(|value| value > 0)
 }
@@ -3556,6 +3623,13 @@ fn valid_monthly_byday(text: &str) -> bool {
     let (ordinal_text, weekday_text) = text.split_at(text.len() - 2);
     matches!(weekday_text, "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU")
         && matches!(ordinal_text, "-1" | "1" | "2" | "3" | "4" | "5")
+}
+
+fn valid_monthly_business_day(text: &str) -> bool {
+    let Some((bysetpos, byday)) = text.split_once(";BYDAY=") else {
+        return false;
+    };
+    matches!(bysetpos, "-1" | "1" | "2" | "3" | "4" | "5") && byday == "MO,TU,WE,TH,FR"
 }
 
 fn recurrence_weekday(text: &str) -> Option<&'static str> {
@@ -5440,6 +5514,101 @@ impl TokenKind {
     }
 }
 
+#[cfg(any(feature = "wasm", test))]
+fn parsed_summary_json(parsed: &Parsed) -> String {
+    let mut json = String::new();
+    json.push_str("{\"ok\":");
+    json.push_str(if parsed.best.is_some() {
+        "true"
+    } else {
+        "false"
+    });
+    json.push_str(",\"input\":");
+    push_json_string(&mut json, &parsed.input);
+    json.push_str(",\"best\":");
+    if let Some(best) = &parsed.best {
+        push_reading_json(&mut json, best);
+    } else {
+        json.push_str("null");
+    }
+    json.push_str(",\"issues\":[");
+    for (idx, issue) in ranked_findings(parsed).iter().enumerate() {
+        if idx > 0 {
+            json.push(',');
+        }
+        json.push_str("{\"code\":");
+        push_json_string(&mut json, issue.code.as_str());
+        json.push_str(",\"severity\":");
+        push_json_string(&mut json, issue.severity.as_str());
+        json.push_str(",\"rank\":");
+        json.push_str(&issue.rank.to_string());
+        json.push_str(",\"ref_text\":");
+        push_json_string(&mut json, &issue.ref_text);
+        json.push('}');
+    }
+    json.push_str("]}");
+    json
+}
+
+#[cfg(any(feature = "wasm", test))]
+fn push_reading_json(json: &mut String, reading: &Reading) {
+    json.push_str("{\"kind\":");
+    push_json_string(json, kind_str(reading.kind));
+    if let Some(value) = reading.value {
+        json.push_str(",\"value\":");
+        json.push_str(&format_number(value));
+    }
+    if let Some(unit) = &reading.unit {
+        json.push_str(",\"unit\":");
+        push_json_string(json, unit);
+    }
+    if let Some(dimension) = reading.dimension {
+        json.push_str(",\"dimension\":");
+        push_json_string(json, dimension.as_str());
+    }
+    if let Some(date) = &reading.date {
+        json.push_str(",\"date\":");
+        push_json_string(json, date);
+    }
+    if let Some(recurrence) = &reading.recurrence {
+        json.push_str(",\"recurrence\":");
+        push_json_string(json, recurrence);
+    }
+    if let Some(timezone) = &reading.timezone {
+        json.push_str(",\"timezone\":");
+        push_json_string(json, timezone);
+    }
+    json.push('}');
+}
+
+#[cfg(any(feature = "wasm", test))]
+fn kind_str(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Quantity => "quantity",
+        Kind::Date => "date",
+        Kind::Range => "range",
+        Kind::Number => "number",
+        Kind::Recurrence => "recurrence",
+    }
+}
+
+#[cfg(any(feature = "wasm", test))]
+fn push_json_string(json: &mut String, value: &str) {
+    json.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => json.push_str("\\\""),
+            '\\' => json.push_str("\\\\"),
+            '\n' => json.push_str("\\n"),
+            '\r' => json.push_str("\\r"),
+            '\t' => json.push_str("\\t"),
+            ch if ch.is_control() => json.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => json.push(ch),
+        }
+    }
+    json.push('"');
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5593,6 +5762,21 @@ mod tests {
                 .unwrap(),
             20.0,
         );
+    }
+
+    #[test]
+    fn serializes_parsed_summary_json_for_adapters() {
+        let parsed = parse("5尺3寸", None);
+        let json = parsed_summary_json(&parsed);
+        assert!(json.contains("\"ok\":true"));
+        assert!(json.contains("\"kind\":\"quantity\""));
+        assert!(json.contains("\"unit\":\"m\""));
+        assert!(json.contains("\"dimension\":\"length\""));
+
+        let failed = parsed_summary_json(&parse("3pm Europe/Paris", None));
+        assert!(failed.contains("\"ok\":false"));
+        assert!(failed.contains("\"code\":\"TIMEZONE_UNSUPPORTED\""));
+        assert!(failed.contains("\"severity\":\"error\""));
     }
 
     #[test]

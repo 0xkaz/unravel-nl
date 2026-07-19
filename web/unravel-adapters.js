@@ -102,8 +102,8 @@ export function createUnravelReactAdapter(React, parser) {
   }
 
   function UnravelInput(props) {
-    const { ctx, onParsed, ...inputProps } = props;
-    const model = useUnravelValue(inputProps.defaultValue || "", { ctx });
+    const { ctx, onParsed, defaultValue = "", ...inputProps } = props;
+    const model = useUnravelValue(defaultValue, { ctx });
 
     React.useEffect(() => {
       if (typeof onParsed === "function") {

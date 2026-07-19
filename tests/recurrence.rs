@@ -18,8 +18,20 @@ fn parses_simple_recurrence_to_rrule() {
         ("every month on the 1st", "FREQ=MONTHLY;BYMONTHDAY=1"),
         ("monthly on the second monday", "FREQ=MONTHLY;BYDAY=2MO"),
         ("every month on the last friday", "FREQ=MONTHLY;BYDAY=-1FR"),
+        (
+            "every third business day",
+            "FREQ=MONTHLY;BYSETPOS=3;BYDAY=MO,TU,WE,TH,FR",
+        ),
+        (
+            "monthly on the last business day",
+            "FREQ=MONTHLY;BYSETPOS=-1;BYDAY=MO,TU,WE,TH,FR",
+        ),
         ("毎月15日", "FREQ=MONTHLY;BYMONTHDAY=15"),
         ("毎月第2月曜日", "FREQ=MONTHLY;BYDAY=2MO"),
+        (
+            "毎月第3営業日",
+            "FREQ=MONTHLY;BYSETPOS=3;BYDAY=MO,TU,WE,TH,FR",
+        ),
     ] {
         let best = parse(input, None).best.expect(input);
         assert_eq!(best.kind, Kind::Recurrence, "{input}");
@@ -37,6 +49,7 @@ fn recurrence_round_trips_through_humanize() {
         "monthly on the second monday",
         "every 2 weeks",
         "every other monday",
+        "every third business day",
     ] {
         let first = parse(input, None).best.expect(input);
         let rendered = humanize(&first, None);
@@ -48,7 +61,7 @@ fn recurrence_round_trips_through_humanize() {
 
 #[test]
 fn unsupported_recurrence_still_fails_loudly() {
-    let parsed = parse("every third business day", None);
+    let parsed = parse("every sixth business day", None);
     assert!(parsed.best.is_none());
     assert_eq!(
         parsed.findings.skipped[0].code,

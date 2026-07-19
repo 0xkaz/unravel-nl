@@ -1,3 +1,11 @@
 {
-  "type": "module"
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test:react": "node ../tests/react_adapter_runtime.mjs"
+  },
+  "devDependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  }
 }

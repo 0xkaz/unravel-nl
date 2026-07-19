@@ -22,7 +22,8 @@ The first slice focuses on:
 - Clock times and slots such as `3pm`, `14:30`, and `3pm-4pm`
 - Recurrence readings such as `every monday`, `every 2 weeks`,
   `every other monday`, `monthly on the second monday`, `毎週月曜日`,
-  `毎月第2月曜日`, and `毎日`, normalized to RRULE-style strings
+  `毎月第2月曜日`, `every third business day`, and `毎日`, normalized to
+  RRULE-style strings
 - Approximate, tolerance, and bounded input such as `about 20C`, `約20kg`,
   `10 ± 0.5 mm`, `a few minutes`, `under 10 minutes`, `10mm以下`, and
   temperature phrases like `it's hot`
@@ -41,6 +42,7 @@ The first slice focuses on:
 - Static parse input, parsed output, and MCP tool schemas for AI/tool adapters
 - Core completion candidates for unit, date, time, currency, temperature, and
   custom-unit adapter layers
+- Feature-gated WASM exports for browser or Node package adapters
 - No-Silent-Loss findings for skipped, ambiguous, and approximate readings
 
 The default compute path has no I/O and no runtime dependencies. Calendar
@@ -144,7 +146,19 @@ assert_eq!(issues[0].rank, 90);
 Browser-facing adapters live in `web/unravel-adapters.js`. They are dependency
 free ESM helpers for DOM inputs, React integration by injection, and a custom
 element wrapper; the parser function is injected so the same code can sit on top
-of a WASM bundle or a server bridge.
+of a WASM bundle or a server bridge. The React adapter is covered by an actual
+React server-render runtime smoke test under `tests/react_adapter_runtime.mjs`.
+
+## WASM
+
+```sh
+wasm-pack build --target web --out-dir pkg -- --features wasm
+wasm-pack build --target nodejs --out-dir pkg-node -- --features wasm
+node tests/wasm_node_smoke.mjs
+```
+
+The browser smoke page is `tests/wasm_browser_e2e.html`; serve the repository
+root and open `/tests/wasm_browser_e2e.html` after generating `pkg/`.
 
 ## Unit Registry And Strictness
 

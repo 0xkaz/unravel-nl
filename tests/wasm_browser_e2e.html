@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>unravel-nl wasm browser smoke</title>
+  </head>
+  <body>
+    <pre id="status">pending</pre>
+    <script type="module">
+      import init, { parse_json, parse_json_with_locale } from "../pkg/unravel_nl.js";
+
+      const status = document.getElementById("status");
+
+      try {
+        await init();
+        const length = JSON.parse(parse_json_with_locale("5尺3寸", "ja"));
+        const recurrence = JSON.parse(parse_json("every third business day"));
+        const failure = JSON.parse(parse_json("3pm Europe/Paris"));
+
+        if (length.best.unit !== "m" || length.best.dimension !== "length") {
+          throw new Error("length parse failed");
+        }
+        if (
+          recurrence.best.recurrence !==
+          "FREQ=MONTHLY;BYSETPOS=3;BYDAY=MO,TU,WE,TH,FR"
+        ) {
+          throw new Error("business recurrence parse failed");
+        }
+        if (failure.issues[0].code !== "TIMEZONE_UNSUPPORTED") {
+          throw new Error("timezone failure metadata missing");
+        }
+
+        status.textContent = JSON.stringify({
+          ok: true,
+          length: length.best,
+          recurrence: recurrence.best,
+          issue: failure.issues[0],
+        });
+      } catch (error) {
+        status.textContent = JSON.stringify({
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    </script>
+  </body>
+</html>

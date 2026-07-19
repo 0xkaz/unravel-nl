@@ -3,7 +3,7 @@ use unravel_nl::{IssueCode, parse};
 #[test]
 fn recurrence_phrases_fail_loudly_until_adapter_exists() {
     for (input, ref_text) in [
-        ("every third business day", "every"),
+        ("every sixth business day", "every"),
         ("毎月第六月曜日", "毎"),
     ] {
         let parsed = parse(input, None);

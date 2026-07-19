@@ -9,11 +9,16 @@ readme = "README.md"
 keywords = ["natural-language", "units", "parser", "humanize"]
 categories = ["parser-implementations", "value-formatting"]
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 jiff = { version = "0.2.33", default-features = false, optional = true }
 jiff-tzdb = { version = "0.1.6", default-features = false, optional = true }
+wasm-bindgen = { version = "0.2.106", default-features = false, optional = true }
 
 [features]
 default = []
 dates-jiff = ["dep:jiff"]
 timezones-jiff = ["dates-jiff", "dep:jiff-tzdb", "jiff/std"]
+wasm = ["dep:wasm-bindgen"]
