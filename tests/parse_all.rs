@@ -34,6 +34,23 @@ fn extracts_multiple_values_with_spans() {
 }
 
 #[test]
+fn scanner_keeps_sorted_non_overlapping_matches() {
+    let matches = parse_all(
+        "3m 3m、約3m",
+        Some(ParseCtx {
+            locale: Some(Locale::Ja),
+            ..ParseCtx::default()
+        }),
+    );
+
+    assert_eq!(texts(&matches), vec!["3m 3m", "約3m"]);
+    assert!(matches.windows(2).all(|pair| pair[0].end <= pair[1].start));
+
+    let single = parse_all("3m", None);
+    assert_eq!(texts(&single), vec!["3m"]);
+}
+
+#[test]
 fn extracts_full_width_and_cjk_number_values() {
     let input = "幅１．５ｍ；重量五キログラム；面積百二十平米";
     let matches = parse_all(

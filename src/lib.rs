@@ -2490,9 +2490,9 @@ fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
 pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
     let ctx = ctx.unwrap_or_default();
     let mut matches = Vec::new();
-    for candidate in parse_all_candidate_spans(text) {
-        push_parsed_match(&mut matches, text, candidate, &ctx);
-    }
+    for_clause_spans(text, |start, end| {
+        push_clause_matches(&mut matches, text, start, end, &ctx);
+    });
     matches.sort_by(|left, right| {
         left.start
             .cmp(&right.start)
@@ -2501,7 +2501,7 @@ pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
 
     let mut non_overlapping: Vec<ParsedMatch> = Vec::new();
     for candidate in matches {
-        if non_overlapping.iter().any(|existing| {
+        if non_overlapping.last().is_some_and(|existing| {
             spans_overlap(existing.start, existing.end, candidate.start, candidate.end)
         }) {
             continue;
@@ -2511,20 +2511,74 @@ pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
     non_overlapping
 }
 
+fn push_clause_matches(
+    matches: &mut Vec<ParsedMatch>,
+    text: &str,
+    start: usize,
+    end: usize,
+    ctx: &ParseCtx,
+) {
+    if !should_broad_parse_clause(&text[start..end]) {
+        for_numeric_candidate_spans(text, start, end, |candidate| {
+            push_parsed_match(matches, text, candidate, ctx);
+        });
+        return;
+    }
+
+    let mut first_numeric = None;
+    let mut numeric_count = 0usize;
+    for_numeric_candidate_spans(text, start, end, |candidate| {
+        numeric_count += 1;
+        if first_numeric.is_none() {
+            first_numeric = Some(candidate);
+        }
+    });
+
+    let clause_bounds = trimmed_bounds(text, start, end);
+    if numeric_count == 1
+        && let Some(candidate) = first_numeric
+        && Some((candidate.start, candidate.end)) == clause_bounds
+    {
+        push_parsed_match(matches, text, candidate, ctx);
+        return;
+    }
+
+    push_parsed_match(
+        matches,
+        text,
+        CandidateSpan {
+            start,
+            end,
+            parser: CandidateParser::Broad,
+        },
+        ctx,
+    );
+
+    if let Some(candidate) = first_numeric {
+        if numeric_count == 1 {
+            push_parsed_match(matches, text, candidate, ctx);
+        } else {
+            for_numeric_candidate_spans(text, start, end, |candidate| {
+                push_parsed_match(matches, text, candidate, ctx);
+            });
+        }
+    }
+}
+
 pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
     let mut ctx = ctx.unwrap_or_default();
     ctx.purpose = ParsePurpose::DimensionEditor;
     ctx.expect = Some(Kind::Quantity);
 
     let mut matches = Vec::new();
-    for (clause_start, clause_end) in clause_spans(text) {
+    for_clause_spans(text, |clause_start, clause_end| {
         for_numeric_candidate_spans(text, clause_start, clause_end, |candidate| {
             if candidate_starts_with_currency(text, candidate.start) {
                 return;
             }
             push_editor_dimension_match(&mut matches, text, candidate, clause_start, &ctx);
         });
-    }
+    });
 
     matches.sort_by(|left, right| {
         left.start
@@ -2534,7 +2588,7 @@ pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<Par
 
     let mut non_overlapping: Vec<ParsedMatch> = Vec::new();
     for candidate in matches {
-        if non_overlapping.iter().any(|existing| {
+        if non_overlapping.last().is_some_and(|existing| {
             spans_overlap(existing.start, existing.end, candidate.start, candidate.end)
         }) {
             continue;
@@ -2554,8 +2608,8 @@ fn push_parsed_match(
     let end = candidate.end;
     if start >= end
         || matches
-            .iter()
-            .any(|item| item.start == start && item.end == end)
+            .last()
+            .is_some_and(|item| item.start == start && item.end == end)
     {
         return;
     }
@@ -2593,8 +2647,8 @@ fn push_editor_dimension_match(
     let end = candidate.end;
     if start >= end
         || matches
-            .iter()
-            .any(|item| item.start == start && item.end == end)
+            .last()
+            .is_some_and(|item| item.start == start && item.end == end)
     {
         return;
     }
@@ -2606,12 +2660,21 @@ fn push_editor_dimension_match(
     }
 
     let hint = editor_dimension_hint(source, clause_start, start);
-    let mut local_ctx = ctx.clone();
-    if local_ctx.expected_dimension.is_none() {
-        local_ctx.expected_dimension = hint;
-    }
-    let mut parsed = parsed_shell(text, &local_ctx);
-    parse_editor_dimension_into(text, &local_ctx, &mut parsed);
+    let local_ctx_storage;
+    let local_ctx = if ctx.expected_dimension.is_none() {
+        if let Some(hint) = hint {
+            let mut updated = ctx.clone();
+            updated.expected_dimension = Some(hint);
+            local_ctx_storage = updated;
+            &local_ctx_storage
+        } else {
+            ctx
+        }
+    } else {
+        ctx
+    };
+    let mut parsed = parsed_shell(text, local_ctx);
+    parse_editor_dimension_into(text, local_ctx, &mut parsed);
     if !parsed_is_editor_dimension(&parsed, hint, ctx.expected_dimension) {
         return;
     }
@@ -2639,23 +2702,6 @@ enum CandidateParser {
     TokenWindow,
 }
 
-fn parse_all_candidate_spans(text: &str) -> Vec<CandidateSpan> {
-    let mut spans = Vec::new();
-    for (start, end) in clause_spans(text) {
-        if should_broad_parse_clause(&text[start..end]) {
-            spans.push(CandidateSpan {
-                start,
-                end,
-                parser: CandidateParser::Broad,
-            });
-        }
-        for span in numeric_candidate_spans(text, start, end) {
-            spans.push(span);
-        }
-    }
-    spans
-}
-
 fn should_broad_parse_clause(clause: &str) -> bool {
     let trimmed = clause.trim();
     if trimmed.is_empty() {
@@ -2672,21 +2718,31 @@ fn should_broad_parse_clause(clause: &str) -> bool {
         || trimmed.starts_with('約')
 }
 
-fn clause_spans(text: &str) -> Vec<(usize, usize)> {
-    let mut spans = Vec::new();
+fn for_clause_spans<F>(text: &str, mut emit: F)
+where
+    F: FnMut(usize, usize),
+{
     let mut start = 0;
     for (idx, ch) in text.char_indices() {
         if is_clause_separator(text, idx, ch) {
             if start < idx {
-                spans.push((start, idx));
+                emit(start, idx);
             }
             start = idx + ch.len_utf8();
         }
     }
     if start < text.len() {
-        spans.push((start, text.len()));
+        emit(start, text.len());
     }
-    spans
+}
+
+fn trimmed_bounds(text: &str, start: usize, end: usize) -> Option<(usize, usize)> {
+    let span = text.get(start..end)?;
+    let leading = span.len() - span.trim_start().len();
+    let trailing = span.len() - span.trim_end().len();
+    let trimmed_start = start + leading;
+    let trimmed_end = end - trailing;
+    (trimmed_start < trimmed_end).then_some((trimmed_start, trimmed_end))
 }
 
 fn is_clause_separator(text: &str, idx: usize, ch: char) -> bool {
@@ -2701,12 +2757,6 @@ fn is_clause_separator(text: &str, idx: usize, ch: char) -> bool {
         }
         _ => false,
     }
-}
-
-fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<CandidateSpan> {
-    let mut spans = Vec::new();
-    for_numeric_candidate_spans(text, start, end, |span| spans.push(span));
-    spans
 }
 
 fn for_numeric_candidate_spans<F>(text: &str, start: usize, end: usize, mut emit: F)
@@ -3366,20 +3416,13 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
 }
 
 fn parse_editor_dimension_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
-    let mut local_ctx = ctx.clone();
-    local_ctx.purpose = ParsePurpose::Quantity;
-    local_ctx.expect = Some(Kind::Quantity);
-
-    parse_quantity_fast_into(trimmed, &local_ctx, parsed);
-    if parsed_is_editor_dimension(
-        parsed,
-        local_ctx.expected_dimension,
-        local_ctx.expected_dimension,
-    ) {
+    parse_quantity_fast_into(trimmed, ctx, parsed);
+    if parsed_is_editor_dimension(parsed, ctx.expected_dimension, ctx.expected_dimension) {
         return;
     }
 
-    let mut number_ctx = local_ctx.clone();
+    let mut number_ctx = ctx.clone();
+    number_ctx.expect = Some(Kind::Quantity);
     if number_ctx.expected_dimension.is_none() {
         number_ctx.expected_dimension = Some(Dimension::Length);
     }
