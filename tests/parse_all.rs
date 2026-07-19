@@ -52,8 +52,23 @@ fn scanner_keeps_sorted_non_overlapping_matches() {
     let range = parse_all("between 5 and 10 kg", None);
     assert_eq!(texts(&range), vec!["between 5 and 10 kg"]);
 
+    let approximate = parse_all("about 3m", None);
+    assert_eq!(texts(&approximate), vec!["about 3m"]);
+
+    let approximate_many = parse_all("about 3m and 4m", None);
+    assert_eq!(texts(&approximate_many), vec!["3m", "4m"]);
+
     let typo_then_dimension = parse_all("mebers 3m", None);
     assert_eq!(texts(&typo_then_dimension), vec!["3m"]);
+
+    let typo_then_area = parse_all(
+        "tsbo 6帖",
+        Some(ParseCtx {
+            locale: Some(Locale::Ja),
+            ..ParseCtx::default()
+        }),
+    );
+    assert_eq!(texts(&typo_then_area), vec!["6帖"]);
 }
 
 #[test]

@@ -2519,9 +2519,20 @@ fn push_clause_matches(
     ctx: &ParseCtx,
 ) {
     if !should_broad_parse_clause(&text[start..end]) {
-        for_numeric_candidate_spans(text, start, end, |candidate| {
-            push_parsed_match(matches, text, candidate, ctx);
-        });
+        push_numeric_window_matches(matches, text, start, end, ctx);
+        return;
+    }
+
+    if clause_starts_with_broad_operator(&text[start..end]) {
+        match push_broad_clause_match(matches, text, start, end, ctx) {
+            Some(true) => return,
+            Some(false) if clause_has_numeric_candidate(text, start, end) => {
+                matches.pop();
+            }
+            Some(false) => return,
+            None => {}
+        }
+        push_numeric_window_matches(matches, text, start, end, ctx);
         return;
     }
 
@@ -2543,16 +2554,7 @@ fn push_clause_matches(
         return;
     }
 
-    match push_parsed_match(
-        matches,
-        text,
-        CandidateSpan {
-            start,
-            end,
-            parser: CandidateParser::Broad,
-        },
-        ctx,
-    ) {
+    match push_broad_clause_match(matches, text, start, end, ctx) {
         Some(true) => return,
         Some(false) if numeric_count > 0 => {
             matches.pop();
@@ -2564,11 +2566,40 @@ fn push_clause_matches(
         if numeric_count == 1 {
             let _ = push_parsed_match(matches, text, candidate, ctx);
         } else {
-            for_numeric_candidate_spans(text, start, end, |candidate| {
-                let _ = push_parsed_match(matches, text, candidate, ctx);
-            });
+            push_numeric_window_matches(matches, text, start, end, ctx);
         }
     }
+}
+
+fn push_broad_clause_match(
+    matches: &mut Vec<ParsedMatch>,
+    text: &str,
+    start: usize,
+    end: usize,
+    ctx: &ParseCtx,
+) -> Option<bool> {
+    push_parsed_match(
+        matches,
+        text,
+        CandidateSpan {
+            start,
+            end,
+            parser: CandidateParser::Broad,
+        },
+        ctx,
+    )
+}
+
+fn push_numeric_window_matches(
+    matches: &mut Vec<ParsedMatch>,
+    text: &str,
+    start: usize,
+    end: usize,
+    ctx: &ParseCtx,
+) {
+    for_numeric_candidate_spans(text, start, end, |candidate| {
+        let _ = push_parsed_match(matches, text, candidate, ctx);
+    });
 }
 
 pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
@@ -2738,6 +2769,28 @@ fn should_broad_parse_clause(clause: &str) -> bool {
         || lower.starts_with("roughly ")
         || lower.starts_with("approximately ")
         || trimmed.starts_with('約')
+}
+
+fn clause_starts_with_broad_operator(clause: &str) -> bool {
+    let trimmed = clause.trim();
+    if trimmed.starts_with('約') {
+        return true;
+    }
+    let lower = ascii_lower_cow(trimmed);
+    lower.starts_with("between ")
+        || lower.starts_with("from ")
+        || lower.starts_with("about ")
+        || lower.starts_with("around ")
+        || lower.starts_with("roughly ")
+        || lower.starts_with("approximately ")
+}
+
+fn clause_has_numeric_candidate(text: &str, start: usize, end: usize) -> bool {
+    let mut found = false;
+    for_numeric_candidate_spans(text, start, end, |_| {
+        found = true;
+    });
+    found
 }
 
 fn for_clause_spans<F>(text: &str, mut emit: F)
