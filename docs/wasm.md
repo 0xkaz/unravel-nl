@@ -32,8 +32,8 @@ Measured on the development machine on 2026-07-20:
 | Command | Output | Size / digest |
 | --- | --- | --- |
 | `wasm-pack build --target web --out-dir pkg -- --features wasm` | `pkg/` | 328K |
-| same | `pkg/unravel_nl_bg.wasm` | 279,083 bytes |
-| same | `pkg/unravel_nl_bg.wasm` sha256 | `70f3152138c9fc74a52696e99f82ea342df26924e575c9709aaeb4b497fd9561` |
+| same | `pkg/unravel_nl_bg.wasm` | 279,446 bytes |
+| same | `pkg/unravel_nl_bg.wasm` sha256 | `a6c031ec494bc3a76161a14f158ff79dab4e7342de754fbd64d4310357181161` |
 
 Smoke checks:
 

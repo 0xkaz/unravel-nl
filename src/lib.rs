@@ -2945,19 +2945,22 @@ fn editor_dimension_hint(
         })
         .trim_end();
     let lower = ascii_lower_cow(before);
-    let compact = lower
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
+    let mut compact = None;
 
-    EDITOR_DIMENSION_LABELS
-        .iter()
-        .find_map(|(label, dimension)| {
-            editor_label_matches(before, lower.as_ref(), &compact, label).then_some(*dimension)
-        })
+    for (label, dimension) in EDITOR_DIMENSION_LABELS {
+        if editor_label_matches(before, lower.as_ref(), &mut compact, label) {
+            return Some(*dimension);
+        }
+    }
+    None
 }
 
-fn editor_label_matches(before: &str, lower_before: &str, compact: &str, label: &str) -> bool {
+fn editor_label_matches(
+    before: &str,
+    lower_before: &str,
+    compact: &mut Option<String>,
+    label: &str,
+) -> bool {
     if label.len() == 1 && label.as_bytes()[0].is_ascii_alphabetic() {
         let trimmed = before.trim_end();
         let Some((idx, ch)) = trimmed.char_indices().next_back() else {
@@ -2972,7 +2975,30 @@ fn editor_label_matches(before: &str, lower_before: &str, compact: &str, label: 
     if matches!(label, "area" | "width" | "height" | "depth" | "length") {
         return ascii_label_suffix_matches(lower_before, label);
     }
-    compact.ends_with(label)
+    if let Some(spaced_label) = compound_editor_label(label) {
+        if ascii_label_suffix_matches(lower_before, spaced_label)
+            || ascii_label_suffix_matches(lower_before, label)
+        {
+            return true;
+        }
+        let compact = compact.get_or_insert_with(|| {
+            lower_before
+                .chars()
+                .filter(|ch| !ch.is_whitespace())
+                .collect()
+        });
+        return ascii_label_suffix_matches(compact, label);
+    }
+    lower_before.ends_with(label)
+}
+
+fn compound_editor_label(label: &str) -> Option<&'static str> {
+    match label {
+        "floorarea" => Some("floor area"),
+        "sitearea" => Some("site area"),
+        "wallthickness" => Some("wall thickness"),
+        _ => None,
+    }
 }
 
 fn ascii_label_suffix_matches(lower_before: &str, label: &str) -> bool {

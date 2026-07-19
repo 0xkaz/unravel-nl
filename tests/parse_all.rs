@@ -184,14 +184,17 @@ fn extracts_editor_dimensions_without_general_values() {
 #[test]
 fn editor_dimension_scanner_does_not_guess_unknown_unitless_labels() {
     let matches = parse_dimensions_for_editor(
-        "部材3640、備考1234、north 800、somewidth 700、grossarea 800、room width 900、room w 910、floor area 12㎡",
+        "部材3640、備考1234、north 800、somewidth 700、grossarea 800、subfloor area 1100、firewall thickness 104、room width 900、room w 910、floor area 12㎡、first floor area 13㎡、wall thickness 105mm、exterior wall thickness 106mm",
         Some(ParseCtx {
             locale: Some(Locale::Ja),
             ..ParseCtx::default()
         }),
     );
 
-    assert_eq!(texts(&matches), vec!["900", "910", "12㎡"]);
+    assert_eq!(
+        texts(&matches),
+        vec!["900", "910", "12㎡", "13㎡", "105mm", "106mm"]
+    );
     assert_eq!(
         matches[0].parsed.alternatives[0].unit.as_deref(),
         Some("mm")
@@ -201,6 +204,9 @@ fn editor_dimension_scanner_does_not_guess_unknown_unitless_labels() {
         Some("mm")
     );
     assert_quantity(&matches[2], 12.0, "m2", Dimension::Area);
+    assert_quantity(&matches[3], 13.0, "m2", Dimension::Area);
+    assert_quantity(&matches[4], 0.105, "m", Dimension::Length);
+    assert_quantity(&matches[5], 0.106, "m", Dimension::Length);
 }
 
 #[test]
