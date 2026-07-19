@@ -152,7 +152,8 @@ fn extracts_area_and_strict_approximation_policy() {
 
 #[test]
 fn extracts_editor_dimensions_without_general_values() {
-    let input = "幅3m×奥行4m、予算1234、予算¥999、next friday、6帖、寸法3640、壁厚105mm";
+    let input =
+        "幅3m×奥行4m、予算1234、予算¥999、next friday、6帖、寸法3640、壁厚105mm、幅１．５ｍ";
     let matches = parse_dimensions_for_editor(
         input,
         Some(ParseCtx {
@@ -161,11 +162,15 @@ fn extracts_editor_dimensions_without_general_values() {
         }),
     );
 
-    assert_eq!(texts(&matches), vec!["3m", "4m", "6帖", "3640", "105mm"]);
+    assert_eq!(
+        texts(&matches),
+        vec!["3m", "4m", "6帖", "3640", "105mm", "１．５ｍ"]
+    );
     assert_quantity(&matches[0], 3.0, "m", Dimension::Length);
     assert_quantity(&matches[1], 4.0, "m", Dimension::Length);
     assert_quantity(&matches[2], 9.72, "m2", Dimension::Area);
     assert_quantity(&matches[4], 0.105, "m", Dimension::Length);
+    assert_quantity(&matches[5], 1.5, "m", Dimension::Length);
 
     let plain = matches[3].parsed.best.as_ref().expect("plain number");
     assert_eq!(plain.kind, Kind::Number);

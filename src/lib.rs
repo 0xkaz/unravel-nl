@@ -3497,7 +3497,10 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
         .push(skipped(trimmed, "no supported reading matched"));
 }
 
-fn parse_editor_dimension_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+fn parse_editor_dimension_into(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+    let normalized_input = normalize_input_cow(text);
+    let trimmed = normalized_input.trim();
+
     parse_quantity_fast_into(trimmed, ctx, parsed);
     if parsed_is_editor_dimension(parsed, ctx.expected_dimension, ctx.expected_dimension) {
         return;
