@@ -9,6 +9,10 @@ The first slice focuses on:
 - Square-meter input such as `延床100㎡`
 - Ranges such as `100-120㎡`, `2〜3日`, and `between 5 and 10 kg`
 - Grouped plain numbers such as `1,234`
+- Locale number formats such as `1.234,56 kg`, `1 234,56 m`,
+  `1,23,456 kg`, `1万2345`, and `3.5万円`
+- Unicode and Japanese input normalization for full-width numbers and
+  compatibility units such as `５尺３寸`, `１．５ｍ`, `２㎞`, and `百二十平米`
 - Metric and mass examples such as `180cm`, `1m80`, and `1,5 kg`
 - Mixed imperial height input such as `5ft 11`
 - Locale-sensitive cup volumes with explicit alternatives
@@ -40,10 +44,13 @@ The first slice focuses on:
 - Relative dates such as `next friday` and `in 3 days` with the `dates-jiff`
   feature
 - Static parse input, parsed output, and MCP tool schemas for AI/tool adapters
+- Multi-value extraction with byte spans via `parse_all()`
 - Core completion candidates for unit, date, time, currency, temperature, and
   custom-unit adapter layers
 - Feature-gated WASM exports for browser or Node package adapters
 - No-Silent-Loss findings for skipped, ambiguous, and approximate readings
+- A normalized parser dispatch path and exact-first unit alias lookup to keep
+  no-match and typo-heavy inputs bounded as the locale catalog grows
 
 The default compute path has no I/O and no runtime dependencies. Calendar
 arithmetic is available behind the optional `dates-jiff` feature.
@@ -67,6 +74,25 @@ assert_eq!(
     humanize(&best, Some(HumanizeCtx { locale: Some(Locale::Ja) })),
     "5尺3寸 (approx.)"
 );
+```
+
+## Multi-Value Extraction
+
+```rust
+use unravel_nl::{parse_all, Dimension, Locale, ParseCtx};
+
+let matches = parse_all(
+    "延床100㎡、敷地面積120㎡、高さ3.5m",
+    Some(ParseCtx {
+        locale: Some(Locale::Ja),
+        ..ParseCtx::default()
+    }),
+);
+
+assert_eq!(matches.len(), 3);
+assert_eq!(matches[0].text, "延床100㎡");
+assert_eq!(matches[0].parsed.best.as_ref().unwrap().dimension, Some(Dimension::Area));
+assert_eq!(matches[2].text, "3.5m");
 ```
 
 ## Date Parsing

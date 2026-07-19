@@ -209,3 +209,13 @@ monthly on the last business day	en	recurrence
 9 metrez	en	quantity	length	m	9
 10 millimetres	en-GB	quantity	length	m	0.01
 11 centimetres	en-GB	quantity	length	m	0.11
+５尺３寸	ja	quantity	length	m	1.606060606060606
+１．５ｍ	ja	quantity	length	m	1.5
+百二十平米	ja	quantity	area	m2	120
+百二十平方メートル	ja	quantity	area	m2	120
+五キログラム	ja	quantity	mass	kg	5
+1.234,56 kg	de	quantity	mass	kg	1234.56
+1 234,56 m	fr	quantity	length	m	1234.56
+1,23,456 kg	en	quantity	mass	kg	123456
+3.5万円	ja	quantity	currency	JPY	35000
+2億	ja	number			200000000

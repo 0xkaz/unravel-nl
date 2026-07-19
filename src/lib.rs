@@ -4,6 +4,8 @@
 //! shape of `pascalorg/lingo` (MIT). It does not copy source code from that
 //! project.
 
+use std::borrow::Cow;
+
 const SHAKU_M: f64 = 10.0 / 33.0;
 const SUN_M: f64 = 1.0 / 33.0;
 const KEN_M: f64 = 60.0 / 33.0;
@@ -1196,6 +1198,119 @@ const UNIT_DEFS: &[UnitDef] = &[
     },
 ];
 
+const FAST_UNIT_ALIASES: &[(&str, &str)] = &[
+    ("m", "m"),
+    ("meter", "m"),
+    ("meters", "m"),
+    ("metre", "m"),
+    ("metres", "m"),
+    ("米", "m"),
+    ("km", "km"),
+    ("kilometer", "km"),
+    ("kilometers", "km"),
+    ("kilometre", "km"),
+    ("kilometres", "km"),
+    ("公里", "km"),
+    ("cm", "cm"),
+    ("centimeter", "cm"),
+    ("centimeters", "cm"),
+    ("centimetre", "cm"),
+    ("centimetres", "cm"),
+    ("mm", "mm"),
+    ("millimeter", "mm"),
+    ("millimeters", "mm"),
+    ("millimetre", "mm"),
+    ("millimetres", "mm"),
+    ("kg", "kg"),
+    ("kilogram", "kg"),
+    ("kilograms", "kg"),
+    ("公斤", "kg"),
+    ("千克", "kg"),
+    ("キログラム", "kg"),
+    ("キロ", "kg"),
+    ("g", "g"),
+    ("gram", "g"),
+    ("grams", "g"),
+    ("lb", "lb"),
+    ("lbs", "lb"),
+    ("pound", "lb"),
+    ("pounds", "lb"),
+    ("oz", "oz"),
+    ("ounce", "oz"),
+    ("ounces", "oz"),
+    ("s", "s"),
+    ("sec", "s"),
+    ("second", "s"),
+    ("seconds", "s"),
+    ("min", "min"),
+    ("mins", "min"),
+    ("minute", "min"),
+    ("minutes", "min"),
+    ("分钟", "min"),
+    ("h", "h"),
+    ("hr", "h"),
+    ("hour", "h"),
+    ("hours", "h"),
+    ("時間", "h"),
+    ("小时", "h"),
+    ("m2", "m2"),
+    ("m^2", "m2"),
+    ("m²", "m2"),
+    ("㎡", "m2"),
+    ("sqm", "m2"),
+    ("square meter", "m2"),
+    ("square meters", "m2"),
+    ("square metre", "m2"),
+    ("square metres", "m2"),
+    ("平米", "m2"),
+    ("平方米", "m2"),
+    ("平方メートル", "m2"),
+    ("L", "L"),
+    ("l", "L"),
+    ("liter", "L"),
+    ("liters", "L"),
+    ("litre", "L"),
+    ("litres", "L"),
+    ("litro", "L"),
+    ("litros", "L"),
+    ("升", "L"),
+    ("ml", "mL"),
+    ("mL", "mL"),
+    ("milliliter", "mL"),
+    ("milliliters", "mL"),
+    ("millilitre", "mL"),
+    ("millilitres", "mL"),
+    ("GB", "GB"),
+    ("MB", "MB"),
+    ("KB", "kB"),
+    ("Mbit/s", "Mbit/s"),
+    ("Mb/s", "Mbit/s"),
+    ("Mbps", "Mbit/s"),
+    ("MB/s", "MB/s"),
+    ("MBps", "MB/s"),
+    ("bit/s", "bit/s"),
+    ("b/s", "bit/s"),
+    ("gpm", "gpm"),
+    ("L/min", "L/min"),
+    ("l/min", "L/min"),
+    ("mAh", "mAh"),
+    ("mah", "mAh"),
+    ("uM", "μM"),
+    ("μM", "μM"),
+    ("µM", "μM"),
+    ("Nm", "N*m"),
+    ("N*m", "N*m"),
+    ("N·m", "N*m"),
+    ("lux", "lx"),
+    ("lx", "lx"),
+    ("mSv", "mSv"),
+    ("MBq", "MBq"),
+    ("inH2O", "inH2O"),
+    ("inH₂O", "inH2O"),
+    ("kgf/cm2", "kgf/cm2"),
+    ("kgf/cm²", "kgf/cm2"),
+];
+
 const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://0xkaz.github.io/unravel-nl/schema/parse-input.json",
@@ -1630,6 +1745,14 @@ pub struct Parsed {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct ParsedMatch {
+    pub start: usize,
+    pub end: usize,
+    pub text: String,
+    pub parsed: Parsed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Reading {
     pub kind: Kind,
     pub value: Option<f64>,
@@ -1956,7 +2079,8 @@ struct ParsedReading {
 pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     let input = text.to_owned();
-    let trimmed = text.trim();
+    let normalized_input = normalize_input_cow(text);
+    let trimmed = normalized_input.trim();
     let mut parsed = Parsed {
         input,
         locale: ctx.locale.clone(),
@@ -1974,7 +2098,160 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         return parsed;
     }
 
-    if let Some(result) = parse_qualified_reading(trimmed, &ctx) {
+    parse_normalized_into(trimmed, &ctx, &mut parsed);
+    parsed
+}
+
+pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
+    let mut matches = Vec::new();
+    for (start, end) in parse_all_candidate_spans(text) {
+        push_parsed_match(&mut matches, text, start, end, ctx.clone());
+    }
+    matches.sort_by(|left, right| {
+        left.start
+            .cmp(&right.start)
+            .then_with(|| right.end.cmp(&left.end))
+    });
+
+    let mut non_overlapping: Vec<ParsedMatch> = Vec::new();
+    for candidate in matches {
+        if non_overlapping.iter().any(|existing| {
+            spans_overlap(existing.start, existing.end, candidate.start, candidate.end)
+        }) {
+            continue;
+        }
+        non_overlapping.push(candidate);
+    }
+    non_overlapping
+}
+
+fn push_parsed_match(
+    matches: &mut Vec<ParsedMatch>,
+    source: &str,
+    start: usize,
+    end: usize,
+    ctx: Option<ParseCtx>,
+) {
+    if start >= end
+        || matches
+            .iter()
+            .any(|item| item.start == start && item.end == end)
+    {
+        return;
+    }
+    let Some(text) = source.get(start..end).map(str::trim) else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+    let parsed = parse(text, ctx);
+    if parsed.best.is_none() {
+        return;
+    }
+    let leading = source[start..end].len() - source[start..end].trim_start().len();
+    let trailing = source[start..end].len() - source[start..end].trim_end().len();
+    matches.push(ParsedMatch {
+        start: start + leading,
+        end: end - trailing,
+        text: text.to_owned(),
+        parsed,
+    });
+}
+
+fn parse_all_candidate_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    for (start, end) in clause_spans(text) {
+        spans.push((start, end));
+        for span in numeric_candidate_spans(text, start, end) {
+            spans.push(span);
+        }
+    }
+    spans
+}
+
+fn clause_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for (idx, ch) in text.char_indices() {
+        if is_clause_separator(text, idx, ch) {
+            if start < idx {
+                spans.push((start, idx));
+            }
+            start = idx + ch.len_utf8();
+        }
+    }
+    if start < text.len() {
+        spans.push((start, text.len()));
+    }
+    spans
+}
+
+fn is_clause_separator(text: &str, idx: usize, ch: char) -> bool {
+    match ch {
+        '、' | ';' | '；' | '\n' | '\t' => true,
+        ',' => {
+            let previous = text[..idx].chars().rev().find(|ch| !ch.is_whitespace());
+            let next = text[idx + ch.len_utf8()..]
+                .chars()
+                .find(|ch| !ch.is_whitespace());
+            !matches!((previous, next), (Some(left), Some(right)) if left.is_ascii_digit() && right.is_ascii_digit())
+        }
+        _ => false,
+    }
+}
+
+fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut cursor = start;
+    while cursor < end {
+        let Some((idx, ch)) = text[cursor..end].char_indices().next() else {
+            break;
+        };
+        let abs = cursor + idx;
+        if is_candidate_start(ch) {
+            let candidate_end = candidate_end(text, abs, end);
+            if candidate_end > abs {
+                spans.push((abs, candidate_end));
+            }
+            cursor = candidate_end.max(abs + ch.len_utf8());
+        } else {
+            cursor = abs + ch.len_utf8();
+        }
+    }
+    spans
+}
+
+fn is_candidate_start(ch: char) -> bool {
+    ch.is_ascii_digit()
+        || matches!(ch, '０'..='９' | '$' | '€' | '£' | '¥' | '￥')
+        || is_cjk_number_char(ch)
+}
+
+fn candidate_end(text: &str, start: usize, limit: usize) -> usize {
+    let mut end = start;
+    for (idx, ch) in text[start..limit].char_indices() {
+        let abs = start + idx;
+        if idx > 0 && is_candidate_boundary(ch) {
+            break;
+        }
+        end = abs + ch.len_utf8();
+    }
+    end
+}
+
+fn is_candidate_boundary(ch: char) -> bool {
+    matches!(ch, '、' | ';' | '；' | '\n' | '\t' | '(' | ')' | '[' | ']')
+}
+
+fn spans_overlap(left_start: usize, left_end: usize, right_start: usize, right_end: usize) -> bool {
+    left_start < right_end && right_start < left_end
+}
+
+fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+    let features = InputFeatures::new(trimmed);
+
+    if let Some(result) = parse_qualified_reading(trimmed, ctx) {
         if ctx.strictness == Strictness::Strict {
             parsed.findings.skipped.push(skipped_with_span(
                 trimmed,
@@ -1986,10 +2263,10 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             parsed.best = Some(result.reading);
             parsed.findings.approximations = result.approximations;
         }
-        return parsed;
+        return;
     }
 
-    if let Some(result) = parse_fuzzy_reading(trimmed, &ctx) {
+    if let Some(result) = parse_fuzzy_reading(trimmed, ctx) {
         if ctx.strictness == Strictness::Strict {
             parsed.findings.skipped.push(skipped_with_span(
                 trimmed,
@@ -2001,147 +2278,195 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             parsed.best = Some(result.reading);
             parsed.findings.approximations = result.approximations;
         }
-        return parsed;
+        return;
     }
 
-    if let Some(ambiguous) = parse_ambiguous_slash_date_or_fraction(trimmed, &ctx) {
+    if features.has_slash
+        && let Some(ambiguous) = parse_ambiguous_slash_date_or_fraction(trimmed, ctx)
+    {
         parsed.best = ambiguous.best;
         parsed.alternatives = ambiguous.alternatives;
         parsed.findings.ambiguities.push(ambiguous.ambiguity);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_relative_date(trimmed, &ctx) {
+    if features.maybe_date
+        && let Some(reading) = parse_relative_date(trimmed, ctx)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_recurrence(trimmed) {
+    if features.maybe_recurrence
+        && let Some(reading) = parse_recurrence(trimmed)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_plus_minus_range(trimmed, &ctx) {
+    if features.maybe_range
+        && let Some(reading) = parse_plus_minus_range(trimmed, ctx)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_upper_bound_range(trimmed, &ctx) {
+    if features.maybe_range
+        && let Some(reading) = parse_upper_bound_range(trimmed, ctx)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_range(trimmed, &ctx) {
+    if features.maybe_range
+        && let Some(reading) = parse_range(trimmed, ctx)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_conversion_request(trimmed, &ctx) {
+    if features.maybe_conversion
+        && let Some(reading) = parse_conversion_request(trimmed, ctx)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_japanese_length(trimmed) {
+    if features.maybe_japanese_length
+        && let Some(reading) = parse_japanese_length(trimmed)
+    {
         parsed.findings.approximations.push(approximation(
             trimmed,
             "Japanese customary length converted to SI meters.",
         ));
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_tatami_area(trimmed) {
+    if features.maybe_tatami
+        && let Some(reading) = parse_tatami_area(trimmed)
+    {
         parsed.findings.approximations.push(approximation(
             trimmed,
             "Tatami area uses a trade-custom regional approximation of 1.62 m2.",
         ));
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_tsubo_area(trimmed) {
+    if features.maybe_tsubo
+        && let Some(reading) = parse_tsubo_area(trimmed)
+    {
         parsed.findings.approximations.push(approximation(
             trimmed,
             "Tsubo area converted through Japanese customary area.",
         ));
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_square_meter(trimmed) {
+    if features.maybe_area
+        && let Some(reading) = parse_square_meter(trimmed)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_temperature(trimmed) {
+    if features.maybe_temperature
+        && let Some(reading) = parse_temperature(trimmed)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_compound_registered_quantity(trimmed) {
+    if features.maybe_compound_quantity
+        && let Some(reading) = parse_compound_registered_quantity(trimmed)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_registered_quantity(trimmed, &ctx) {
+    if features.maybe_quantity
+        && let Some(reading) = parse_registered_quantity(trimmed, ctx)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_metric_length(trimmed) {
+    if features.maybe_metric_length
+        && let Some(reading) = parse_metric_length(trimmed)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_mass(trimmed) {
+    if features.maybe_mass
+        && let Some(reading) = parse_mass(trimmed)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_timezone_clock_time(trimmed, &ctx) {
+    if features.maybe_timezone_clock
+        && let Some(reading) = parse_timezone_clock_time(trimmed, ctx)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_clock_time(trimmed) {
+    if features.maybe_clock
+        && let Some(reading) = parse_clock_time(trimmed)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_duration(trimmed) {
+    if features.maybe_duration
+        && let Some(reading) = parse_duration(trimmed)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_feet_inches(trimmed) {
+    if features.maybe_feet_inches
+        && let Some(reading) = parse_feet_inches(trimmed)
+    {
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some((best, alternatives, ambiguity)) = parse_cups(trimmed, &ctx) {
+    if features.maybe_cups
+        && let Some((best, alternatives, ambiguity)) = parse_cups(trimmed, ctx)
+    {
         parsed.best = Some(best);
         parsed.alternatives = alternatives;
         parsed.findings.ambiguities.push(ambiguity);
-        return parsed;
+        return;
     }
 
-    if let Some((best, alternatives, ambiguity)) = parse_currency(trimmed) {
+    if features.maybe_currency
+        && let Some((best, alternatives, ambiguity)) = parse_currency(trimmed)
+    {
         parsed.best = Some(best);
         parsed.alternatives = alternatives;
         if let Some(ambiguity) = ambiguity {
             parsed.findings.ambiguities.push(ambiguity);
         }
-        return parsed;
+        return;
     }
 
-    if let Some(ambiguous) = parse_ambiguous_number(trimmed) {
+    if features.maybe_number
+        && let Some(ambiguous) = parse_ambiguous_number(trimmed)
+    {
         parsed.best = ambiguous.best;
         parsed.alternatives = ambiguous.alternatives;
         parsed.findings.ambiguities.push(ambiguous.ambiguity);
-        return parsed;
+        return;
     }
 
-    if let Some(reading) = parse_plain_number(trimmed) {
+    if features.maybe_number
+        && let Some(reading) = parse_plain_number(trimmed)
+    {
         if ctx.expect == Some(Kind::Quantity) || ctx.expected_dimension == Some(Dimension::Length) {
             parsed.alternatives.push(Reading::quantity(
                 reading.value.unwrap_or_default(),
@@ -2159,10 +2484,12 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             ));
         }
         parsed.best = Some(reading);
-        return parsed;
+        return;
     }
 
-    if let Some((reading, suggestion, unit_text)) = parse_typo_corrected_quantity(trimmed) {
+    if features.maybe_quantity
+        && let Some((reading, suggestion, unit_text)) = parse_typo_corrected_quantity(trimmed)
+    {
         parsed.suggestions.push(suggestion);
         match ctx.strictness {
             Strictness::Forgiving => {
@@ -2184,35 +2511,350 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
                 ));
             }
         }
-        return parsed;
+        return;
     }
 
-    if let Some(timezone) = unsupported_timezone_suffix(trimmed) {
+    if features.maybe_timezone_clock
+        && let Some(timezone) = unsupported_timezone_suffix(trimmed)
+    {
         parsed.findings.skipped.push(skipped_with_span(
             timezone,
             "unsupported timezone conversion requires an explicit adapter policy",
             IssueCode::TimezoneUnsupported,
             span_token_in(trimmed, timezone),
         ));
-        return parsed;
+        return;
     }
 
-    if let Some(recurrence) = unsupported_recurrence_phrase(trimmed) {
+    if features.maybe_recurrence
+        && let Some(recurrence) = unsupported_recurrence_phrase(trimmed)
+    {
         parsed.findings.skipped.push(skipped_with_span(
             recurrence,
             "recurring date/time expressions require a recurrence adapter and are not interpreted by the core parser",
             IssueCode::RecurrenceUnsupported,
             span_token_in(trimmed, recurrence),
         ));
-        return parsed;
+        return;
     }
 
-    parsed.suggestions = suggestions_for(trimmed);
+    if features.maybe_suggestion {
+        parsed.suggestions = suggestions_for(trimmed);
+    }
     parsed
         .findings
         .skipped
         .push(skipped(trimmed, "no supported reading matched"));
-    parsed
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct InputFeatures {
+    maybe_number: bool,
+    maybe_quantity: bool,
+    maybe_compound_quantity: bool,
+    maybe_japanese_length: bool,
+    maybe_tatami: bool,
+    maybe_tsubo: bool,
+    maybe_area: bool,
+    maybe_temperature: bool,
+    maybe_metric_length: bool,
+    maybe_mass: bool,
+    maybe_duration: bool,
+    maybe_clock: bool,
+    maybe_timezone_clock: bool,
+    maybe_feet_inches: bool,
+    maybe_cups: bool,
+    maybe_currency: bool,
+    maybe_conversion: bool,
+    maybe_range: bool,
+    maybe_date: bool,
+    maybe_recurrence: bool,
+    maybe_suggestion: bool,
+    has_slash: bool,
+}
+
+impl InputFeatures {
+    fn new(text: &str) -> Self {
+        let trimmed = text.trim();
+        let lower_cow = ascii_lower_cow(trimmed);
+        let lower = lower_cow.as_ref();
+        let has_ascii_digit = trimmed.as_bytes().iter().any(u8::is_ascii_digit);
+        let has_cjk_number = trimmed.chars().any(is_cjk_number_char);
+        let has_number_word = lower.split_whitespace().any(is_english_number_word_like);
+        let has_number = has_ascii_digit
+            || has_cjk_number
+            || has_number_word
+            || lower
+                .split(|ch: char| !ch.is_ascii_alphabetic() && ch != '-')
+                .any(|word| small_number_word(word).is_some() || matches!(word, "a" | "an"));
+        let has_ascii_alpha =
+            trimmed.is_ascii() && trimmed.bytes().any(|byte| byte.is_ascii_alphabetic());
+        let maybe_date = lower.starts_with("next ")
+            || lower.starts_with("last ")
+            || lower.starts_with("this ")
+            || lower.starts_with("in ")
+            || lower.ends_with(" ago")
+            || matches!(lower, "today" | "tomorrow" | "yesterday")
+            || [
+                "mañana",
+                "pasado mañana",
+                "demain",
+                "amanhã",
+                "vendredi prochain",
+                "sexta-feira que vem",
+                "viernes próximo",
+                "viernes proximo",
+                "后天",
+            ]
+            .iter()
+            .any(|token| lower == *token || lower.contains(token))
+            || trimmed.contains('日')
+            || trimmed.contains('週')
+            || trimmed.contains('周')
+            || (has_ascii_digit && (trimmed.contains('-') || trimmed.contains('/')))
+            || matches!(
+                trimmed,
+                "今日" | "明日" | "昨日" | "一昨日" | "明天" | "昨天" | "前天"
+            );
+        let maybe_recurrence = lower.starts_with("every ")
+            || lower.starts_with("monthly")
+            || lower.starts_with("daily")
+            || lower.starts_with("freq=")
+            || trimmed.starts_with("毎")
+            || trimmed.starts_with("每");
+        let maybe_clock = lower.contains("am")
+            || lower.contains("pm")
+            || lower == "noon"
+            || lower == "midnight"
+            || trimmed.contains(':')
+            || trimmed.contains('時');
+        let maybe_currency = trimmed.starts_with(['$', '€', '£', '¥', '￥'])
+            || [
+                "usd", "eur", "gbp", "jpy", "bucks", "dollars", "euros", "pounds", "yen", "円",
+                "cent", "cents", "pence",
+            ]
+            .iter()
+            .any(|token| lower.contains(token));
+        let maybe_temperature = trimmed.contains('°')
+            || trimmed.contains('℃')
+            || trimmed.contains('℉')
+            || trimmed.contains("摂氏")
+            || trimmed.contains("華氏")
+            || ["celsius", "fahrenheit", "kelvin"]
+                .iter()
+                .any(|token| lower.contains(token))
+            || (has_number && lower.ends_with(['c', 'f', 'k']));
+        let maybe_range = trimmed.contains('±')
+            || lower.contains("+/-")
+            || lower.contains(" to ")
+            || lower.contains("between ")
+            || lower.contains("from ")
+            || trimmed.contains(['〜', '～'])
+            || trimmed.contains("..")
+            || trimmed.contains('≤')
+            || trimmed.contains('<')
+            || trimmed.contains('-')
+            || ["less than ", "under ", "below ", "up to ", "at most "]
+                .iter()
+                .any(|prefix| lower.starts_with(prefix))
+            || trimmed.ends_with("以下")
+            || trimmed.ends_with("未満")
+            || trimmed.ends_with("まで");
+        let maybe_duration = lower.starts_with('p')
+            || lower.contains("hour")
+            || lower.contains("minute")
+            || lower.contains("min")
+            || lower.contains("day")
+            || lower.contains("week")
+            || lower.contains("few ")
+            || lower.contains("an hour")
+            || (has_number
+                && [
+                    "h", "hr", "hrs", "m", "min", "mins", "s", "sec", "secs", "d",
+                ]
+                .iter()
+                .any(|unit| lower.contains(unit)))
+            || trimmed.ends_with('日');
+        let maybe_quantity = has_number
+            || trimmed.starts_with('約')
+            || lower.starts_with("about ")
+            || lower.starts_with("around ")
+            || lower.starts_with("roughly ")
+            || lower.starts_with("approximately ");
+
+        Self {
+            maybe_number: has_number,
+            maybe_quantity,
+            maybe_compound_quantity: maybe_quantity && trimmed.split_whitespace().count() >= 4,
+            maybe_japanese_length: maybe_quantity && trimmed.contains(['尺', '寸', '間']),
+            maybe_tatami: maybe_quantity && trimmed.contains(['帖', '畳']),
+            maybe_tsubo: maybe_quantity && trimmed.contains('坪'),
+            maybe_area: maybe_quantity
+                && (trimmed.contains('㎡')
+                    || trimmed.contains('²')
+                    || lower.contains("m2")
+                    || lower.contains("m^2")
+                    || trimmed.contains("平米")
+                    || trimmed.contains("平方米")),
+            maybe_temperature,
+            maybe_metric_length: maybe_quantity
+                && (["cm", "mm", "in", "inch", "inches", "ft", "feet", "m"]
+                    .iter()
+                    .any(|suffix| lower.ends_with(suffix))
+                    || lower.contains('m')),
+            maybe_mass: (maybe_quantity
+                && [
+                    "kg",
+                    "kilogram",
+                    "kilograms",
+                    "lb",
+                    "lbs",
+                    "pound",
+                    "pounds",
+                    "ounce",
+                    "ounces",
+                    "oz",
+                    "g",
+                ]
+                .iter()
+                .any(|suffix| lower.ends_with(suffix)))
+                || ["公斤", "千克", "キログラム", "キロ"]
+                    .iter()
+                    .any(|suffix| trimmed.ends_with(suffix)),
+            maybe_duration,
+            maybe_clock,
+            maybe_timezone_clock: maybe_clock && trimmed.split_whitespace().count() >= 2,
+            maybe_feet_inches: maybe_quantity
+                && (lower.contains("ft") || lower.contains("feet") || trimmed.contains('\'')),
+            maybe_cups: maybe_quantity && (lower.ends_with("cup") || lower.ends_with("cups")),
+            maybe_currency,
+            maybe_conversion: lower.contains(" to "),
+            maybe_range,
+            maybe_date,
+            maybe_recurrence,
+            maybe_suggestion: has_ascii_alpha && trimmed.len() <= 160,
+            has_slash: trimmed.contains('/'),
+        }
+    }
+}
+
+fn normalize_input_cow(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(needs_input_normalization) {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(normalize_input(text))
+}
+
+fn ascii_lower_cow(text: &str) -> Cow<'_, str> {
+    if text.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        Cow::Owned(text.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+fn is_english_number_word_like(word: &str) -> bool {
+    word.split('-').filter(|part| !part.is_empty()).all(|part| {
+        small_number_word(part).is_some()
+            || matches!(part, "hundred" | "thousand" | "a" | "an" | "and")
+    })
+}
+
+fn normalize_input(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\u{200B}' | '\u{200C}' | '\u{200D}' | '\u{FEFF}' => {}
+            '\u{00A0}' | '\u{202F}' | '\u{2009}' | '\u{2007}' => normalized.push(' '),
+            '０'..='９' => {
+                let digit = (ch as u32) - ('０' as u32);
+                normalized.push(char::from_u32(('0' as u32) + digit).unwrap_or(ch));
+            }
+            'Ａ'..='Ｚ' => {
+                let letter = (ch as u32) - ('Ａ' as u32);
+                normalized.push(char::from_u32(('A' as u32) + letter).unwrap_or(ch));
+            }
+            'ａ'..='ｚ' => {
+                let letter = (ch as u32) - ('ａ' as u32);
+                normalized.push(char::from_u32(('a' as u32) + letter).unwrap_or(ch));
+            }
+            '．' | '。' => normalized.push('.'),
+            '，' | '、' if looks_numeric_separator(&normalized) => normalized.push(','),
+            '＋' => normalized.push('+'),
+            '－' | '−' | '–' => normalized.push('-'),
+            '／' => normalized.push('/'),
+            '＊' | '×' => normalized.push('*'),
+            '＾' => normalized.push('^'),
+            '％' => normalized.push('%'),
+            '　' => normalized.push(' '),
+            '㍍' => normalized.push('m'),
+            '㌢' => normalized.push_str("cm"),
+            '㍉' => normalized.push_str("mm"),
+            '㌔' => normalized.push_str("キロ"),
+            '㌘' => normalized.push('g'),
+            '㎏' => normalized.push_str("kg"),
+            '㎎' => normalized.push_str("mg"),
+            '㎜' => normalized.push_str("mm"),
+            '㎝' => normalized.push_str("cm"),
+            '㎞' => normalized.push_str("km"),
+            '㏄' => normalized.push_str("cc"),
+            _ => normalized.push(ch),
+        }
+    }
+    normalized
+}
+
+fn needs_input_normalization(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{200B}'
+            | '\u{200C}'
+            | '\u{200D}'
+            | '\u{FEFF}'
+            | '\u{00A0}'
+            | '\u{202F}'
+            | '\u{2009}'
+            | '\u{2007}'
+            | '０'..='９'
+            | 'Ａ'..='Ｚ'
+            | 'ａ'..='ｚ'
+            | '．'
+            | '。'
+            | '，'
+            | '＋'
+            | '－'
+            | '−'
+            | '–'
+            | '／'
+            | '＊'
+            | '×'
+            | '＾'
+            | '％'
+            | '　'
+            | '㍍'
+            | '㌢'
+            | '㍉'
+            | '㌔'
+            | '㌘'
+            | '㎏'
+            | '㎎'
+            | '㎜'
+            | '㎝'
+            | '㎞'
+            | '㏄'
+    )
+}
+
+fn looks_numeric_separator(prefix: &str) -> bool {
+    prefix
+        .chars()
+        .rev()
+        .find(|ch| !ch.is_whitespace())
+        .is_some_and(|ch| ch.is_ascii_digit())
+}
+
+fn is_cjk_number_char(ch: char) -> bool {
+    cjk_digit(ch).is_some() || matches!(ch, '十' | '百' | '千' | '万' | '億' | '兆')
 }
 
 pub fn complete(prefix: &str, ctx: Option<ParseCtx>) -> Vec<Completion> {
@@ -2761,7 +3403,7 @@ fn split_number_unit(text: &str) -> Option<(&str, &str)> {
     let trimmed = text.trim();
     let mut seen_digit = false;
     for (idx, ch) in trimmed.char_indices() {
-        if ch.is_ascii_digit() {
+        if is_number_prefix_char(ch) {
             seen_digit = true;
             continue;
         }
@@ -2783,16 +3425,84 @@ fn split_number_unit(text: &str) -> Option<(&str, &str)> {
     None
 }
 
+fn is_number_prefix_char(ch: char) -> bool {
+    ch.is_ascii_digit() || is_cjk_number_char(ch)
+}
+
 fn unit_by_alias(alias: &str) -> Option<&'static UnitDef> {
     let alias = alias.trim();
-    UNIT_DEFS
-        .iter()
-        .find(|unit| unit_lookup_aliases(unit).any(|candidate| candidate == alias))
+    if let Some(unit) = fast_unit_by_alias(alias, AliasMatchMode::Exact)
+        .or_else(|| fallback_unit_by_alias(alias, AliasMatchMode::Exact))
+    {
+        return Some(unit);
+    }
+
+    let normalized;
+    let lookup = {
+        normalized = normalize_input(alias);
+        normalized.trim()
+    };
+    if lookup != alias
+        && let Some(unit) = fast_unit_by_alias(lookup, AliasMatchMode::Exact)
+            .or_else(|| fallback_unit_by_alias(lookup, AliasMatchMode::Exact))
+    {
+        return Some(unit);
+    }
+
+    fast_unit_by_alias(alias, AliasMatchMode::AsciiCase)
+        .or_else(|| fallback_unit_by_alias(alias, AliasMatchMode::AsciiCase))
         .or_else(|| {
-            UNIT_DEFS.iter().find(|unit| {
-                unit_lookup_aliases(unit).any(|candidate| candidate.eq_ignore_ascii_case(alias))
-            })
+            (lookup != alias)
+                .then(|| {
+                    fast_unit_by_alias(lookup, AliasMatchMode::AsciiCase)
+                        .or_else(|| fallback_unit_by_alias(lookup, AliasMatchMode::AsciiCase))
+                })
+                .flatten()
         })
+}
+
+#[derive(Clone, Copy)]
+enum AliasMatchMode {
+    Exact,
+    AsciiCase,
+}
+
+fn fast_unit_by_alias(alias: &str, mode: AliasMatchMode) -> Option<&'static UnitDef> {
+    FAST_UNIT_ALIASES
+        .iter()
+        .find_map(|(candidate, unit_id)| alias_matches(candidate, alias, mode).then_some(*unit_id))
+        .and_then(unit_by_id)
+}
+
+fn unit_by_id(id: &str) -> Option<&'static UnitDef> {
+    UNIT_DEFS.iter().find(|unit| unit.id == id)
+}
+
+fn fallback_unit_by_alias(alias: &str, mode: AliasMatchMode) -> Option<&'static UnitDef> {
+    UNIT_DEFS.iter().find(|unit| {
+        unit_lookup_aliases(unit).any(|candidate| alias_matches(candidate.trim(), alias, mode))
+    })
+}
+
+fn alias_matches(candidate: &str, alias: &str, mode: AliasMatchMode) -> bool {
+    if candidate.len() != alias.len() || candidate.is_empty() {
+        return false;
+    }
+    if candidate == alias {
+        return true;
+    }
+    if matches!(mode, AliasMatchMode::Exact) {
+        return false;
+    }
+    if !candidate.is_ascii() || !alias.is_ascii() {
+        return false;
+    }
+    if candidate.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        return false;
+    }
+    let candidate_first = candidate.as_bytes()[0];
+    let alias_first = alias.as_bytes()[0];
+    candidate_first.eq_ignore_ascii_case(&alias_first) && candidate.eq_ignore_ascii_case(alias)
 }
 
 fn split_once_ascii_case<'a>(text: &'a str, needle: &str) -> Option<(&'a str, &'a str)> {
@@ -2862,7 +3572,7 @@ fn custom_unit_by_alias<'a>(alias: &str, ctx: &'a ParseCtx) -> Option<&'a Custom
 }
 
 fn normalize_alias(alias: &str) -> String {
-    alias.trim().to_ascii_lowercase()
+    normalize_input(alias).trim().to_ascii_lowercase()
 }
 
 fn parse_metric_length(text: &str) -> Option<Reading> {
@@ -4478,20 +5188,79 @@ fn ends_with_ascii_case(text: &str, suffix: &str) -> bool {
 }
 
 fn parse_endpoint(text: &str, ctx: &ParseCtx) -> Option<Reading> {
-    parse_relative_date(text, ctx)
-        .or_else(|| parse_japanese_length(text))
-        .or_else(|| parse_tatami_area(text))
-        .or_else(|| parse_tsubo_area(text))
-        .or_else(|| parse_square_meter(text))
-        .or_else(|| parse_temperature(text))
-        .or_else(|| parse_registered_quantity(text, ctx))
-        .or_else(|| parse_metric_length(text))
-        .or_else(|| parse_mass(text))
-        .or_else(|| parse_clock_time(text))
-        .or_else(|| parse_duration(text))
-        .or_else(|| parse_feet_inches(text))
-        .or_else(|| parse_currency(text).map(|(best, _, _)| best))
-        .or_else(|| parse_plain_number(text))
+    let normalized = normalize_input_cow(text);
+    let text = normalized.trim();
+    let features = InputFeatures::new(text);
+
+    if features.maybe_date
+        && let Some(reading) = parse_relative_date(text, ctx)
+    {
+        return Some(reading);
+    }
+    if features.maybe_japanese_length
+        && let Some(reading) = parse_japanese_length(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_tatami
+        && let Some(reading) = parse_tatami_area(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_tsubo
+        && let Some(reading) = parse_tsubo_area(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_area
+        && let Some(reading) = parse_square_meter(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_temperature
+        && let Some(reading) = parse_temperature(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_quantity
+        && let Some(reading) = parse_registered_quantity(text, ctx)
+    {
+        return Some(reading);
+    }
+    if features.maybe_metric_length
+        && let Some(reading) = parse_metric_length(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_mass
+        && let Some(reading) = parse_mass(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_clock
+        && let Some(reading) = parse_clock_time(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_duration
+        && let Some(reading) = parse_duration(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_feet_inches
+        && let Some(reading) = parse_feet_inches(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_currency
+        && let Some((best, _, _)) = parse_currency(text)
+    {
+        return Some(best);
+    }
+    if features.maybe_number {
+        return parse_plain_number(text);
+    }
+    None
 }
 
 fn parse_ambiguous_slash_date_or_fraction(text: &str, ctx: &ParseCtx) -> Option<AmbiguousParse> {
@@ -4786,9 +5555,14 @@ fn parse_weekday(text: &str) -> Option<jiff::civil::Weekday> {
 }
 
 fn parse_number(text: &str) -> Option<f64> {
-    let trimmed = text.trim();
+    let normalized_input = normalize_input_cow(text);
+    let trimmed = normalized_input.trim();
     if trimmed.is_empty() {
         return None;
+    }
+
+    if let Some(value) = parse_japanese_large_number(trimmed) {
+        return Some(value);
     }
 
     if let Some(value) = parse_unicode_fraction_number(trimmed) {
@@ -4803,24 +5577,103 @@ fn parse_number(text: &str) -> Option<f64> {
         return Some(value as f64);
     }
 
-    let normalized = if trimmed.contains(',') && valid_grouped_number(trimmed) {
-        trimmed.replace(',', "")
-    } else if trimmed.matches(',').count() == 1 && !trimmed.contains('.') {
-        trimmed.replace(',', ".")
-    } else if trimmed.contains(',') {
-        return None;
-    } else {
-        trimmed.to_owned()
-    };
+    let normalized = normalize_locale_number(trimmed)?;
 
     if normalized
         .chars()
-        .all(|ch| ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '+')
+        .all(|ch| ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+'))
     {
         normalized.parse::<f64>().ok()
     } else {
         None
     }
+}
+
+fn normalize_locale_number(text: &str) -> Option<String> {
+    let compact = text
+        .chars()
+        .filter(|ch| !matches!(ch, ' ' | '_' | '\'' | '\u{00A0}' | '\u{202F}' | '\u{2009}'))
+        .collect::<String>();
+    if compact.is_empty() {
+        return None;
+    }
+
+    if compact.contains(',') && compact.contains('.') {
+        let comma = compact.rfind(',')?;
+        let dot = compact.rfind('.')?;
+        let (decimal, grouping) = if comma > dot { (',', '.') } else { ('.', ',') };
+        return normalize_decimal_grouped_number(&compact, decimal, grouping);
+    }
+
+    if compact.contains(',') {
+        if valid_grouped_number(&compact) || valid_indian_grouped_number(&compact) {
+            return Some(compact.replace(',', ""));
+        }
+        if compact.matches(',').count() == 1 {
+            return Some(compact.replace(',', "."));
+        }
+        return None;
+    }
+
+    if compact.matches('.').count() > 1 {
+        if valid_dot_grouped_number(&compact) {
+            return Some(compact.replace('.', ""));
+        }
+        return None;
+    }
+
+    Some(compact)
+}
+
+fn normalize_decimal_grouped_number(text: &str, decimal: char, grouping: char) -> Option<String> {
+    let (whole, fraction) = text.rsplit_once(decimal)?;
+    if fraction.is_empty() || !fraction.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let whole_without_groups = whole.replace(grouping, "");
+    if whole_without_groups.is_empty()
+        || !whole_without_groups
+            .trim_start_matches(['-', '+'])
+            .chars()
+            .all(|ch| ch.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(format!("{whole_without_groups}.{fraction}"))
+}
+
+fn parse_japanese_large_number(text: &str) -> Option<f64> {
+    if !text.contains(['万', '億', '兆']) {
+        return None;
+    }
+    let mut total = 0.0;
+    let mut rest = text.trim();
+    for (unit, factor) in [
+        ('兆', 1_000_000_000_000.0),
+        ('億', 100_000_000.0),
+        ('万', 10_000.0),
+    ] {
+        if let Some((head, tail)) = rest.split_once(unit) {
+            let value = if head.trim().is_empty() {
+                1.0
+            } else {
+                parse_number_without_large_units(head.trim())?
+            };
+            total += value * factor;
+            rest = tail;
+        }
+    }
+    if !rest.trim().is_empty() {
+        total += parse_number_without_large_units(rest.trim())?;
+    }
+    Some(total)
+}
+
+fn parse_number_without_large_units(text: &str) -> Option<f64> {
+    if let Some(value) = parse_cjk_number(text) {
+        return Some(value as f64);
+    }
+    normalize_locale_number(text)?.parse::<f64>().ok()
 }
 
 fn parse_unicode_fraction_number(text: &str) -> Option<f64> {
@@ -4946,6 +5799,22 @@ fn parse_cjk_number(text: &str) -> Option<i64> {
                 saw = true;
                 continue;
             }
+            '億' => {
+                section += number;
+                total += section * 100_000_000;
+                section = 0;
+                number = 0;
+                saw = true;
+                continue;
+            }
+            '兆' => {
+                section += number;
+                total += section * 1_000_000_000_000;
+                section = 0;
+                number = 0;
+                saw = true;
+                continue;
+            }
             _ => return None,
         };
         section += if number == 0 { unit } else { number * unit };
@@ -4992,6 +5861,36 @@ fn valid_grouped_number(text: &str) -> bool {
     groups.iter().enumerate().all(|(idx, group)| {
         group.chars().all(|ch| ch.is_ascii_digit()) && (idx == 0 || group.len() == 3)
     })
+}
+
+fn valid_dot_grouped_number(text: &str) -> bool {
+    let signless = text.trim_start_matches(['-', '+']);
+    let groups: Vec<&str> = signless.split('.').collect();
+    groups.len() > 1
+        && !groups[0].is_empty()
+        && groups[0].len() <= 3
+        && groups.iter().enumerate().all(|(idx, group)| {
+            group.chars().all(|ch| ch.is_ascii_digit()) && (idx == 0 || group.len() == 3)
+        })
+}
+
+fn valid_indian_grouped_number(text: &str) -> bool {
+    let (whole, decimal) = text.split_once('.').unwrap_or((text, ""));
+    if !decimal.is_empty() && !decimal.chars().all(|ch| ch.is_ascii_digit()) {
+        return false;
+    }
+    let signless = whole.trim_start_matches(['-', '+']);
+    let groups: Vec<&str> = signless.split(',').collect();
+    if groups.len() < 3 || groups[0].is_empty() || groups[0].len() > 2 {
+        return false;
+    }
+    let last_is_three = groups
+        .last()
+        .is_some_and(|group| group.len() == 3 && group.chars().all(|ch| ch.is_ascii_digit()));
+    let middle_are_two = groups[1..groups.len() - 1]
+        .iter()
+        .all(|group| group.len() == 2 && group.chars().all(|ch| ch.is_ascii_digit()));
+    groups[0].chars().all(|ch| ch.is_ascii_digit()) && middle_are_two && last_is_three
 }
 
 const LEGACY_UNIT_COMPLETIONS: &[(&str, &str, Dimension)] = &[
@@ -5185,6 +6084,9 @@ fn suggest_unit(token: &str) -> Option<Suggestion> {
             if normalized.len().abs_diff(alias.len()) > limit {
                 continue;
             }
+            if !same_ascii_first_char(&normalized, alias) {
+                continue;
+            }
             let distance = levenshtein_ascii_case_insensitive(&normalized, alias);
             if distance > 0 && distance <= limit && best.is_none_or(|(_, best)| distance < best) {
                 best = Some((unit.id, distance));
@@ -5212,11 +6114,15 @@ fn suggest_non_ascii_unit(token: &str) -> Option<Suggestion> {
             if alias.is_ascii() {
                 continue;
             }
+            let alias_len = alias.chars().count();
+            if token.chars().count().abs_diff(alias_len) > 2 {
+                continue;
+            }
             let distance = levenshtein_chars(token, alias);
-            let limit = if alias.chars().count() <= 2 { 1 } else { 2 };
+            let limit = if alias_len <= 2 { 1 } else { 2 };
             if distance > 0 && distance <= limit && best.is_none_or(|(_, best, _)| distance < best)
             {
-                best = Some((unit.id, distance, alias.chars().count()));
+                best = Some((unit.id, distance, alias_len));
             }
         }
     }
@@ -5228,6 +6134,13 @@ fn suggest_non_ascii_unit(token: &str) -> Option<Suggestion> {
             score: Some(1.0 - distance as f64 / max_len),
         }
     })
+}
+
+fn same_ascii_first_char(left: &str, right: &str) -> bool {
+    match (left.as_bytes().first(), right.as_bytes().first()) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+        _ => false,
+    }
 }
 
 fn levenshtein_ascii_case_insensitive(left: &str, right: &str) -> usize {

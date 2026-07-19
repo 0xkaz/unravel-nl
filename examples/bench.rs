@@ -7,9 +7,15 @@ use unravel_nl::{Locale, ParseCtx, parse};
 
 const DEFAULT_INPUTS: &[&str] = &[
     "5尺3寸",
+    "５尺３寸",
     "6帖",
     "延床100㎡",
     "1,234",
+    "1.234,56 kg",
+    "1 234,56 m",
+    "1,23,456 kg",
+    "3.5万円",
+    "百二十平米",
     "3640",
     "5ft 11",
     "1.5 cups",
