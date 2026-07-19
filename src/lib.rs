@@ -83,19 +83,22 @@ pub fn parse_json_with_context(
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_all_json(text: &str) -> String {
-    parsed_matches_summary_json(&parse_all(text, None))
+    parsed_matches_summary_json(text, &parse_all(text, None))
 }
 
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_all_json_with_locale(text: &str, locale: &str) -> String {
-    parsed_matches_summary_json(&parse_all(
+    parsed_matches_summary_json(
         text,
-        Some(ParseCtx {
-            locale: parse_locale_tag(locale),
-            ..ParseCtx::default()
-        }),
-    ))
+        &parse_all(
+            text,
+            Some(ParseCtx {
+                locale: parse_locale_tag(locale),
+                ..ParseCtx::default()
+            }),
+        ),
+    )
 }
 
 #[cfg(feature = "wasm")]
@@ -106,10 +109,13 @@ pub fn parse_all_json_with_context(
     expected_dimension: &str,
     strictness: &str,
 ) -> String {
-    parsed_matches_summary_json(&parse_all(
+    parsed_matches_summary_json(
         text,
-        Some(parse_wasm_context(locale, expected_dimension, strictness)),
-    ))
+        &parse_all(
+            text,
+            Some(parse_wasm_context(locale, expected_dimension, strictness)),
+        ),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2316,9 +2322,13 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
 
 pub fn parse_quantity_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
+    parse_quantity_fast_with_ctx(text, &ctx)
+}
+
+fn parse_quantity_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
     let normalized_input = normalize_input_cow(text);
     let trimmed = normalized_input.trim();
-    let mut parsed = parsed_shell(text, &ctx);
+    let mut parsed = parsed_shell(text, ctx);
     if trimmed.is_empty() {
         parsed
             .findings
@@ -2326,15 +2336,19 @@ pub fn parse_quantity_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             .push(skipped(trimmed, "empty input"));
         return parsed;
     }
-    parse_quantity_fast_into(trimmed, &ctx, &mut parsed);
+    parse_quantity_fast_into(trimmed, ctx, &mut parsed);
     parsed
 }
 
 pub fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
+    parse_number_fast_with_ctx(text, &ctx)
+}
+
+fn parse_number_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
     let normalized_input = normalize_input_cow(text);
     let trimmed = normalized_input.trim();
-    let mut parsed = parsed_shell(text, &ctx);
+    let mut parsed = parsed_shell(text, ctx);
     if trimmed.is_empty() {
         parsed
             .findings
@@ -2342,12 +2356,12 @@ pub fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             .push(skipped(trimmed, "empty input"));
         return parsed;
     }
-    if let Some(ambiguous) = parse_ambiguous_number(trimmed, &ctx) {
+    if let Some(ambiguous) = parse_ambiguous_number(trimmed, ctx) {
         parsed.best = ambiguous.best;
         parsed.alternatives = ambiguous.alternatives;
         parsed.findings.ambiguities.push(ambiguous.ambiguity);
-    } else if let Some(reading) = parse_plain_number_ctx(trimmed, &ctx) {
-        set_plain_number_result(trimmed, &ctx, reading, &mut parsed);
+    } else if let Some(reading) = parse_plain_number_ctx(trimmed, ctx) {
+        set_plain_number_result(trimmed, ctx, reading, &mut parsed);
     } else {
         parsed
             .findings
@@ -2422,9 +2436,10 @@ fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
 }
 
 pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
+    let ctx = ctx.unwrap_or_default();
     let mut matches = Vec::new();
     for candidate in parse_all_candidate_spans(text) {
-        push_parsed_match(&mut matches, text, candidate, ctx.clone());
+        push_parsed_match(&mut matches, text, candidate, &ctx);
     }
     matches.sort_by(|left, right| {
         left.start
@@ -2448,7 +2463,7 @@ fn push_parsed_match(
     matches: &mut Vec<ParsedMatch>,
     source: &str,
     candidate: CandidateSpan,
-    ctx: Option<ParseCtx>,
+    ctx: &ParseCtx,
 ) {
     let start = candidate.start;
     let end = candidate.end;
@@ -2466,7 +2481,7 @@ fn push_parsed_match(
         return;
     }
     let parsed = match candidate.parser {
-        CandidateParser::Broad => parse(text, ctx),
+        CandidateParser::Broad => parse(text, Some(ctx.clone())),
         CandidateParser::TokenWindow => parse_token_window(text, ctx),
     };
     if !parsed_has_actionable_match(&parsed) {
@@ -2584,12 +2599,12 @@ fn numeric_candidate_spans(text: &str, start: usize, end: usize) -> Vec<Candidat
     spans
 }
 
-fn parse_token_window(text: &str, ctx: Option<ParseCtx>) -> Parsed {
-    let quantity = parse_quantity_fast(text, ctx.clone());
+fn parse_token_window(text: &str, ctx: &ParseCtx) -> Parsed {
+    let quantity = parse_quantity_fast_with_ctx(text, ctx);
     if parsed_has_actionable_match(&quantity) {
         return quantity;
     }
-    parse_number_fast(text, ctx)
+    parse_number_fast_with_ctx(text, ctx)
 }
 
 fn parsed_has_actionable_match(parsed: &Parsed) -> bool {
@@ -7527,7 +7542,7 @@ fn parsed_summary_json(parsed: &Parsed) -> String {
 }
 
 #[cfg(feature = "wasm")]
-fn parsed_matches_summary_json(matches: &[ParsedMatch]) -> String {
+fn parsed_matches_summary_json(source: &str, matches: &[ParsedMatch]) -> String {
     let mut json = String::new();
     json.push('[');
     for (idx, parsed_match) in matches.iter().enumerate() {
@@ -7538,6 +7553,16 @@ fn parsed_matches_summary_json(matches: &[ParsedMatch]) -> String {
         json.push_str(&parsed_match.start.to_string());
         json.push_str(",\"end\":");
         json.push_str(&parsed_match.end.to_string());
+        json.push_str(",\"byteStart\":");
+        json.push_str(&parsed_match.start.to_string());
+        json.push_str(",\"byteEnd\":");
+        json.push_str(&parsed_match.end.to_string());
+        let char_start = byte_to_char_offset(source, parsed_match.start);
+        let char_end = byte_to_char_offset(source, parsed_match.end);
+        json.push_str(",\"charStart\":");
+        json.push_str(&char_start.to_string());
+        json.push_str(",\"charEnd\":");
+        json.push_str(&char_end.to_string());
         json.push_str(",\"text\":");
         push_json_string(&mut json, &parsed_match.text);
         json.push_str(",\"parsed\":");
@@ -7546,6 +7571,11 @@ fn parsed_matches_summary_json(matches: &[ParsedMatch]) -> String {
     }
     json.push(']');
     json
+}
+
+#[cfg(feature = "wasm")]
+fn byte_to_char_offset(text: &str, byte_offset: usize) -> usize {
+    text[..byte_offset].chars().count()
 }
 
 #[cfg(any(feature = "wasm", test))]

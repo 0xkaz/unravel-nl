@@ -89,7 +89,27 @@ const parsedMatches = parseAllForUi(
 );
 assert.equal(parsedMatches.length, 2);
 assert.equal(parsedMatches[0].start, 0);
+assert.equal(parsedMatches[0].codeUnitStart, 0);
 assert.equal(parsedMatches[0].ok, true);
+
+const japaneseMatches = parseAllForUi(
+  () =>
+    JSON.stringify([
+      {
+        start: 6,
+        end: 11,
+        byteStart: 6,
+        byteEnd: 11,
+        charStart: 2,
+        charEnd: 7,
+        text: "105mm",
+        parsed: cleanParsed,
+      },
+    ]),
+  "壁厚105mm",
+);
+assert.equal(japaneseMatches[0].codeUnitStart, 2);
+assert.equal("壁厚105mm".slice(japaneseMatches[0].codeUnitStart, japaneseMatches[0].codeUnitEnd), "105mm");
 
 const fields = canonicalizeFieldsForUi(() => cleanParsed, [
   { field: "height", text: "180cm" },

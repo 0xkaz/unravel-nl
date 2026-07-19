@@ -29,8 +29,12 @@ const room = JSON.parse(parse_all_json_with_locale("3m×4m のLDK", "ja"));
 assert.equal(room.length, 2);
 assert.equal(room[0].text, "3m");
 assert.equal(room[0].start, 0);
+assert.equal(room[0].byteStart, 0);
+assert.equal(room[0].charStart, 0);
 assert.equal(room[1].text, "4m");
 assert.equal(room[1].start, 4);
+assert.equal(room[1].byteStart, 4);
+assert.equal(room[1].charStart, 3);
 
 const plainLength = JSON.parse(parse_all_json_with_context("寸法3640", "ja", "length", ""));
 assert.equal(plainLength.length, 1);

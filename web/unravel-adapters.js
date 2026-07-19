@@ -16,7 +16,12 @@ export function parseForUi(parser, text, ctx = undefined) {
 
 export function parseAllForUi(parser, text, ctx = undefined) {
   const matches = parseAdapterResult(parser(text, ctx)) || [];
-  return matches.map((match) => {
+  let searchFrom = 0;
+  return matches.map((rawMatch) => {
+    const match = normalizeMatchSpan(rawMatch, text, searchFrom);
+    if (Number.isInteger(match.codeUnitEnd)) {
+      searchFrom = match.codeUnitEnd;
+    }
     const parsed = match.parsed || match;
     const issues = rankIssues(parsed);
     const best = parsed && parsed.best ? parsed.best : null;
@@ -322,4 +327,22 @@ function parseAdapterResult(value) {
     return JSON.parse(value);
   }
   return value;
+}
+
+function normalizeMatchSpan(match, sourceText, searchFrom) {
+  if (!match || typeof match.text !== "string") {
+    return match;
+  }
+  let codeUnitStart = sourceText.indexOf(match.text, searchFrom);
+  if (codeUnitStart < 0) {
+    codeUnitStart = sourceText.indexOf(match.text);
+  }
+  if (codeUnitStart < 0) {
+    return match;
+  }
+  return {
+    ...match,
+    codeUnitStart,
+    codeUnitEnd: codeUnitStart + match.text.length,
+  };
 }

@@ -14,7 +14,9 @@ The web target emits `parse_json(text)`, `parse_json_with_locale(text, locale)`,
 `parse_all_json_with_context(text, locale, expected_dimension, strictness)`.
 Single-value exports return a compact JSON summary with `ok`, `best`, and
 ranked `issues` fields. Multi-value exports return an array of matches with
-byte spans, original text, and a compact parsed summary.
+byte spans, character spans, original text, and a compact parsed summary. The
+Rust core uses byte spans; browser adapters should use `codeUnitStart` /
+`codeUnitEnd` from `parseAllForUi()` when slicing JavaScript strings.
 
 ## Local Snapshot
 
@@ -23,8 +25,8 @@ Measured on the development machine on 2026-07-20:
 | Command | Output | Size / digest |
 | --- | --- | --- |
 | `wasm-pack build --target web --out-dir pkg -- --features wasm` | `pkg/` | 312K |
-| same | `pkg/unravel_nl_bg.wasm` | 269,025 bytes |
-| same | `pkg/unravel_nl_bg.wasm` sha256 | `120b37adbc748f31b73f1be5882ad6fb13bb1b31ac29e35a7b6cc2b82cf558f0` |
+| same | `pkg/unravel_nl_bg.wasm` | 269,998 bytes |
+| same | `pkg/unravel_nl_bg.wasm` sha256 | `81b35e7667661ab1a72ebe9ff82e7e07ab6fe4634e3f9c7cedfeb92fbabbc164` |
 
 Smoke checks:
 

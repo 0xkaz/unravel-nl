@@ -128,8 +128,10 @@ assert_eq!(matches[0].parsed.best.as_ref().unwrap().dimension, Some(Dimension::A
 assert_eq!(matches[2].text, "3.5m");
 ```
 
-The scanner preserves byte spans and uses a token-window dispatch path for
-dimension-like substrings:
+The Rust scanner preserves byte spans and uses a token-window dispatch path for
+dimension-like substrings. WASM JSON includes both byte and character spans,
+and browser adapters add JavaScript `codeUnitStart` / `codeUnitEnd` fields for
+UI highlighting.
 
 ```rust
 use unravel_nl::{parse_all, Dimension, Locale, ParseCtx};
@@ -471,19 +473,6 @@ let values = canonicalize_values(&[CanonicalizeRequest::new(
 assert!(!values[0].ok);
 assert!(values[0].message.as_ref().unwrap().contains("[APPROXIMATION]"));
 ```
-
-## Benchmark
-
-Run the local parser benchmark with:
-
-```sh
-cargo run --release --example bench
-cargo run --release --all-features --example bench
-cargo run --release --all-features --example entry_bench
-```
-
-Pass an iteration count as the first argument, for example
-`cargo run --release --example bench -- 1000000`.
 
 ## Attribution
 
