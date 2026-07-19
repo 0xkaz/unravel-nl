@@ -1338,6 +1338,23 @@ const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
       "enum": ["length", "area", "mass", "time", "volume", "currency", "temperature", "speed", "data", "data_rate", "flow_rate", "concentration", "acceleration", "force", "torque", "pressure", "power", "charge", "voltage", "current", "resistance", "illuminance", "radiation_equivalent_dose", "radioactivity"],
       "description": "Optional expected quantity dimension."
     },
+    "number_format": {
+      "type": "string",
+      "enum": ["auto", "comma_decimal", "dot_decimal"],
+      "default": "auto",
+      "description": "Explicit numeric punctuation policy. Use comma_decimal for 1,5 and dot_decimal for 1,234 grouping."
+    },
+    "accept": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional acceptance controls for broad parser shapes.",
+      "properties": {
+        "ranges": { "type": "boolean", "default": true },
+        "conversions": { "type": "boolean", "default": true },
+        "compounds": { "type": "boolean", "default": true },
+        "fuzzy": { "type": "boolean", "default": true }
+      }
+    },
     "reference_date": {
       "type": "string",
       "format": "date",
@@ -1397,6 +1414,7 @@ const PARSED_OUTPUT_SCHEMA_JSON: &str = r##"{
       "required": ["kind"],
       "properties": {
         "kind": { "$ref": "#/$defs/kind" },
+        "customKind": { "type": ["string", "null"] },
         "value": { "type": ["number", "null"] },
         "unit": { "type": ["string", "null"] },
         "dimension": {
@@ -1626,6 +1644,33 @@ pub enum Strictness {
     Strict,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NumberFormat {
+    #[default]
+    Auto,
+    CommaDecimal,
+    DotDecimal,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptOptions {
+    pub ranges: bool,
+    pub conversions: bool,
+    pub compounds: bool,
+    pub fuzzy: bool,
+}
+
+impl Default for AcceptOptions {
+    fn default() -> Self {
+        Self {
+            ranges: true,
+            conversions: true,
+            compounds: true,
+            fuzzy: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Provenance {
     InternationalExact,
@@ -1671,11 +1716,14 @@ pub struct ParseCtx {
     pub locale: Option<Locale>,
     pub expect: Option<Kind>,
     pub expected_dimension: Option<Dimension>,
+    pub number_format: NumberFormat,
+    pub accept: AcceptOptions,
     pub reference_date: Option<Date>,
     pub timezone: Option<String>,
     pub strictness: Strictness,
     pub currency_rates: Vec<CurrencyRate>,
     pub custom_units: Vec<CustomUnit>,
+    pub fuzzy_profiles: Vec<FuzzyProfile>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1698,6 +1746,7 @@ impl CurrencyRate {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CustomUnit {
     pub id: String,
+    pub kind_id: Option<String>,
     pub canonical_unit: String,
     pub aliases: Vec<String>,
     pub dimension: Dimension,
@@ -1715,6 +1764,7 @@ impl CustomUnit {
     ) -> Self {
         Self {
             id: id.to_owned(),
+            kind_id: None,
             canonical_unit: canonical_unit.to_owned(),
             aliases: aliases.iter().map(|alias| (*alias).to_owned()).collect(),
             dimension,
@@ -1726,6 +1776,47 @@ impl CustomUnit {
     pub fn approximate(mut self, approximate: bool) -> Self {
         self.approximate = approximate;
         self
+    }
+
+    pub fn kind(mut self, kind_id: &str) -> Self {
+        self.kind_id = Some(kind_id.to_owned());
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FuzzyProfile {
+    pub id: String,
+    pub dimension: Dimension,
+    pub unit: String,
+    pub terms: Vec<FuzzyTerm>,
+}
+
+impl FuzzyProfile {
+    pub fn new(id: &str, dimension: Dimension, unit: &str, terms: &[FuzzyTerm]) -> Self {
+        Self {
+            id: id.to_owned(),
+            dimension,
+            unit: unit.to_owned(),
+            terms: terms.to_vec(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FuzzyTerm {
+    pub term: String,
+    pub low: f64,
+    pub high: f64,
+}
+
+impl FuzzyTerm {
+    pub fn new(term: &str, low: f64, high: f64) -> Self {
+        Self {
+            term: term.to_owned(),
+            low,
+            high,
+        }
     }
 }
 
@@ -1755,6 +1846,7 @@ pub struct ParsedMatch {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Reading {
     pub kind: Kind,
+    pub custom_kind: Option<String>,
     pub value: Option<f64>,
     pub unit: Option<String>,
     pub dimension: Option<Dimension>,
@@ -1778,6 +1870,7 @@ impl Reading {
     ) -> Self {
         Self {
             kind: Kind::Quantity,
+            custom_kind: None,
             value: Some(value),
             unit: Some(unit.to_owned()),
             dimension: Some(dimension),
@@ -1794,6 +1887,7 @@ impl Reading {
     pub fn number(value: f64, confidence: f64) -> Self {
         Self {
             kind: Kind::Number,
+            custom_kind: None,
             value: Some(value),
             unit: None,
             dimension: None,
@@ -1810,6 +1904,7 @@ impl Reading {
     pub fn date(date: Date, confidence: f64) -> Self {
         Self {
             kind: Kind::Date,
+            custom_kind: None,
             value: None,
             unit: None,
             dimension: None,
@@ -1826,6 +1921,7 @@ impl Reading {
     pub fn range(from: Reading, to: Reading, confidence: f64) -> Self {
         Self {
             kind: Kind::Range,
+            custom_kind: None,
             value: None,
             unit: None,
             dimension: None,
@@ -1842,6 +1938,7 @@ impl Reading {
     pub fn recurrence(rrule: &str, confidence: f64) -> Self {
         Self {
             kind: Kind::Recurrence,
+            custom_kind: None,
             value: None,
             unit: None,
             dimension: None,
@@ -1878,6 +1975,27 @@ pub struct Completion {
     pub score: f64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompletionReading {
+    pub text: String,
+    pub reading: Reading,
+    pub score: f64,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResourceView {
+    pub object: String,
+    pub summary: String,
+    pub fields: Vec<ResourceField>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResourceField {
+    pub name: String,
+    pub value: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IssueCode {
     Empty,
@@ -1891,6 +2009,7 @@ pub enum IssueCode {
     AmbiguousCurrency,
     TimezoneUnsupported,
     RecurrenceUnsupported,
+    RejectedByPolicy,
     Approximation,
 }
 
@@ -1908,6 +2027,7 @@ impl IssueCode {
             Self::AmbiguousCurrency => "AMBIGUOUS_CURRENCY",
             Self::TimezoneUnsupported => "TIMEZONE_UNSUPPORTED",
             Self::RecurrenceUnsupported => "RECURRENCE_UNSUPPORTED",
+            Self::RejectedByPolicy => "REJECTED_BY_POLICY",
             Self::Approximation => "APPROXIMATION",
         }
     }
@@ -2035,7 +2155,8 @@ fn issue_severity(code: IssueCode) -> IssueSeverity {
         | IssueCode::NoValue
         | IssueCode::UnknownUnit
         | IssueCode::TimezoneUnsupported
-        | IssueCode::RecurrenceUnsupported => IssueSeverity::Error,
+        | IssueCode::RecurrenceUnsupported
+        | IssueCode::RejectedByPolicy => IssueSeverity::Error,
         IssueCode::TypoCorrected
         | IssueCode::AmbiguousNumber
         | IssueCode::AmbiguousDate
@@ -2049,7 +2170,9 @@ fn issue_severity(code: IssueCode) -> IssueSeverity {
 fn issue_rank(code: IssueCode) -> u16 {
     match code {
         IssueCode::Empty | IssueCode::NoValue => 100,
-        IssueCode::TimezoneUnsupported | IssueCode::RecurrenceUnsupported => 90,
+        IssueCode::TimezoneUnsupported
+        | IssueCode::RecurrenceUnsupported
+        | IssueCode::RejectedByPolicy => 90,
         IssueCode::UnknownUnit => 80,
         IssueCode::TypoCorrected => 65,
         IssueCode::AmbiguousDate
@@ -2078,17 +2201,9 @@ struct ParsedReading {
 
 pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
-    let input = text.to_owned();
     let normalized_input = normalize_input_cow(text);
     let trimmed = normalized_input.trim();
-    let mut parsed = Parsed {
-        input,
-        locale: ctx.locale.clone(),
-        best: None,
-        alternatives: Vec::new(),
-        suggestions: Vec::new(),
-        findings: Findings::default(),
-    };
+    let mut parsed = parsed_shell(text, &ctx);
 
     if trimmed.is_empty() {
         parsed
@@ -2100,6 +2215,113 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
 
     parse_normalized_into(trimmed, &ctx, &mut parsed);
     parsed
+}
+
+pub fn parse_quantity_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
+    let ctx = ctx.unwrap_or_default();
+    let normalized_input = normalize_input_cow(text);
+    let trimmed = normalized_input.trim();
+    let mut parsed = parsed_shell(text, &ctx);
+    if trimmed.is_empty() {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "empty input"));
+        return parsed;
+    }
+    parse_quantity_fast_into(trimmed, &ctx, &mut parsed);
+    parsed
+}
+
+pub fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
+    let ctx = ctx.unwrap_or_default();
+    let normalized_input = normalize_input_cow(text);
+    let trimmed = normalized_input.trim();
+    let mut parsed = parsed_shell(text, &ctx);
+    if trimmed.is_empty() {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "empty input"));
+        return parsed;
+    }
+    if let Some(ambiguous) = parse_ambiguous_number(trimmed, &ctx) {
+        parsed.best = ambiguous.best;
+        parsed.alternatives = ambiguous.alternatives;
+        parsed.findings.ambiguities.push(ambiguous.ambiguity);
+    } else if let Some(reading) = parse_plain_number_ctx(trimmed, &ctx) {
+        parsed.best = Some(reading);
+    } else {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "no supported number matched"));
+    }
+    parsed
+}
+
+pub fn parse_recurrence_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
+    let ctx = ctx.unwrap_or_default();
+    let normalized_input = normalize_input_cow(text);
+    let trimmed = normalized_input.trim();
+    let mut parsed = parsed_shell(text, &ctx);
+    if trimmed.is_empty() {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "empty input"));
+        return parsed;
+    }
+    if let Some(reading) = parse_recurrence(trimmed) {
+        parsed.best = Some(reading);
+    } else if let Some(recurrence) = unsupported_recurrence_phrase(trimmed) {
+        parsed.findings.skipped.push(skipped_with_span(
+            recurrence,
+            "recurring date/time expressions require a recurrence adapter and are not interpreted by the core parser",
+            IssueCode::RecurrenceUnsupported,
+            span_token_in(trimmed, recurrence),
+        ));
+    } else {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "no supported recurrence matched"));
+    }
+    parsed
+}
+
+pub fn parse_date_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
+    let ctx = ctx.unwrap_or_default();
+    let normalized_input = normalize_input_cow(text);
+    let trimmed = normalized_input.trim();
+    let mut parsed = parsed_shell(text, &ctx);
+    if trimmed.is_empty() {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "empty input"));
+        return parsed;
+    }
+    if let Some(reading) = parse_relative_date(trimmed, &ctx) {
+        parsed.best = Some(reading);
+    } else {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "no supported date matched"));
+    }
+    parsed
+}
+
+fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
+    Parsed {
+        input: text.to_owned(),
+        locale: ctx.locale.clone(),
+        best: None,
+        alternatives: Vec::new(),
+        suggestions: Vec::new(),
+        findings: Findings::default(),
+    }
 }
 
 pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
@@ -2274,6 +2496,13 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
                 IssueCode::Approximation,
                 span(trimmed),
             ));
+        } else if !ctx.accept.fuzzy {
+            reject_candidate(
+                parsed,
+                trimmed,
+                result.reading,
+                "fuzzy readings are disabled by acceptance policy",
+            );
         } else {
             parsed.best = Some(result.reading);
             parsed.findings.approximations = result.approximations;
@@ -2307,6 +2536,15 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     if features.maybe_range
         && let Some(reading) = parse_plus_minus_range(trimmed, ctx)
     {
+        if !ctx.accept.ranges {
+            reject_candidate(
+                parsed,
+                trimmed,
+                reading,
+                "range readings are disabled by acceptance policy",
+            );
+            return;
+        }
         parsed.best = Some(reading);
         return;
     }
@@ -2314,6 +2552,15 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     if features.maybe_range
         && let Some(reading) = parse_upper_bound_range(trimmed, ctx)
     {
+        if !ctx.accept.ranges {
+            reject_candidate(
+                parsed,
+                trimmed,
+                reading,
+                "range readings are disabled by acceptance policy",
+            );
+            return;
+        }
         parsed.best = Some(reading);
         return;
     }
@@ -2321,6 +2568,15 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     if features.maybe_range
         && let Some(reading) = parse_range(trimmed, ctx)
     {
+        if !ctx.accept.ranges {
+            reject_candidate(
+                parsed,
+                trimmed,
+                reading,
+                "range readings are disabled by acceptance policy",
+            );
+            return;
+        }
         parsed.best = Some(reading);
         return;
     }
@@ -2328,6 +2584,15 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     if features.maybe_conversion
         && let Some(reading) = parse_conversion_request(trimmed, ctx)
     {
+        if !ctx.accept.conversions {
+            reject_candidate(
+                parsed,
+                trimmed,
+                reading,
+                "conversion readings are disabled by acceptance policy",
+            );
+            return;
+        }
         parsed.best = Some(reading);
         return;
     }
@@ -2380,8 +2645,17 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     }
 
     if features.maybe_compound_quantity
-        && let Some(reading) = parse_compound_registered_quantity(trimmed)
+        && let Some(reading) = parse_compound_registered_quantity_ctx(trimmed, ctx)
     {
+        if !ctx.accept.compounds {
+            reject_candidate(
+                parsed,
+                trimmed,
+                reading,
+                "compound quantity readings are disabled by acceptance policy",
+            );
+            return;
+        }
         parsed.best = Some(reading);
         return;
     }
@@ -2445,7 +2719,7 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     }
 
     if features.maybe_currency
-        && let Some((best, alternatives, ambiguity)) = parse_currency(trimmed)
+        && let Some((best, alternatives, ambiguity)) = parse_currency(trimmed, ctx)
     {
         parsed.best = Some(best);
         parsed.alternatives = alternatives;
@@ -2456,7 +2730,7 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     }
 
     if features.maybe_number
-        && let Some(ambiguous) = parse_ambiguous_number(trimmed)
+        && let Some(ambiguous) = parse_ambiguous_number(trimmed, ctx)
     {
         parsed.best = ambiguous.best;
         parsed.alternatives = ambiguous.alternatives;
@@ -2465,7 +2739,7 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     }
 
     if features.maybe_number
-        && let Some(reading) = parse_plain_number(trimmed)
+        && let Some(reading) = parse_plain_number_ctx(trimmed, ctx)
     {
         if ctx.expect == Some(Kind::Quantity) || ctx.expected_dimension == Some(Dimension::Length) {
             parsed.alternatives.push(Reading::quantity(
@@ -2488,7 +2762,8 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     }
 
     if features.maybe_quantity
-        && let Some((reading, suggestion, unit_text)) = parse_typo_corrected_quantity(trimmed)
+        && let Some((reading, suggestion, unit_text)) =
+            parse_typo_corrected_quantity_ctx(trimmed, ctx)
     {
         parsed.suggestions.push(suggestion);
         match ctx.strictness {
@@ -2545,6 +2820,132 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
         .findings
         .skipped
         .push(skipped(trimmed, "no supported reading matched"));
+}
+
+fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+    if let Some(result) = parse_qualified_reading(trimmed, ctx) {
+        if ctx.strictness == Strictness::Strict {
+            parsed.findings.skipped.push(skipped_with_span(
+                trimmed,
+                "approximate qualifier requires confirmation in strict mode",
+                IssueCode::Approximation,
+                span(trimmed),
+            ));
+        } else {
+            parsed.best = Some(result.reading);
+            parsed.findings.approximations = result.approximations;
+        }
+        return;
+    }
+
+    if let Some(result) = parse_fuzzy_reading(trimmed, ctx) {
+        if !ctx.accept.fuzzy {
+            reject_candidate(
+                parsed,
+                trimmed,
+                result.reading,
+                "fuzzy readings are disabled by acceptance policy",
+            );
+        } else {
+            parsed.best = Some(result.reading);
+            parsed.findings.approximations = result.approximations;
+        }
+        return;
+    }
+
+    for parser in [
+        parse_japanese_length as fn(&str) -> Option<Reading>,
+        parse_tatami_area,
+        parse_tsubo_area,
+        parse_square_meter,
+        parse_temperature,
+        parse_metric_length,
+        parse_mass,
+        parse_clock_time,
+        parse_duration,
+        parse_feet_inches,
+    ] {
+        if let Some(reading) = parser(trimmed) {
+            parsed.best = Some(reading);
+            return;
+        }
+    }
+
+    if let Some(reading) = parse_compound_registered_quantity_ctx(trimmed, ctx) {
+        if !ctx.accept.compounds {
+            reject_candidate(
+                parsed,
+                trimmed,
+                reading,
+                "compound quantity readings are disabled by acceptance policy",
+            );
+        } else {
+            parsed.best = Some(reading);
+        }
+        return;
+    }
+
+    if let Some(reading) = parse_registered_quantity(trimmed, ctx) {
+        parsed.best = Some(reading);
+        return;
+    }
+
+    if let Some((best, alternatives, ambiguity)) = parse_cups(trimmed, ctx) {
+        parsed.best = Some(best);
+        parsed.alternatives = alternatives;
+        parsed.findings.ambiguities.push(ambiguity);
+        return;
+    }
+
+    if let Some((best, alternatives, ambiguity)) = parse_currency(trimmed, ctx) {
+        parsed.best = Some(best);
+        parsed.alternatives = alternatives;
+        if let Some(ambiguity) = ambiguity {
+            parsed.findings.ambiguities.push(ambiguity);
+        }
+        return;
+    }
+
+    if let Some((reading, suggestion, unit_text)) = parse_typo_corrected_quantity_ctx(trimmed, ctx)
+    {
+        parsed.suggestions.push(suggestion);
+        match ctx.strictness {
+            Strictness::Forgiving => {
+                parsed.findings.ambiguities.push(ambiguity_with_span(
+                    &unit_text,
+                    "Unit spelling was corrected by did-you-mean matching.",
+                    Some(1),
+                    IssueCode::TypoCorrected,
+                    span_token_in(trimmed, &unit_text),
+                ));
+                parsed.best = Some(reading);
+            }
+            Strictness::Confirm | Strictness::Strict => {
+                parsed.findings.skipped.push(skipped_with_span(
+                    &unit_text,
+                    "unit spelling correction requires confirmation",
+                    IssueCode::TypoCorrected,
+                    span_token_in(trimmed, &unit_text),
+                ));
+            }
+        }
+        return;
+    }
+
+    parsed
+        .findings
+        .skipped
+        .push(skipped(trimmed, "no supported quantity matched"));
+}
+
+fn reject_candidate(parsed: &mut Parsed, text: &str, reading: Reading, reason: &str) {
+    parsed.alternatives.push(reading);
+    parsed.findings.skipped.push(skipped_with_span(
+        text,
+        reason,
+        IssueCode::RejectedByPolicy,
+        span(text),
+    ));
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -2965,6 +3366,119 @@ pub fn complete(prefix: &str, ctx: Option<ParseCtx>) -> Vec<Completion> {
     completions
 }
 
+pub fn complete_readings(text: &str, ctx: Option<ParseCtx>) -> Vec<CompletionReading> {
+    let ctx = ctx.unwrap_or_default();
+    let parsed = parse(text, Some(ctx.clone()));
+    let mut completions = Vec::new();
+    if let Some(best) = parsed.best {
+        completions.push(CompletionReading {
+            text: text.to_owned(),
+            score: best.confidence.unwrap_or(0.0),
+            reading: best,
+            reason: "best".to_owned(),
+        });
+    }
+    for alternative in parsed.alternatives {
+        completions.push(CompletionReading {
+            text: text.to_owned(),
+            score: alternative.confidence.unwrap_or(0.0),
+            reading: alternative,
+            reason: "alternative".to_owned(),
+        });
+    }
+
+    if let Some(value) = parse_number_ctx(text, &ctx) {
+        push_unit_fanout(text, value, &ctx, &mut completions);
+    }
+
+    completions.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.text.cmp(&right.text))
+    });
+    completions.truncate(24);
+    completions
+}
+
+fn push_unit_fanout(
+    text: &str,
+    value: f64,
+    ctx: &ParseCtx,
+    completions: &mut Vec<CompletionReading>,
+) {
+    let mut units = units_for_completion_fanout(ctx);
+    units.truncate(12);
+    for unit in units {
+        push_completion_reading_if_new(
+            completions,
+            CompletionReading {
+                text: format!("{} {}", text.trim(), unit.id),
+                reading: Reading::quantity(
+                    value * unit.factor,
+                    unit.canonical_unit,
+                    unit.dimension,
+                    unit.provenance,
+                    unit.approximate,
+                    0.45,
+                ),
+                score: 0.45,
+                reason: "unit_fanout".to_owned(),
+            },
+        );
+    }
+
+    for unit in &ctx.custom_units {
+        if let Some(expected) = ctx.expected_dimension
+            && expected != unit.dimension
+        {
+            continue;
+        }
+        let mut reading = Reading::quantity(
+            value * unit.factor,
+            &unit.canonical_unit,
+            unit.dimension,
+            Provenance::TradeCustom,
+            unit.approximate,
+            0.42,
+        );
+        reading.custom_kind = unit.kind_id.clone();
+        push_completion_reading_if_new(
+            completions,
+            CompletionReading {
+                text: format!("{} {}", text.trim(), unit.id),
+                reading,
+                score: 0.42,
+                reason: "custom_unit_fanout".to_owned(),
+            },
+        );
+    }
+}
+
+fn push_completion_reading_if_new(
+    completions: &mut Vec<CompletionReading>,
+    completion: CompletionReading,
+) {
+    if completions
+        .iter()
+        .any(|existing| existing.text == completion.text && existing.reading == completion.reading)
+    {
+        return;
+    }
+    completions.push(completion);
+}
+
+fn units_for_completion_fanout(ctx: &ParseCtx) -> Vec<&'static UnitDef> {
+    let dimension = ctx.expected_dimension;
+    let mut units = Vec::new();
+    for unit in UNIT_DEFS {
+        if dimension.is_none_or(|expected| expected == unit.dimension) {
+            units.push(unit);
+        }
+    }
+    units
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanonicalizeRequest {
     pub field: String,
@@ -3115,6 +3629,113 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
         ),
         _ => "unresolved".to_owned(),
     }
+}
+
+pub fn describe_reading(reading: &Reading) -> ResourceView {
+    let object = match reading.kind {
+        Kind::Quantity => "unravel.quantity",
+        Kind::Date => "unravel.date",
+        Kind::Range => "unravel.range",
+        Kind::Number => "unravel.number",
+        Kind::Recurrence => "unravel.recurrence",
+    }
+    .to_owned();
+    let mut fields = Vec::new();
+    push_resource_field(&mut fields, "kind", kind_str(reading.kind));
+    if let Some(custom_kind) = &reading.custom_kind {
+        push_resource_field(&mut fields, "custom_kind", custom_kind);
+    }
+    if let Some(value) = reading.value {
+        push_resource_field(&mut fields, "value", &format_number(value));
+    }
+    if let Some(unit) = &reading.unit {
+        push_resource_field(&mut fields, "unit", unit);
+    }
+    if let Some(dimension) = reading.dimension {
+        push_resource_field(&mut fields, "dimension", dimension.as_str());
+    }
+    if let Some(date) = &reading.date {
+        push_resource_field(&mut fields, "date", date);
+    }
+    if let Some(recurrence) = &reading.recurrence {
+        push_resource_field(&mut fields, "recurrence", recurrence);
+    }
+    if let Some(timezone) = &reading.timezone {
+        push_resource_field(&mut fields, "timezone", timezone);
+    }
+    if let Some(provenance) = reading.provenance {
+        push_resource_field(&mut fields, "provenance", provenance.as_str());
+    }
+    if let Some(approximate) = reading.approximate {
+        push_resource_field(
+            &mut fields,
+            "approximate",
+            if approximate { "true" } else { "false" },
+        );
+    }
+    if let Some(confidence) = reading.confidence {
+        push_resource_field(&mut fields, "confidence", &format_number(confidence));
+    }
+    let summary = humanize(reading, None);
+    ResourceView {
+        object,
+        summary,
+        fields,
+    }
+}
+
+pub fn describe_parsed(parsed: &Parsed) -> ResourceView {
+    let mut fields = Vec::new();
+    push_resource_field(&mut fields, "input", &parsed.input);
+    if let Some(locale) = &parsed.locale {
+        push_resource_field(&mut fields, "locale", locale.as_str());
+    }
+    push_resource_field(
+        &mut fields,
+        "ok",
+        if parsed.best.is_some() && parsed.findings.skipped.is_empty() {
+            "true"
+        } else {
+            "false"
+        },
+    );
+    push_resource_field(
+        &mut fields,
+        "skipped",
+        &parsed.findings.skipped.len().to_string(),
+    );
+    push_resource_field(
+        &mut fields,
+        "ambiguities",
+        &parsed.findings.ambiguities.len().to_string(),
+    );
+    push_resource_field(
+        &mut fields,
+        "approximations",
+        &parsed.findings.approximations.len().to_string(),
+    );
+    push_resource_field(
+        &mut fields,
+        "alternatives",
+        &parsed.alternatives.len().to_string(),
+    );
+    let summary = parsed
+        .best
+        .as_ref()
+        .map(|reading| humanize(reading, None))
+        .unwrap_or_else(|| "no supported reading".to_owned());
+    ResourceView {
+        object: "unravel.parsed".to_owned(),
+        summary,
+        fields,
+    }
+}
+
+fn push_resource_field(fields: &mut Vec<ResourceField>, name: &str, value: &str) {
+    fields.push(ResourceField {
+        name: name.to_owned(),
+        value: value.to_owned(),
+    });
 }
 
 fn parse_japanese_length(text: &str) -> Option<Reading> {
@@ -3323,7 +3944,7 @@ fn strip_suffix_ascii_case<'a>(text: &'a str, suffix: &str) -> Option<&'a str> {
 
 fn parse_registered_quantity(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     let (number_text, unit_text) = split_number_unit(text)?;
-    let value = parse_number(number_text)?;
+    let value = parse_number_ctx(number_text, ctx)?;
     if let Some(unit) = unit_by_alias(unit_text) {
         return Some(Reading::quantity(
             value * unit.factor,
@@ -3335,17 +3956,26 @@ fn parse_registered_quantity(text: &str, ctx: &ParseCtx) -> Option<Reading> {
         ));
     }
     let unit = custom_unit_by_alias(unit_text, ctx)?;
-    Some(Reading::quantity(
+    let mut reading = Reading::quantity(
         value * unit.factor,
         &unit.canonical_unit,
         unit.dimension,
         Provenance::TradeCustom,
         unit.approximate,
         0.93,
-    ))
+    );
+    reading.custom_kind = unit.kind_id.clone();
+    Some(reading)
 }
 
-fn parse_compound_registered_quantity(text: &str) -> Option<Reading> {
+fn parse_compound_registered_quantity_ctx(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    parse_compound_registered_quantity_with_format(text, ctx.number_format)
+}
+
+fn parse_compound_registered_quantity_with_format(
+    text: &str,
+    number_format: NumberFormat,
+) -> Option<Reading> {
     let parts: Vec<&str> = text.split_whitespace().collect();
     if parts.len() < 4 || !parts.len().is_multiple_of(2) {
         return None;
@@ -3358,7 +3988,7 @@ fn parse_compound_registered_quantity(text: &str) -> Option<Reading> {
     let mut approximate = false;
 
     for pair in parts.chunks_exact(2) {
-        let value = parse_number(pair[0])?;
+        let value = parse_number_with_format(pair[0], number_format)?;
         let unit = unit_by_alias(pair[1])?;
         if let Some(current_dimension) = dimension {
             if current_dimension != unit.dimension || canonical_unit != Some(unit.canonical_unit) {
@@ -3383,9 +4013,12 @@ fn parse_compound_registered_quantity(text: &str) -> Option<Reading> {
     ))
 }
 
-fn parse_typo_corrected_quantity(text: &str) -> Option<(Reading, Suggestion, String)> {
+fn parse_typo_corrected_quantity_ctx(
+    text: &str,
+    ctx: &ParseCtx,
+) -> Option<(Reading, Suggestion, String)> {
     let (number_text, unit_text) = split_number_unit(text)?;
-    let value = parse_number(number_text)?;
+    let value = parse_number_ctx(number_text, ctx)?;
     let suggestion = suggest_unit(unit_text)?;
     let corrected = unit_by_alias(&suggestion.to)?;
     let reading = Reading::quantity(
@@ -4608,7 +5241,7 @@ fn parse_cups(text: &str, ctx: &ParseCtx) -> Option<(Reading, Vec<Reading>, Ambi
         return None;
     };
     let number_text = lowered.strip_suffix(unit_text)?.trim();
-    let value = parse_number(number_text)?;
+    let value = parse_number_ctx(number_text, ctx)?;
 
     let us = Reading::quantity(
         value * US_CUP_L,
@@ -4654,7 +5287,10 @@ fn parse_cups(text: &str, ctx: &ParseCtx) -> Option<(Reading, Vec<Reading>, Ambi
     ))
 }
 
-fn parse_currency(text: &str) -> Option<(Reading, Vec<Reading>, Option<Ambiguity>)> {
+fn parse_currency(
+    text: &str,
+    ctx: &ParseCtx,
+) -> Option<(Reading, Vec<Reading>, Option<Ambiguity>)> {
     let trimmed = text.trim();
 
     for (prefix, code) in [
@@ -4673,7 +5309,7 @@ fn parse_currency(text: &str) -> Option<(Reading, Vec<Reading>, Option<Ambiguity
         ("￥", "JPY"),
     ] {
         if let Some(number_text) = strip_prefix_currency(trimmed, prefix) {
-            let value = parse_number(number_text.trim())?;
+            let value = parse_number_ctx(number_text.trim(), ctx)?;
             return Some((currency_reading(value, code, 0.95), Vec::new(), None));
         }
     }
@@ -4700,7 +5336,7 @@ fn parse_currency(text: &str) -> Option<(Reading, Vec<Reading>, Option<Ambiguity
         ("円", "JPY"),
     ] {
         if let Some(number_text) = strip_suffix_currency(trimmed, suffix) {
-            let value = parse_number(number_text.trim())?;
+            let value = parse_number_ctx(number_text.trim(), ctx)?;
             return Some((currency_reading(value, code, 0.95), Vec::new(), None));
         }
     }
@@ -4714,7 +5350,7 @@ fn parse_currency(text: &str) -> Option<(Reading, Vec<Reading>, Option<Ambiguity
         ("euro cent", "EUR"),
     ] {
         if let Some(number_text) = strip_suffix_currency(trimmed, suffix) {
-            let value = parse_number(number_text.trim())?;
+            let value = parse_number_ctx(number_text.trim(), ctx)?;
             return Some((
                 currency_reading(value / 100.0, code, 0.93),
                 Vec::new(),
@@ -4726,7 +5362,7 @@ fn parse_currency(text: &str) -> Option<(Reading, Vec<Reading>, Option<Ambiguity
     if let Some(number_text) =
         strip_suffix_currency(trimmed, "cents").or_else(|| strip_suffix_currency(trimmed, "cent"))
     {
-        let value = parse_number(number_text.trim())?;
+        let value = parse_number_ctx(number_text.trim(), ctx)?;
         let best = currency_reading(value / 100.0, "USD", 0.67);
         let alternatives = vec![currency_reading(value / 100.0, "EUR", 0.58)];
         let fragment = if trimmed.ends_with('s') {
@@ -4745,7 +5381,7 @@ fn parse_currency(text: &str) -> Option<(Reading, Vec<Reading>, Option<Ambiguity
     }
 
     if let Some(number_text) = trimmed.strip_prefix('$') {
-        let value = parse_number(number_text.trim())?;
+        let value = parse_number_ctx(number_text.trim(), ctx)?;
         let best = currency_reading(value, "USD", 0.74);
         let alternatives = vec![
             currency_reading(value, "CAD", 0.61),
@@ -4807,6 +5443,10 @@ fn normalize_currency_code(code: &str) -> String {
 
 fn parse_plain_number(text: &str) -> Option<Reading> {
     parse_number(text).map(|value| Reading::number(value, 0.99))
+}
+
+fn parse_plain_number_ctx(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    parse_number_ctx(text, ctx).map(|value| Reading::number(value, 0.99))
 }
 
 fn parse_qualified_reading(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
@@ -4877,7 +5517,58 @@ fn parse_fuzzy_reading(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
         }
     }
 
-    parse_fuzzy_temperature(text, ctx)
+    parse_custom_fuzzy_profile(text, ctx).or_else(|| parse_fuzzy_temperature(text, ctx))
+}
+
+fn parse_custom_fuzzy_profile(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
+    let normalized = normalize_alias(text);
+    for profile in &ctx.fuzzy_profiles {
+        if let Some(expected_dimension) = ctx.expected_dimension
+            && expected_dimension != profile.dimension
+        {
+            continue;
+        }
+        let Some(target_unit) = unit_by_alias(&profile.unit) else {
+            continue;
+        };
+        if target_unit.dimension != profile.dimension {
+            continue;
+        }
+        for term in &profile.terms {
+            if normalize_alias(&term.term) != normalized {
+                continue;
+            }
+            let mut reading = Reading::range(
+                Reading::quantity(
+                    term.low * target_unit.factor,
+                    target_unit.canonical_unit,
+                    profile.dimension,
+                    target_unit.provenance,
+                    target_unit.approximate,
+                    0.72,
+                ),
+                Reading::quantity(
+                    term.high * target_unit.factor,
+                    target_unit.canonical_unit,
+                    profile.dimension,
+                    target_unit.provenance,
+                    target_unit.approximate,
+                    0.72,
+                ),
+                0.72,
+            );
+            mark_approximate(&mut reading);
+            return Some(ParsedReading {
+                reading,
+                approximations: vec![approximation_with_span(
+                    text,
+                    "Custom fuzzy vocabulary normalized to a configured range.",
+                    span(text),
+                )],
+            });
+        }
+    }
+    None
 }
 
 fn parse_fuzzy_temperature(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
@@ -5048,7 +5739,10 @@ fn strip_prefix_ascii_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
         .then(|| &text[prefix.len()..])
 }
 
-fn parse_ambiguous_number(text: &str) -> Option<AmbiguousParse> {
+fn parse_ambiguous_number(text: &str, ctx: &ParseCtx) -> Option<AmbiguousParse> {
+    if ctx.number_format != NumberFormat::Auto {
+        return None;
+    }
     if text.matches(',').count() != 1 || text.contains('.') || !valid_grouped_number(text) {
         return None;
     }
@@ -5253,7 +5947,7 @@ fn parse_endpoint(text: &str, ctx: &ParseCtx) -> Option<Reading> {
         return Some(reading);
     }
     if features.maybe_currency
-        && let Some((best, _, _)) = parse_currency(text)
+        && let Some((best, _, _)) = parse_currency(text, ctx)
     {
         return Some(best);
     }
@@ -5555,6 +6249,14 @@ fn parse_weekday(text: &str) -> Option<jiff::civil::Weekday> {
 }
 
 fn parse_number(text: &str) -> Option<f64> {
+    parse_number_with_format(text, NumberFormat::Auto)
+}
+
+fn parse_number_ctx(text: &str, ctx: &ParseCtx) -> Option<f64> {
+    parse_number_with_format(text, ctx.number_format)
+}
+
+fn parse_number_with_format(text: &str, number_format: NumberFormat) -> Option<f64> {
     let normalized_input = normalize_input_cow(text);
     let trimmed = normalized_input.trim();
     if trimmed.is_empty() {
@@ -5577,7 +6279,7 @@ fn parse_number(text: &str) -> Option<f64> {
         return Some(value as f64);
     }
 
-    let normalized = normalize_locale_number(trimmed)?;
+    let normalized = normalize_locale_number(trimmed, number_format)?;
 
     if normalized
         .chars()
@@ -5589,7 +6291,7 @@ fn parse_number(text: &str) -> Option<f64> {
     }
 }
 
-fn normalize_locale_number(text: &str) -> Option<String> {
+fn normalize_locale_number(text: &str, number_format: NumberFormat) -> Option<String> {
     let compact = text
         .chars()
         .filter(|ch| !matches!(ch, ' ' | '_' | '\'' | '\u{00A0}' | '\u{202F}' | '\u{2009}'))
@@ -5599,13 +6301,25 @@ fn normalize_locale_number(text: &str) -> Option<String> {
     }
 
     if compact.contains(',') && compact.contains('.') {
-        let comma = compact.rfind(',')?;
-        let dot = compact.rfind('.')?;
-        let (decimal, grouping) = if comma > dot { (',', '.') } else { ('.', ',') };
+        let (decimal, grouping) = match number_format {
+            NumberFormat::CommaDecimal => (',', '.'),
+            NumberFormat::DotDecimal => ('.', ','),
+            NumberFormat::Auto => {
+                let comma = compact.rfind(',')?;
+                let dot = compact.rfind('.')?;
+                if comma > dot { (',', '.') } else { ('.', ',') }
+            }
+        };
         return normalize_decimal_grouped_number(&compact, decimal, grouping);
     }
 
     if compact.contains(',') {
+        if number_format == NumberFormat::CommaDecimal {
+            return Some(compact.replace(',', "."));
+        }
+        if number_format == NumberFormat::DotDecimal {
+            return normalize_grouped_decimal_free_number(&compact, ',');
+        }
         if valid_grouped_number(&compact) || valid_indian_grouped_number(&compact) {
             return Some(compact.replace(',', ""));
         }
@@ -5623,6 +6337,19 @@ fn normalize_locale_number(text: &str) -> Option<String> {
     }
 
     Some(compact)
+}
+
+fn normalize_grouped_decimal_free_number(text: &str, grouping: char) -> Option<String> {
+    let ungrouped = text.replace(grouping, "");
+    if ungrouped
+        .trim_start_matches(['-', '+'])
+        .chars()
+        .all(|ch| ch.is_ascii_digit() || ch == '.')
+    {
+        Some(ungrouped)
+    } else {
+        None
+    }
 }
 
 fn normalize_decimal_grouped_number(text: &str, decimal: char, grouping: char) -> Option<String> {
@@ -5673,7 +6400,9 @@ fn parse_number_without_large_units(text: &str) -> Option<f64> {
     if let Some(value) = parse_cjk_number(text) {
         return Some(value as f64);
     }
-    normalize_locale_number(text)?.parse::<f64>().ok()
+    normalize_locale_number(text, NumberFormat::Auto)?
+        .parse::<f64>()
+        .ok()
 }
 
 fn parse_unicode_fraction_number(text: &str) -> Option<f64> {
@@ -6467,6 +7196,10 @@ fn parsed_summary_json(parsed: &Parsed) -> String {
 fn push_reading_json(json: &mut String, reading: &Reading) {
     json.push_str("{\"kind\":");
     push_json_string(json, kind_str(reading.kind));
+    if let Some(custom_kind) = &reading.custom_kind {
+        json.push_str(",\"customKind\":");
+        push_json_string(json, custom_kind);
+    }
     if let Some(value) = reading.value {
         json.push_str(",\"value\":");
         json.push_str(&format_number(value));
@@ -6494,7 +7227,6 @@ fn push_reading_json(json: &mut String, reading: &Reading) {
     json.push('}');
 }
 
-#[cfg(any(feature = "wasm", test))]
 fn kind_str(kind: Kind) -> &'static str {
     match kind {
         Kind::Quantity => "quantity",

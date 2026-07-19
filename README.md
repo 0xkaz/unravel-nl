@@ -44,9 +44,16 @@ The first slice focuses on:
 - Relative dates such as `next friday` and `in 3 days` with the `dates-jiff`
   feature
 - Static parse input, parsed output, and MCP tool schemas for AI/tool adapters
+- Split API entry points: broad `parse()`, narrower `parse_quantity_fast()`,
+  `parse_number_fast()`, `parse_date_fast()`, `parse_recurrence_fast()`,
+  multi-value `parse_all()`, and reading-level `complete_readings()`
 - Multi-value extraction with byte spans via `parse_all()`
+- Explicit `NumberFormat` and `AcceptOptions` policies for callers that need
+  deterministic punctuation and grammar-shape control
 - Core completion candidates for unit, date, time, currency, temperature, and
   custom-unit adapter layers
+- Custom unit kind metadata, custom fuzzy vocabulary profiles, and
+  `describe_*` resource views for UI/tool adapters
 - Feature-gated WASM exports for browser or Node package adapters
 - No-Silent-Loss findings for skipped, ambiguous, and approximate readings
 - A normalized parser dispatch path and exact-first unit alias lookup to keep
@@ -75,6 +82,31 @@ assert_eq!(
     "5尺3寸 (approx.)"
 );
 ```
+
+## API Entry Points
+
+Use `parse()` as the broad compatibility entry point when the input can be a
+quantity, date, range, recurrence, conversion, or plain number. Use narrower
+entry points when the UI already knows the field type:
+
+```rust
+use unravel_nl::{parse_quantity_fast, Dimension, ParseCtx};
+
+let parsed = parse_quantity_fast(
+    "1,234 kg",
+    Some(ParseCtx {
+        expected_dimension: Some(Dimension::Mass),
+        ..ParseCtx::default()
+    }),
+);
+
+assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("kg"));
+```
+
+Available specialized entries are `parse_quantity_fast()`,
+`parse_number_fast()`, `parse_date_fast()`, and `parse_recurrence_fast()`.
+`parse_all()` scans sentences for multiple values and `complete_readings()`
+returns ranked canonical readings for completion UIs.
 
 ## Multi-Value Extraction
 
@@ -233,16 +265,48 @@ let parsed = parse(
 assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("m"));
 ```
 
+Custom units can also carry an application-facing kind label:
+
+```rust
+use unravel_nl::{parse, CustomUnit, Dimension, ParseCtx};
+
+let parsed = parse(
+    "3 cases",
+    Some(ParseCtx {
+        custom_units: vec![CustomUnit::new(
+            "case",
+            "item",
+            &["case", "cases"],
+            Dimension::Volume,
+            24.0,
+        ).kind("package_count")],
+        ..ParseCtx::default()
+    }),
+);
+
+assert_eq!(parsed.best.unwrap().custom_kind.as_deref(), Some("package_count"));
+```
+
 ## Completions
 
 ```rust
-use unravel_nl::{complete, CompletionKind};
+use unravel_nl::{complete, complete_readings, CompletionKind, Dimension, ParseCtx};
 
 let completions = complete("10 met", None);
 
 assert_eq!(completions[0].value, "meter");
 assert_eq!(completions[0].canonical.as_deref(), Some("m"));
 assert_eq!(completions[0].kind, CompletionKind::Unit);
+
+let readings = complete_readings(
+    "10",
+    Some(ParseCtx {
+        expected_dimension: Some(Dimension::Mass),
+        ..ParseCtx::default()
+    }),
+);
+
+assert!(readings.iter().any(|item| item.text == "10 kg"));
 ```
 
 ## Temperature
@@ -262,7 +326,7 @@ assert_eq!(humanize(&best, None), "20 °C");
 ## Approximate And Fuzzy Input
 
 ```rust
-use unravel_nl::{parse, Dimension, ParseCtx};
+use unravel_nl::{parse, Dimension, FuzzyProfile, FuzzyTerm, ParseCtx};
 
 let tolerance = parse("10 ± 0.5 mm", None);
 assert!(tolerance.best.unwrap().range.is_some());
@@ -279,6 +343,59 @@ let hot = parse(
 );
 
 assert!(hot.best.unwrap().range.is_some());
+
+let custom = parse(
+    "heavy",
+    Some(ParseCtx {
+        expected_dimension: Some(Dimension::Mass),
+        fuzzy_profiles: vec![FuzzyProfile::new(
+            "parcels",
+            Dimension::Mass,
+            "kg",
+            &[FuzzyTerm::new("heavy", 20.0, 70.0)],
+        )],
+        ..ParseCtx::default()
+    }),
+);
+
+assert!(custom.best.unwrap().range.is_some());
+```
+
+Callers that must reject broad grammar shapes can use `AcceptOptions`:
+
+```rust
+use unravel_nl::{parse, AcceptOptions, ParseCtx};
+
+let parsed = parse(
+    "between 5 and 10 kg",
+    Some(ParseCtx {
+        accept: AcceptOptions {
+            ranges: false,
+            ..AcceptOptions::default()
+        },
+        ..ParseCtx::default()
+    }),
+);
+
+assert!(parsed.best.is_none());
+assert_eq!(parsed.alternatives.len(), 1);
+```
+
+Numeric punctuation can be pinned with `NumberFormat` when locale inference is
+too permissive:
+
+```rust
+use unravel_nl::{parse, NumberFormat, ParseCtx};
+
+let parsed = parse(
+    "1,234 kg",
+    Some(ParseCtx {
+        number_format: NumberFormat::CommaDecimal,
+        ..ParseCtx::default()
+    }),
+);
+
+assert_eq!(parsed.best.unwrap().value, Some(1.234));
 ```
 
 ## Currency Rates
@@ -335,6 +452,7 @@ Run the local parser benchmark with:
 ```sh
 cargo run --release --example bench
 cargo run --release --all-features --example bench
+cargo run --release --all-features --example entry_bench
 ```
 
 Pass an iteration count as the first argument, for example
