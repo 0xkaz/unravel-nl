@@ -210,6 +210,21 @@ fn editor_dimension_scanner_does_not_guess_unknown_unitless_labels() {
 }
 
 #[test]
+fn editor_dimension_scanner_rejects_label_dimension_mismatches() {
+    let matches = parse_dimensions_for_editor(
+        "floor area 105mm、wall thickness 12㎡、floor area 1200、floor area 12㎡、wall thickness 105mm",
+        Some(ParseCtx {
+            locale: Some(Locale::Ja),
+            ..ParseCtx::default()
+        }),
+    );
+
+    assert_eq!(texts(&matches), vec!["12㎡", "105mm"]);
+    assert_quantity(&matches[0], 12.0, "m2", Dimension::Area);
+    assert_quantity(&matches[1], 0.105, "m", Dimension::Length);
+}
+
+#[test]
 fn parse_purpose_limits_broad_parser_work() {
     let dimension = parse(
         "3640",
