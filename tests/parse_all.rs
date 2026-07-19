@@ -225,6 +225,22 @@ fn editor_dimension_scanner_rejects_label_dimension_mismatches() {
 }
 
 #[test]
+fn editor_dimension_scanner_rejects_embedded_identifier_quantities() {
+    let matches = parse_dimensions_for_editor(
+        "beamA105mm、part_1200mm、room width900mm、wall thickness105mm、壁厚105mm",
+        Some(ParseCtx {
+            locale: Some(Locale::Ja),
+            ..ParseCtx::default()
+        }),
+    );
+
+    assert_eq!(texts(&matches), vec!["900mm", "105mm", "105mm"]);
+    assert_quantity(&matches[0], 0.9, "m", Dimension::Length);
+    assert_quantity(&matches[1], 0.105, "m", Dimension::Length);
+    assert_quantity(&matches[2], 0.105, "m", Dimension::Length);
+}
+
+#[test]
 fn parse_purpose_limits_broad_parser_work() {
     let dimension = parse(
         "3640",

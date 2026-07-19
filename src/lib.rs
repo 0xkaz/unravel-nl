@@ -2711,6 +2711,9 @@ fn push_editor_dimension_match(
     }
 
     let hint = editor_dimension_hint(source, clause_start, start);
+    if hint.is_none() && candidate_has_identifier_prefix(source, clause_start, start) {
+        return;
+    }
     let local_ctx_storage;
     let local_ctx = if ctx.expected_dimension.is_none() {
         if let Some(hint) = hint {
@@ -2917,6 +2920,21 @@ fn parsed_is_editor_dimension(
         .alternatives
         .iter()
         .any(|reading| reading_is_dimension_quantity(reading, allowed_dimension))
+}
+
+fn candidate_has_identifier_prefix(
+    source: &str,
+    clause_start: usize,
+    candidate_start: usize,
+) -> bool {
+    source
+        .get(clause_start..candidate_start)
+        .and_then(|before| before.chars().next_back())
+        .is_some_and(is_embedded_identifier_char)
+}
+
+fn is_embedded_identifier_char(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric() || matches!(ch, 'Ａ'..='Ｚ' | 'ａ'..='ｚ' | '０'..='９')
 }
 
 fn reading_is_dimension_quantity(reading: &Reading, expected_dimension: Option<Dimension>) -> bool {
