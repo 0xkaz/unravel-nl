@@ -1,4 +1,7 @@
-use unravel_nl::{Dimension, IssueCode, Kind, Locale, ParseCtx, Strictness, parse_all};
+use unravel_nl::{
+    Dimension, IssueCode, Kind, Locale, ParseCtx, ParsePurpose, Strictness, parse, parse_all,
+    parse_dimensions_for_editor,
+};
 
 #[test]
 fn extracts_multiple_values_with_spans() {
@@ -48,7 +51,7 @@ fn extracts_full_width_and_cjk_number_values() {
 }
 
 #[test]
-fn extracts_bim_hub_editor_dimension_windows() {
+fn extracts_editor_dimension_windows() {
     let ctx = Some(ParseCtx {
         locale: Some(Locale::Ja),
         expected_dimension: Some(Dimension::Length),
@@ -77,7 +80,7 @@ fn extracts_bim_hub_editor_dimension_windows() {
 }
 
 #[test]
-fn extracts_bim_hub_area_and_strict_approximation_policy() {
+fn extracts_area_and_strict_approximation_policy() {
     let areas = parse_all(
         "6帖 / 4畳半",
         Some(ParseCtx {
@@ -104,6 +107,54 @@ fn extracts_bim_hub_area_and_strict_approximation_policy() {
         strict[0].parsed.findings.skipped[0].code,
         IssueCode::Approximation
     );
+}
+
+#[test]
+fn extracts_editor_dimensions_without_general_values() {
+    let input = "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640、壁厚105mm";
+    let matches = parse_dimensions_for_editor(
+        input,
+        Some(ParseCtx {
+            locale: Some(Locale::Ja),
+            ..ParseCtx::default()
+        }),
+    );
+
+    assert_eq!(texts(&matches), vec!["3m", "4m", "6帖", "3640", "105mm"]);
+    assert_quantity(&matches[0], 3.0, "m", Dimension::Length);
+    assert_quantity(&matches[1], 4.0, "m", Dimension::Length);
+    assert_quantity(&matches[2], 9.72, "m2", Dimension::Area);
+    assert_quantity(&matches[4], 0.105, "m", Dimension::Length);
+
+    let plain = matches[3].parsed.best.as_ref().expect("plain number");
+    assert_eq!(plain.kind, Kind::Number);
+    assert_eq!(plain.value, Some(3640.0));
+    assert_eq!(
+        matches[3].parsed.alternatives[0].unit.as_deref(),
+        Some("mm")
+    );
+}
+
+#[test]
+fn parse_purpose_limits_broad_parser_work() {
+    let dimension = parse(
+        "3640",
+        Some(ParseCtx {
+            purpose: ParsePurpose::DimensionEditor,
+            ..ParseCtx::default()
+        }),
+    );
+    assert_eq!(dimension.best.as_ref().unwrap().kind, Kind::Number);
+    assert_eq!(dimension.alternatives[0].unit.as_deref(), Some("mm"));
+
+    let non_dimension = parse(
+        "¥1,234",
+        Some(ParseCtx {
+            purpose: ParsePurpose::DimensionEditor,
+            ..ParseCtx::default()
+        }),
+    );
+    assert!(non_dimension.best.is_none(), "{non_dimension:#?}");
 }
 
 fn texts(matches: &[unravel_nl::ParsedMatch]) -> Vec<&str> {

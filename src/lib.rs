@@ -118,6 +118,25 @@ pub fn parse_all_json_with_context(
     )
 }
 
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn parse_dimensions_for_editor_json(text: &str) -> String {
+    parsed_matches_summary_json(text, &parse_dimensions_for_editor(text, None))
+}
+
+#[cfg(feature = "wasm")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn parse_dimensions_for_editor_json_with_context(
+    text: &str,
+    locale: &str,
+    expected_dimension: &str,
+    strictness: &str,
+) -> String {
+    let mut ctx = parse_wasm_context(locale, expected_dimension, strictness);
+    ctx.purpose = ParsePurpose::DimensionEditor;
+    parsed_matches_summary_json(text, &parse_dimensions_for_editor(text, Some(ctx)))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnitDef {
     pub id: &'static str,
@@ -1396,6 +1415,12 @@ const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
       "default": "auto",
       "description": "Explicit numeric punctuation policy. Use comma_decimal for 1,5 and dot_decimal for 1,234 grouping."
     },
+    "purpose": {
+      "type": "string",
+      "enum": ["general", "quantity", "number", "date", "recurrence", "dimension_editor"],
+      "default": "general",
+      "description": "Optional grammar dispatch hint. Use dimension_editor for UI fields that only accept building dimensions."
+    },
     "accept": {
       "type": "object",
       "additionalProperties": false,
@@ -1755,6 +1780,30 @@ pub enum NumberFormat {
     DotDecimal,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ParsePurpose {
+    #[default]
+    General,
+    Quantity,
+    Number,
+    Date,
+    Recurrence,
+    DimensionEditor,
+}
+
+impl ParsePurpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::Quantity => "quantity",
+            Self::Number => "number",
+            Self::Date => "date",
+            Self::Recurrence => "recurrence",
+            Self::DimensionEditor => "dimension_editor",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AcceptOptions {
     pub ranges: bool,
@@ -1820,6 +1869,7 @@ pub struct ParseCtx {
     pub expect: Option<Kind>,
     pub expected_dimension: Option<Dimension>,
     pub number_format: NumberFormat,
+    pub purpose: ParsePurpose,
     pub accept: AcceptOptions,
     pub reference_date: Option<Date>,
     pub timezone: Option<String>,
@@ -2316,7 +2366,14 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         return parsed;
     }
 
-    parse_normalized_into(trimmed, &ctx, &mut parsed);
+    match ctx.purpose {
+        ParsePurpose::General => parse_normalized_into(trimmed, &ctx, &mut parsed),
+        ParsePurpose::Quantity => parse_quantity_fast_into(trimmed, &ctx, &mut parsed),
+        ParsePurpose::Number => parse_number_fast_into(trimmed, &ctx, &mut parsed),
+        ParsePurpose::Date => parse_date_fast_into(trimmed, &ctx, &mut parsed),
+        ParsePurpose::Recurrence => parse_recurrence_fast_into(trimmed, &mut parsed),
+        ParsePurpose::DimensionEditor => parse_editor_dimension_into(trimmed, &ctx, &mut parsed),
+    }
     parsed
 }
 
@@ -2356,18 +2413,7 @@ fn parse_number_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
             .push(skipped(trimmed, "empty input"));
         return parsed;
     }
-    if let Some(ambiguous) = parse_ambiguous_number(trimmed, ctx) {
-        parsed.best = ambiguous.best;
-        parsed.alternatives = ambiguous.alternatives;
-        parsed.findings.ambiguities.push(ambiguous.ambiguity);
-    } else if let Some(reading) = parse_plain_number_ctx(trimmed, ctx) {
-        set_plain_number_result(trimmed, ctx, reading, &mut parsed);
-    } else {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "no supported number matched"));
-    }
+    parse_number_fast_into(trimmed, ctx, &mut parsed);
     parsed
 }
 
@@ -2383,21 +2429,7 @@ pub fn parse_recurrence_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             .push(skipped(trimmed, "empty input"));
         return parsed;
     }
-    if let Some(reading) = parse_recurrence(trimmed) {
-        parsed.best = Some(reading);
-    } else if let Some(recurrence) = unsupported_recurrence_phrase(trimmed) {
-        parsed.findings.skipped.push(skipped_with_span(
-            recurrence,
-            "recurring date/time expressions require a recurrence adapter and are not interpreted by the core parser",
-            IssueCode::RecurrenceUnsupported,
-            span_token_in(trimmed, recurrence),
-        ));
-    } else {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "no supported recurrence matched"));
-    }
+    parse_recurrence_fast_into(trimmed, &mut parsed);
     parsed
 }
 
@@ -2413,14 +2445,7 @@ pub fn parse_date_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             .push(skipped(trimmed, "empty input"));
         return parsed;
     }
-    if let Some(reading) = parse_relative_date(trimmed, &ctx) {
-        parsed.best = Some(reading);
-    } else {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "no supported date matched"));
-    }
+    parse_date_fast_into(trimmed, &ctx, &mut parsed);
     parsed
 }
 
@@ -2441,6 +2466,36 @@ pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
     for candidate in parse_all_candidate_spans(text) {
         push_parsed_match(&mut matches, text, candidate, &ctx);
     }
+    matches.sort_by(|left, right| {
+        left.start
+            .cmp(&right.start)
+            .then_with(|| right.end.cmp(&left.end))
+    });
+
+    let mut non_overlapping: Vec<ParsedMatch> = Vec::new();
+    for candidate in matches {
+        if non_overlapping.iter().any(|existing| {
+            spans_overlap(existing.start, existing.end, candidate.start, candidate.end)
+        }) {
+            continue;
+        }
+        non_overlapping.push(candidate);
+    }
+    non_overlapping
+}
+
+pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
+    let mut ctx = ctx.unwrap_or_default();
+    ctx.purpose = ParsePurpose::DimensionEditor;
+    ctx.expect = Some(Kind::Quantity);
+
+    let mut matches = Vec::new();
+    for (clause_start, clause_end) in clause_spans(text) {
+        for candidate in numeric_candidate_spans(text, clause_start, clause_end) {
+            push_editor_dimension_match(&mut matches, text, candidate, clause_start, &ctx);
+        }
+    }
+
     matches.sort_by(|left, right| {
         left.start
             .cmp(&right.start)
@@ -2487,6 +2542,50 @@ fn push_parsed_match(
     if !parsed_has_actionable_match(&parsed) {
         return;
     }
+    let leading = source[start..end].len() - source[start..end].trim_start().len();
+    let trailing = source[start..end].len() - source[start..end].trim_end().len();
+    matches.push(ParsedMatch {
+        start: start + leading,
+        end: end - trailing,
+        text: text.to_owned(),
+        parsed,
+    });
+}
+
+fn push_editor_dimension_match(
+    matches: &mut Vec<ParsedMatch>,
+    source: &str,
+    candidate: CandidateSpan,
+    clause_start: usize,
+    ctx: &ParseCtx,
+) {
+    let start = candidate.start;
+    let end = candidate.end;
+    if start >= end
+        || matches
+            .iter()
+            .any(|item| item.start == start && item.end == end)
+    {
+        return;
+    }
+    let Some(text) = source.get(start..end).map(str::trim) else {
+        return;
+    };
+    if text.is_empty() {
+        return;
+    }
+
+    let hint = editor_dimension_hint(source, clause_start, start);
+    let mut local_ctx = ctx.clone();
+    if local_ctx.expected_dimension.is_none() {
+        local_ctx.expected_dimension = hint;
+    }
+    let mut parsed = parsed_shell(text, &local_ctx);
+    parse_editor_dimension_into(text, &local_ctx, &mut parsed);
+    if !parsed_is_editor_dimension(&parsed, hint, ctx.expected_dimension) {
+        return;
+    }
+
     let leading = source[start..end].len() - source[start..end].trim_start().len();
     let trailing = source[start..end].len() - source[start..end].trim_end().len();
     matches.push(ParsedMatch {
@@ -2618,6 +2717,104 @@ fn parsed_has_actionable_match(parsed: &Parsed) -> bool {
             .skipped
             .iter()
             .any(|issue| !matches!(issue.code, IssueCode::NoValue | IssueCode::UnknownUnit))
+}
+
+fn parsed_is_editor_dimension(
+    parsed: &Parsed,
+    hint: Option<Dimension>,
+    expected_dimension: Option<Dimension>,
+) -> bool {
+    let allowed_dimension = expected_dimension.or(hint);
+    if let Some(best) = parsed.best.as_ref() {
+        if reading_is_dimension_quantity(best, allowed_dimension) {
+            return true;
+        }
+        if best.kind == Kind::Number {
+            return allowed_dimension == Some(Dimension::Length)
+                && parsed
+                    .alternatives
+                    .iter()
+                    .any(|reading| reading.dimension == Some(Dimension::Length));
+        }
+    }
+    parsed
+        .alternatives
+        .iter()
+        .any(|reading| reading_is_dimension_quantity(reading, allowed_dimension))
+}
+
+fn reading_is_dimension_quantity(reading: &Reading, expected_dimension: Option<Dimension>) -> bool {
+    if reading.kind != Kind::Quantity {
+        return false;
+    }
+    match reading.dimension {
+        Some(Dimension::Length | Dimension::Area) => match expected_dimension {
+            Some(dimension) => reading.dimension == Some(dimension),
+            None => true,
+        },
+        _ => false,
+    }
+}
+
+fn editor_dimension_hint(
+    source: &str,
+    clause_start: usize,
+    candidate_start: usize,
+) -> Option<Dimension> {
+    let before = source.get(clause_start..candidate_start)?.trim_end();
+    let before = before
+        .trim_end_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(ch, ':' | '：' | '=' | '＝' | '-' | 'ー' | '―' | '–' | '—')
+        })
+        .trim_end();
+    let lower = ascii_lower_cow(before);
+    let compact = lower
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+
+    if [
+        "延床",
+        "延べ床",
+        "床面積",
+        "敷地面積",
+        "面積",
+        "area",
+        "floorarea",
+        "sitearea",
+    ]
+    .iter()
+    .any(|label| compact.ends_with(label))
+    {
+        return Some(Dimension::Area);
+    }
+
+    if [
+        "寸法",
+        "幅",
+        "高さ",
+        "壁厚",
+        "厚さ",
+        "長さ",
+        "奥行",
+        "奥行き",
+        "w",
+        "h",
+        "d",
+        "width",
+        "height",
+        "depth",
+        "length",
+        "wallthickness",
+    ]
+    .iter()
+    .any(|label| compact.ends_with(label))
+    {
+        return Some(Dimension::Length);
+    }
+
+    None
 }
 
 fn is_candidate_start_at(text: &str, idx: usize, ch: char) -> bool {
@@ -3145,6 +3342,45 @@ fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
         .push(skipped(trimmed, "no supported reading matched"));
 }
 
+fn parse_editor_dimension_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+    let mut local_ctx = ctx.clone();
+    local_ctx.purpose = ParsePurpose::Quantity;
+    local_ctx.expect = Some(Kind::Quantity);
+
+    parse_quantity_fast_into(trimmed, &local_ctx, parsed);
+    if parsed_is_editor_dimension(
+        parsed,
+        local_ctx.expected_dimension,
+        local_ctx.expected_dimension,
+    ) {
+        return;
+    }
+
+    let mut number_ctx = local_ctx.clone();
+    if number_ctx.expected_dimension.is_none() {
+        number_ctx.expected_dimension = Some(Dimension::Length);
+    }
+    let mut number = parsed_shell(trimmed, &number_ctx);
+    parse_number_fast_into(trimmed, &number_ctx, &mut number);
+    if parsed_is_editor_dimension(
+        &number,
+        number_ctx.expected_dimension,
+        number_ctx.expected_dimension,
+    ) {
+        *parsed = number;
+        return;
+    }
+
+    parsed.best = None;
+    parsed.alternatives.clear();
+    parsed.suggestions.clear();
+    parsed.findings = Findings::default();
+    parsed
+        .findings
+        .skipped
+        .push(skipped(trimmed, "no supported editor dimension matched"));
+}
+
 fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     if let Some(result) = parse_qualified_reading(trimmed, ctx) {
         if ctx.strictness == Strictness::Strict {
@@ -3265,6 +3501,50 @@ fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) 
         .findings
         .skipped
         .push(skipped(trimmed, "no supported quantity matched"));
+}
+
+fn parse_number_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+    if let Some(ambiguous) = parse_ambiguous_number(trimmed, ctx) {
+        parsed.best = ambiguous.best;
+        parsed.alternatives = ambiguous.alternatives;
+        parsed.findings.ambiguities.push(ambiguous.ambiguity);
+    } else if let Some(reading) = parse_plain_number_ctx(trimmed, ctx) {
+        set_plain_number_result(trimmed, ctx, reading, parsed);
+    } else {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "no supported number matched"));
+    }
+}
+
+fn parse_date_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+    if let Some(reading) = parse_relative_date(trimmed, ctx) {
+        parsed.best = Some(reading);
+    } else {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "no supported date matched"));
+    }
+}
+
+fn parse_recurrence_fast_into(trimmed: &str, parsed: &mut Parsed) {
+    if let Some(reading) = parse_recurrence(trimmed) {
+        parsed.best = Some(reading);
+    } else if let Some(recurrence) = unsupported_recurrence_phrase(trimmed) {
+        parsed.findings.skipped.push(skipped_with_span(
+            recurrence,
+            "recurring date/time expressions require a recurrence adapter and are not interpreted by the core parser",
+            IssueCode::RecurrenceUnsupported,
+            span_token_in(trimmed, recurrence),
+        ));
+    } else {
+        parsed
+            .findings
+            .skipped
+            .push(skipped(trimmed, "no supported recurrence matched"));
+    }
 }
 
 fn set_plain_number_result(text: &str, ctx: &ParseCtx, reading: Reading, parsed: &mut Parsed) {

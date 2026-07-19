@@ -12,6 +12,9 @@ The web target emits `parse_json(text)`, `parse_json_with_locale(text, locale)`,
 `parse_json_with_context(text, locale, expected_dimension, strictness)`,
 `parse_all_json(text)`, `parse_all_json_with_locale(text, locale)`, and
 `parse_all_json_with_context(text, locale, expected_dimension, strictness)`.
+It also emits `parse_dimensions_for_editor_json(text)` and
+`parse_dimensions_for_editor_json_with_context(text, locale, expected_dimension,
+strictness)` for building-dimension-only editor scans.
 Single-value exports return a compact JSON summary with `ok`, `best`, and
 ranked `issues` fields. Multi-value exports return an array of matches with
 byte spans, character spans, original text, and a compact parsed summary. The
@@ -24,9 +27,9 @@ Measured on the development machine on 2026-07-20:
 
 | Command | Output | Size / digest |
 | --- | --- | --- |
-| `wasm-pack build --target web --out-dir pkg -- --features wasm` | `pkg/` | 312K |
-| same | `pkg/unravel_nl_bg.wasm` | 269,998 bytes |
-| same | `pkg/unravel_nl_bg.wasm` sha256 | `81b35e7667661ab1a72ebe9ff82e7e07ab6fe4634e3f9c7cedfeb92fbabbc164` |
+| `wasm-pack build --target web --out-dir pkg -- --features wasm` | `pkg/` | 328K |
+| same | `pkg/unravel_nl_bg.wasm` | 280,435 bytes |
+| same | `pkg/unravel_nl_bg.wasm` sha256 | `38bde97f8f6d5a8725860f4c81abe824357792ed9b0375e19a43d68254521833` |
 
 Smoke checks:
 

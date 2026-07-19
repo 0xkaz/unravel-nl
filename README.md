@@ -46,7 +46,8 @@ The first slice focuses on:
 - Static parse input, parsed output, and MCP tool schemas for AI/tool adapters
 - Split API entry points: broad `parse()`, narrower `parse_quantity_fast()`,
   `parse_number_fast()`, `parse_date_fast()`, `parse_recurrence_fast()`,
-  multi-value `parse_all()`, and reading-level `complete_readings()`
+  multi-value `parse_all()`, editor-focused `parse_dimensions_for_editor()`,
+  and reading-level `complete_readings()`
 - Multi-value extraction with byte spans via `parse_all()`
 - Explicit `NumberFormat` and `AcceptOptions` policies for callers that need
   deterministic punctuation and grammar-shape control
@@ -106,8 +107,11 @@ assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("kg"));
 
 Available specialized entries are `parse_quantity_fast()`,
 `parse_number_fast()`, `parse_date_fast()`, and `parse_recurrence_fast()`.
-`parse_all()` scans sentences for multiple values and `complete_readings()`
-returns ranked canonical readings for completion UIs.
+Use `ParseCtx::purpose` when a single `parse()` call should avoid broad
+grammar dispatch. `parse_all()` scans sentences for multiple values,
+`parse_dimensions_for_editor()` scans only building dimensions and unitless
+dimension fields, and `complete_readings()` returns ranked canonical readings
+for completion UIs.
 
 ## Multi-Value Extraction
 
@@ -126,6 +130,26 @@ assert_eq!(matches.len(), 3);
 assert_eq!(matches[0].text, "延床100㎡");
 assert_eq!(matches[0].parsed.best.as_ref().unwrap().dimension, Some(Dimension::Area));
 assert_eq!(matches[2].text, "3.5m");
+```
+
+For editor fields that only accept dimensions, use the dedicated scanner. It
+extracts length and area values, keeps Japanese building units, and avoids
+currency/date/general grammar:
+
+```rust
+use unravel_nl::{parse_dimensions_for_editor, Dimension, Locale, ParseCtx};
+
+let matches = parse_dimensions_for_editor(
+    "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640",
+    Some(ParseCtx {
+        locale: Some(Locale::Ja),
+        ..ParseCtx::default()
+    }),
+);
+
+assert_eq!(matches.len(), 4);
+assert_eq!(matches[0].parsed.best.as_ref().unwrap().dimension, Some(Dimension::Length));
+assert_eq!(matches[2].parsed.best.as_ref().unwrap().dimension, Some(Dimension::Area));
 ```
 
 The Rust scanner preserves byte spans and uses a token-window dispatch path for

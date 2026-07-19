@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   parse_all_json_with_context,
   parse_all_json_with_locale,
+  parse_dimensions_for_editor_json_with_context,
   parse_json,
   parse_json_with_context,
   parse_json_with_locale,
@@ -40,6 +41,21 @@ const plainLength = JSON.parse(parse_all_json_with_context("寸法3640", "ja", "
 assert.equal(plainLength.length, 1);
 assert.equal(plainLength[0].parsed.best.kind, "number");
 assert.equal(plainLength[0].parsed.issues[0].code, "UNIT_ASSUMED");
+
+const editorDimensions = JSON.parse(
+  parse_dimensions_for_editor_json_with_context(
+    "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640",
+    "ja",
+    "",
+    "",
+  ),
+);
+assert.deepEqual(
+  editorDimensions.map((match) => match.text),
+  ["3m", "4m", "6帖", "3640"],
+);
+assert.equal(editorDimensions[3].parsed.best.kind, "number");
+assert.equal(editorDimensions[3].parsed.issues[0].code, "UNIT_ASSUMED");
 
 const strictApproximation = JSON.parse(parse_json_with_context("約3m", "ja", "length", "strict"));
 assert.equal(strictApproximation.ok, false);
