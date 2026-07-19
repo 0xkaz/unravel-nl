@@ -1,0 +1,43 @@
+# input	locale	kind	dimension	unit	value	date	range_from	range_to
+5尺3寸	ja	quantity	length	m	1.6060606061			
+6帖	ja	quantity	area	m2	9.72			
+延床100㎡	ja	quantity	area	m2	100			
+1,234	en	number			1234			
+5ft 11	en-US	quantity	length	m	1.8034			
+1.5 cups	en	quantity	volume	L	0.35488235475			
+90 min	en	quantity	time	s	5400			
+an hour and a half	en	quantity	time	s	5400			
+1,5 kg	en	quantity	mass	kg	1.5			
+twenty-five kg	en	quantity	mass	kg	25			
+1½ cups	en	quantity	volume	L	0.35488235475			
+2 lb 3 oz	en	quantity	mass	kg	0.992233309375			
+500 KB	en	quantity	data	B	500000			
+5 Mbps	en	quantity	data_rate	bit/s	5000000			
+5 gpm	en	quantity	flow_rate	m3/s	0.000315450982			
+500 mAh	en	quantity	charge	C	1800			
+10 inH₂O	en	quantity	pressure	Pa	2490.8891			
+1 kgf/cm²	en	quantity	pressure	Pa	98066.5			
+about 20C	en	quantity	temperature	C	20			
+約20kg	ja	quantity	mass	kg	20			
+10平目	ja	quantity	area	m2	10			
+約3坪	ja	quantity	area	m2	9.9173553719			
+4畳半	ja	quantity	area	m2	7.29			
+1間半	ja	quantity	length	m	2.7272727273			
+2〜3時間	ja	range	time	s			7200	10800
+12 metrs	en	quantity	length	m	12			
+1,234 kg	en-GB	quantity	mass	kg	1234			
+1,5 litros	es	quantity	volume	L	1.5			
+2 metros cuadrados	es	quantity	area	m2	2			
+3 kilogrmos	es	quantity	mass	kg	3			
+1,5 litre	fr	quantity	volume	L	1.5			
+2 mètres carrés	fr	quantity	area	m2	2			
+10 quilômetros	pt	quantity	length	m	10000			
+5 quilometors	pt	quantity	length	m	5000			
+3公斤	zh	quantity	mass	kg	3			
+100-120㎡	ja	range	area	m2			100	120
+10 ± 0.5 mm	en	range	length	m			0.0095	0.0105
+under 10 minutes	en	range	time	s			0	600
+10mm以下	ja	range	length	m			0	0.01
+3pm	en	quantity	time	s	54000			
+午後3時	ja	quantity	time	s	54000			
+午前9時30分	ja	quantity	time	s	34200			

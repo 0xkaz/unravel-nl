@@ -22,6 +22,11 @@ The first slice focuses on:
 - Approximate, tolerance, and bounded input such as `about 20C`, `約20kg`,
   `10 ± 0.5 mm`, `a few minutes`, `under 10 minutes`, `10mm以下`, and
   temperature phrases like `it's hot`
+- Golden corpus and round-trip tests for representative canonical readings,
+  including common examples from public natural-language parsing behavior
+- Locale alias slices for en-GB, Spanish, French, Portuguese, Chinese, and
+  Japanese inputs such as `05/06/2026`, `1,5 litros`, `2 mètres carrés`,
+  `10 quilômetros`, `明天`, `下周五`, `4畳半`, and `1間半`
 - Currency amounts such as `USD 12.34`, `12 bucks`, `99 pence`, `¥1,234`, and
   ambiguous `$12`
 - Temperature input such as `20°C`, `68 F`, `293.15 K`, and `摂氏20度`
@@ -97,6 +102,11 @@ let parsed = parse(
 
 assert_eq!(parsed.best.unwrap().date.as_deref(), Some("2026-07-24"));
 ```
+
+The core parser never reads the host system clock or timezone. Relative dates
+must be given an explicit `reference_date`; adapter layers can pass a `timezone`
+hint, and timezone-qualified wall-clock strings such as `3pm EST` fail loudly
+until an adapter defines a policy for them.
 
 ## Unit Registry And Strictness
 
@@ -217,14 +227,27 @@ assert_eq!(best.value, Some(1500.0));
 
 ```rust
 use unravel_nl::{
-    contract_version, mcp_tool_schema_json, parse_input_schema_json,
-    parsed_output_schema_json,
+    canonicalize_values, contract_version, mcp_tool_schema_json,
+    parse_input_schema_json, parsed_output_schema_json, CanonicalizeRequest,
+    ParseCtx, Strictness,
 };
 
 assert_eq!(contract_version(), "unravel-nl.parse.v1");
 assert!(parse_input_schema_json().contains("\"text\""));
 assert!(parsed_output_schema_json().contains("\"findings\""));
 assert!(mcp_tool_schema_json().contains("unravel_nl_parse"));
+
+let values = canonicalize_values(&[CanonicalizeRequest::new(
+    "weight",
+    "about 20kg",
+    Some(ParseCtx {
+        strictness: Strictness::Strict,
+        ..ParseCtx::default()
+    }),
+)]);
+
+assert!(!values[0].ok);
+assert!(values[0].message.as_ref().unwrap().contains("[APPROXIMATION]"));
 ```
 
 ## Benchmark

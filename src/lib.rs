@@ -61,7 +61,9 @@ const UNIT_DEFS: &[UnitDef] = &[
     UnitDef {
         id: "m",
         canonical_unit: "m",
-        aliases: &["m", "meter", "meters", "metre", "metres"],
+        aliases: &[
+            "m", "meter", "meters", "metre", "metres", "metro", "metros", "mètre", "mètres", "米",
+        ],
         dimension: Dimension::Length,
         factor: 1.0,
         provenance: Provenance::SiMultiple,
@@ -78,6 +80,15 @@ const UNIT_DEFS: &[UnitDef] = &[
             "kilometres",
             "klick",
             "klicks",
+            "kilómetro",
+            "kilómetros",
+            "kilometro",
+            "kilometros",
+            "quilômetro",
+            "quilômetros",
+            "quilometro",
+            "quilometros",
+            "公里",
         ],
         dimension: Dimension::Length,
         factor: 1000.0,
@@ -224,8 +235,13 @@ const UNIT_DEFS: &[UnitDef] = &[
             "kilo",
             "kilos",
             "公斤",
+            "千克",
             "キログラム",
             "キロ",
+            "kilogramo",
+            "kilogramos",
+            "quilograma",
+            "quilogramas",
         ],
         dimension: Dimension::Mass,
         factor: 1.0,
@@ -325,7 +341,9 @@ const UNIT_DEFS: &[UnitDef] = &[
     UnitDef {
         id: "min",
         canonical_unit: "s",
-        aliases: &["min", "mins", "minute", "minutes"],
+        aliases: &[
+            "min", "mins", "minute", "minutes", "minuto", "minutos", "分钟",
+        ],
         dimension: Dimension::Time,
         factor: 60.0,
         provenance: Provenance::SiMultiple,
@@ -334,7 +352,9 @@ const UNIT_DEFS: &[UnitDef] = &[
     UnitDef {
         id: "h",
         canonical_unit: "s",
-        aliases: &["h", "hr", "hrs", "hour", "hours"],
+        aliases: &[
+            "h", "hr", "hrs", "hour", "hours", "hora", "horas", "heure", "heures", "時間", "小时",
+        ],
         dimension: Dimension::Time,
         factor: 3600.0,
         provenance: Provenance::SiMultiple,
@@ -399,6 +419,15 @@ const UNIT_DEFS: &[UnitDef] = &[
             "square metre",
             "square metres",
             "平米",
+            "metros cuadrados",
+            "metro cuadrado",
+            "mètres carrés",
+            "mètre carré",
+            "metres carres",
+            "metre carre",
+            "metros quadrados",
+            "metro quadrado",
+            "平方米",
         ],
         dimension: Dimension::Area,
         factor: 1.0,
@@ -443,7 +472,9 @@ const UNIT_DEFS: &[UnitDef] = &[
     UnitDef {
         id: "L",
         canonical_unit: "L",
-        aliases: &["L", "l", "liter", "liters", "litre", "litres"],
+        aliases: &[
+            "L", "l", "liter", "liters", "litre", "litres", "litro", "litros", "升",
+        ],
         dimension: Dimension::Volume,
         factor: 1.0,
         provenance: Provenance::SiMultiple,
@@ -1177,7 +1208,11 @@ const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
     "reference_date": {
       "type": "string",
       "format": "date",
-      "description": "Civil reference date for relative dates."
+      "description": "Civil reference date for relative dates. The parser never reads the host system clock or timezone."
+    },
+    "timezone": {
+      "type": "string",
+      "description": "Optional caller-supplied IANA timezone hint for adapter layers. The core parser does not infer timezone from the Rust host environment."
     },
     "strictness": {
       "type": "string",
@@ -1489,6 +1524,7 @@ pub struct ParseCtx {
     pub expect: Option<Kind>,
     pub expected_dimension: Option<Dimension>,
     pub reference_date: Option<Date>,
+    pub timezone: Option<String>,
     pub strictness: Strictness,
     pub currency_rates: Vec<CurrencyRate>,
     pub custom_units: Vec<CustomUnit>,
@@ -1671,6 +1707,8 @@ pub enum IssueCode {
     AmbiguousDate,
     AmbiguousUnit,
     AmbiguousCurrency,
+    TimezoneUnsupported,
+    RecurrenceUnsupported,
     Approximation,
 }
 
@@ -1686,6 +1724,8 @@ impl IssueCode {
             Self::AmbiguousDate => "AMBIGUOUS_DATE",
             Self::AmbiguousUnit => "AMBIGUOUS_UNIT",
             Self::AmbiguousCurrency => "AMBIGUOUS_CURRENCY",
+            Self::TimezoneUnsupported => "TIMEZONE_UNSUPPORTED",
+            Self::RecurrenceUnsupported => "RECURRENCE_UNSUPPORTED",
             Self::Approximation => "APPROXIMATION",
         }
     }
@@ -1961,6 +2001,26 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         return parsed;
     }
 
+    if let Some(timezone) = unsupported_timezone_suffix(trimmed) {
+        parsed.findings.skipped.push(skipped_with_span(
+            timezone,
+            "timezone-qualified times require an explicit adapter policy and are not interpreted by the core parser",
+            IssueCode::TimezoneUnsupported,
+            span_token_in(trimmed, timezone),
+        ));
+        return parsed;
+    }
+
+    if let Some(recurrence) = unsupported_recurrence_phrase(trimmed) {
+        parsed.findings.skipped.push(skipped_with_span(
+            recurrence,
+            "recurring date/time expressions require a recurrence adapter and are not interpreted by the core parser",
+            IssueCode::RecurrenceUnsupported,
+            span_token_in(trimmed, recurrence),
+        ));
+        return parsed;
+    }
+
     parsed.suggestions = suggestions_for(trimmed);
     parsed
         .findings
@@ -2077,6 +2137,110 @@ pub fn complete(prefix: &str, ctx: Option<ParseCtx>) -> Vec<Completion> {
     completions
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanonicalizeRequest {
+    pub field: String,
+    pub text: String,
+    pub ctx: Option<ParseCtx>,
+}
+
+impl CanonicalizeRequest {
+    pub fn new(field: &str, text: &str, ctx: Option<ParseCtx>) -> Self {
+        Self {
+            field: field.to_owned(),
+            text: text.to_owned(),
+            ctx,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanonicalizedValue {
+    pub field: String,
+    pub input: String,
+    pub ok: bool,
+    pub canonical: Option<Reading>,
+    pub parsed: Parsed,
+    pub message: Option<String>,
+}
+
+pub fn canonicalize_values(requests: &[CanonicalizeRequest]) -> Vec<CanonicalizedValue> {
+    requests
+        .iter()
+        .map(|request| {
+            let parsed = parse(&request.text, request.ctx.clone());
+            let ok = adapter_accepts(&parsed, request.ctx.as_ref());
+            let canonical = ok.then(|| parsed.best.clone()).flatten();
+            let message = (!ok).then(|| adapter_message(&request.field, &parsed));
+            CanonicalizedValue {
+                field: request.field.clone(),
+                input: request.text.clone(),
+                ok,
+                canonical,
+                parsed,
+                message,
+            }
+        })
+        .collect()
+}
+
+pub fn repair_tool_call_message(field: &str, text: &str, ctx: Option<ParseCtx>) -> Option<String> {
+    let request = CanonicalizeRequest::new(field, text, ctx);
+    canonicalize_values(&[request])
+        .into_iter()
+        .next()
+        .and_then(|value| value.message)
+}
+
+fn adapter_accepts(parsed: &Parsed, ctx: Option<&ParseCtx>) -> bool {
+    if parsed.best.is_none() || !parsed.findings.skipped.is_empty() {
+        return false;
+    }
+    let strictness = ctx.map_or(Strictness::Forgiving, |ctx| ctx.strictness);
+    if strictness != Strictness::Forgiving
+        && (!parsed.findings.ambiguities.is_empty() || !parsed.findings.approximations.is_empty())
+    {
+        return false;
+    }
+    true
+}
+
+fn adapter_message(field: &str, parsed: &Parsed) -> String {
+    let (code, reason, ref_text) = parsed
+        .findings
+        .skipped
+        .first()
+        .map(|issue| (issue.code, issue.reason.as_str(), issue.ref_text.as_str()))
+        .or_else(|| {
+            parsed
+                .findings
+                .ambiguities
+                .first()
+                .map(|issue| (issue.code, issue.reason.as_str(), issue.ref_text.as_str()))
+        })
+        .or_else(|| {
+            parsed
+                .findings
+                .approximations
+                .first()
+                .map(|issue| (issue.code, issue.reason.as_str(), issue.ref_text.as_str()))
+        })
+        .unwrap_or((
+            IssueCode::NoValue,
+            "no supported reading matched",
+            parsed.input.as_str(),
+        ));
+    let suggestion = parsed
+        .suggestions
+        .first()
+        .map(|suggestion| format!(" Did you mean `{}`?", suggestion.to))
+        .unwrap_or_default();
+    format!(
+        "[{}] {field}: {reason} at `{ref_text}`.{suggestion}",
+        code.as_str()
+    )
+}
+
 pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
     let locale = ctx.and_then(|ctx| ctx.locale);
     match (locale, value.kind, value.value, value.unit.as_deref()) {
@@ -2122,6 +2286,21 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
 }
 
 fn parse_japanese_length(text: &str) -> Option<Reading> {
+    let compact: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
+    for (suffix, factor) in [("間半", KEN_M), ("尺半", SHAKU_M)] {
+        if let Some(number_text) = compact.strip_suffix(suffix) {
+            let value = parse_number(number_text.trim())?;
+            return Some(Reading::quantity(
+                (value + 0.5) * factor,
+                "m",
+                Dimension::Length,
+                Provenance::JapaneseStatute,
+                true,
+                0.94,
+            ));
+        }
+    }
+
     let mut number = String::new();
     let mut meters = 0.0;
     let mut saw_unit = false;
@@ -2166,6 +2345,21 @@ fn parse_japanese_length(text: &str) -> Option<Reading> {
 }
 
 fn parse_tatami_area(text: &str) -> Option<Reading> {
+    let compact: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
+    for suffix in ["帖半", "畳半"] {
+        if let Some(number_text) = compact.strip_suffix(suffix) {
+            let value = parse_number(number_text.trim())?;
+            return Some(Reading::quantity(
+                (value + 0.5) * TATAMI_M2,
+                "m2",
+                Dimension::Area,
+                Provenance::TradeCustom,
+                true,
+                0.92,
+            ));
+        }
+    }
+
     let suffix = if text.ends_with('帖') {
         "帖"
     } else if text.ends_with('畳') {
@@ -2731,7 +2925,78 @@ fn parse_clock_time(text: &str) -> Option<Reading> {
     ))
 }
 
+fn unsupported_timezone_suffix(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    let timezone = trimmed.split_whitespace().last()?;
+    let head = trimmed.strip_suffix(timezone)?.trim_end();
+    parse_clock_time(head)?;
+    is_timezone_token(timezone).then_some(timezone)
+}
+
+fn is_timezone_token(text: &str) -> bool {
+    if matches!(
+        text,
+        "UTC"
+            | "GMT"
+            | "EST"
+            | "EDT"
+            | "CST"
+            | "CDT"
+            | "MST"
+            | "MDT"
+            | "PST"
+            | "PDT"
+            | "JST"
+            | "KST"
+            | "CET"
+            | "CEST"
+            | "BST"
+            | "AEST"
+            | "AEDT"
+    ) {
+        return true;
+    }
+
+    let Some(offset) = text
+        .strip_prefix("UTC")
+        .or_else(|| text.strip_prefix("GMT"))
+    else {
+        return false;
+    };
+    let Some(signless) = offset
+        .strip_prefix('+')
+        .or_else(|| offset.strip_prefix('-'))
+    else {
+        return false;
+    };
+    let (hours, minutes) = signless.split_once(':').unwrap_or((signless, "00"));
+    hours.len() <= 2
+        && !hours.is_empty()
+        && minutes.len() == 2
+        && hours.chars().all(|ch| ch.is_ascii_digit())
+        && minutes.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn unsupported_recurrence_phrase(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    if let Some(rest) = lowered.strip_prefix("every ")
+        && !rest.trim().is_empty()
+    {
+        return trimmed.get(.."every".len());
+    }
+    if trimmed.starts_with("毎週") || trimmed.starts_with("毎日") || trimmed.starts_with("毎月")
+    {
+        return trimmed.get(.."毎".len());
+    }
+    None
+}
+
 fn parse_clock_seconds(text: &str) -> Option<f64> {
+    if let Some(seconds) = parse_japanese_clock_seconds(text) {
+        return Some(seconds);
+    }
+
     let lowered = text.trim().to_ascii_lowercase();
     let compact: String = lowered.chars().filter(|ch| !ch.is_whitespace()).collect();
 
@@ -2785,6 +3050,60 @@ fn parse_clock_seconds(text: &str) -> Option<f64> {
         Some(_) => return None,
         None => {
             if !body.contains(':') || hour > 23 {
+                return None;
+            }
+        }
+    }
+
+    Some(f64::from(hour) * 3600.0 + f64::from(minute) * 60.0)
+}
+
+fn parse_japanese_clock_seconds(text: &str) -> Option<f64> {
+    let compact: String = text.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let (body, meridiem) = if let Some(body) = compact.strip_prefix("午前") {
+        (body, Some("am"))
+    } else if let Some(body) = compact.strip_prefix("午後") {
+        (body, Some("pm"))
+    } else {
+        (compact.as_str(), None)
+    };
+
+    let (hour_text, minute_tail) = body.split_once('時')?;
+    if hour_text.is_empty() {
+        return None;
+    }
+    let mut hour = hour_text.parse::<u8>().ok()?;
+    let minute = if minute_tail.is_empty() {
+        0
+    } else if minute_tail == "半" {
+        30
+    } else {
+        minute_tail.strip_suffix('分')?.parse::<u8>().ok()?
+    };
+    if minute > 59 {
+        return None;
+    }
+
+    match meridiem {
+        Some("am") => {
+            if hour == 0 || hour > 12 {
+                return None;
+            }
+            if hour == 12 {
+                hour = 0;
+            }
+        }
+        Some("pm") => {
+            if hour == 0 || hour > 12 {
+                return None;
+            }
+            if hour != 12 {
+                hour += 12;
+            }
+        }
+        Some(_) => return None,
+        None => {
+            if hour > 23 {
                 return None;
             }
         }
@@ -3148,6 +3467,16 @@ fn strip_approximate_qualifier(text: &str) -> Option<(&str, &str)> {
         && !rest.trim().is_empty()
     {
         return Some(("約", rest.trim()));
+    }
+    for suffix in [" (approx.)", " approx.", " approximately"] {
+        if let Some(rest) = strip_suffix_ascii_case(trimmed, suffix)
+            && !rest.trim().is_empty()
+        {
+            return Some((
+                trimmed.get(trimmed.len() - suffix.len()..)?.trim(),
+                rest.trim(),
+            ));
+        }
     }
     None
 }
@@ -3552,7 +3881,22 @@ fn parse_relative_date(text: &str, ctx: &ParseCtx) -> Option<Reading> {
         return Some(Reading::date(reference, 0.99));
     }
 
-    if lowered == "tomorrow" {
+    if lowered == "yesterday" || text == "昨日" || text == "昨天" {
+        return from_jiff_date(base.checked_sub(1.day()).ok()?)
+            .map(|date| Reading::date(date, 0.98));
+    }
+
+    if text == "一昨日" || text == "前天" {
+        return from_jiff_date(base.checked_sub(2.days()).ok()?)
+            .map(|date| Reading::date(date, 0.97));
+    }
+
+    if lowered == "tomorrow"
+        || text == "mañana"
+        || text == "demain"
+        || text == "amanhã"
+        || text == "明天"
+    {
         return from_jiff_date(base.tomorrow().ok()?).map(|date| Reading::date(date, 0.98));
     }
 
@@ -3560,7 +3904,7 @@ fn parse_relative_date(text: &str, ctx: &ParseCtx) -> Option<Reading> {
         return from_jiff_date(base.tomorrow().ok()?).map(|date| Reading::date(date, 0.98));
     }
 
-    if text == "明後日" {
+    if text == "明後日" || text == "后天" || text == "後天" || text == "pasado mañana" {
         return from_jiff_date(base.checked_add(2.days()).ok()?)
             .map(|date| Reading::date(date, 0.97));
     }
@@ -3574,9 +3918,24 @@ fn parse_relative_date(text: &str, ctx: &ParseCtx) -> Option<Reading> {
             .map(|date| Reading::date(date, 0.96));
     }
 
+    if let Some(days_text) = lowered
+        .strip_suffix(" days ago")
+        .or_else(|| lowered.strip_suffix(" day ago"))
+    {
+        let days = parse_whole_i64(days_text.trim())?;
+        return from_jiff_date(base.checked_sub(days.days()).ok()?)
+            .map(|date| Reading::date(date, 0.96));
+    }
+
     if let Some(days_text) = text.strip_suffix("日後") {
         let days = parse_whole_i64(days_text.trim())?;
         return from_jiff_date(base.checked_add(days.days()).ok()?)
+            .map(|date| Reading::date(date, 0.96));
+    }
+
+    if let Some(days_text) = text.strip_suffix("日前") {
+        let days = parse_whole_i64(days_text.trim())?;
+        return from_jiff_date(base.checked_sub(days.days()).ok()?)
             .map(|date| Reading::date(date, 0.96));
     }
 
@@ -3586,10 +3945,54 @@ fn parse_relative_date(text: &str, ctx: &ParseCtx) -> Option<Reading> {
             .map(|date| Reading::date(date, 0.96));
     }
 
+    if let Some(weekday_text) = text.strip_suffix(" prochain") {
+        let weekday = parse_weekday(weekday_text.trim())?;
+        return from_jiff_date(base.nth_weekday(1, weekday).ok()?)
+            .map(|date| Reading::date(date, 0.96));
+    }
+
+    if let Some(weekday_text) = lowered.strip_suffix(" que vem") {
+        let weekday = parse_weekday(weekday_text.trim())?;
+        return from_jiff_date(base.nth_weekday(1, weekday).ok()?)
+            .map(|date| Reading::date(date, 0.96));
+    }
+
+    if let Some(weekday_text) = lowered.strip_prefix("this ") {
+        let weekday = parse_weekday(weekday_text.trim())?;
+        return date_in_current_week(base, weekday).map(|date| Reading::date(date, 0.95));
+    }
+
+    if let Some(weekday_text) = lowered.strip_prefix("last ") {
+        let weekday = parse_weekday(weekday_text.trim())?;
+        return from_jiff_date(base.nth_weekday(-1, weekday).ok()?)
+            .map(|date| Reading::date(date, 0.95));
+    }
+
     if let Some(weekday_text) = text.strip_prefix("来週") {
         let weekday = parse_weekday(weekday_text.trim())?;
         return from_jiff_date(base.nth_weekday(1, weekday).ok()?)
             .map(|date| Reading::date(date, 0.96));
+    }
+
+    if let Some(weekday_text) = text.strip_prefix("下周") {
+        let weekday = parse_weekday(weekday_text.trim())?;
+        return from_jiff_date(base.nth_weekday(1, weekday).ok()?)
+            .map(|date| Reading::date(date, 0.96));
+    }
+
+    if let Some(weekday_text) = text.strip_prefix("今週") {
+        let weekday = parse_weekday(weekday_text.trim())?;
+        return date_in_current_week(base, weekday).map(|date| Reading::date(date, 0.95));
+    }
+
+    if let Some(weekday_text) = text.strip_prefix("先週") {
+        let weekday = parse_weekday(weekday_text.trim())?;
+        return from_jiff_date(base.nth_weekday(-1, weekday).ok()?)
+            .map(|date| Reading::date(date, 0.95));
+    }
+
+    if let Some(date) = parse_numeric_slash_date(text, ctx) {
+        return Some(Reading::date(date, 0.94));
     }
 
     if let Ok(date) = lowered.parse::<JiffDate>() {
@@ -3624,6 +4027,52 @@ fn from_jiff_date(date: jiff::civil::Date) -> Option<Date> {
 }
 
 #[cfg(feature = "dates-jiff")]
+fn parse_numeric_slash_date(text: &str, ctx: &ParseCtx) -> Option<Date> {
+    let mut parts = text.trim().split('/');
+    let first = parse_whole_i64(parts.next()?.trim())?;
+    let second = parse_whole_i64(parts.next()?.trim())?;
+    let year = parse_whole_i64(parts.next()?.trim())?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let year = i32::try_from(year).ok()?;
+    let (month, day) = if ctx.locale == Some(Locale::EnGb) {
+        (second, first)
+    } else {
+        (first, second)
+    };
+    let date = jiff::civil::Date::new(
+        i16::try_from(year).ok()?,
+        i8::try_from(month).ok()?,
+        i8::try_from(day).ok()?,
+    )
+    .ok()?;
+    from_jiff_date(date)
+}
+
+#[cfg(feature = "dates-jiff")]
+fn date_in_current_week(base: jiff::civil::Date, weekday: jiff::civil::Weekday) -> Option<Date> {
+    use jiff::ToSpan;
+
+    let delta = (weekday_number(weekday) - weekday_number(base.weekday()) + 7) % 7;
+    let date = base.checked_add(i64::from(delta).days()).ok()?;
+    from_jiff_date(date)
+}
+
+#[cfg(feature = "dates-jiff")]
+fn weekday_number(weekday: jiff::civil::Weekday) -> i32 {
+    match weekday {
+        jiff::civil::Weekday::Monday => 1,
+        jiff::civil::Weekday::Tuesday => 2,
+        jiff::civil::Weekday::Wednesday => 3,
+        jiff::civil::Weekday::Thursday => 4,
+        jiff::civil::Weekday::Friday => 5,
+        jiff::civil::Weekday::Saturday => 6,
+        jiff::civil::Weekday::Sunday => 7,
+    }
+}
+
+#[cfg(feature = "dates-jiff")]
 fn parse_weekday(text: &str) -> Option<jiff::civil::Weekday> {
     match text {
         "monday" | "mon" => Some(jiff::civil::Weekday::Monday),
@@ -3633,6 +4082,25 @@ fn parse_weekday(text: &str) -> Option<jiff::civil::Weekday> {
         "friday" | "fri" => Some(jiff::civil::Weekday::Friday),
         "saturday" | "sat" => Some(jiff::civil::Weekday::Saturday),
         "sunday" | "sun" => Some(jiff::civil::Weekday::Sunday),
+        "lunes" => Some(jiff::civil::Weekday::Monday),
+        "martes" => Some(jiff::civil::Weekday::Tuesday),
+        "miércoles" | "miercoles" => Some(jiff::civil::Weekday::Wednesday),
+        "jueves" => Some(jiff::civil::Weekday::Thursday),
+        "viernes" => Some(jiff::civil::Weekday::Friday),
+        "sábado" | "sabado" => Some(jiff::civil::Weekday::Saturday),
+        "domingo" => Some(jiff::civil::Weekday::Sunday),
+        "lundi" => Some(jiff::civil::Weekday::Monday),
+        "mardi" => Some(jiff::civil::Weekday::Tuesday),
+        "mercredi" => Some(jiff::civil::Weekday::Wednesday),
+        "jeudi" => Some(jiff::civil::Weekday::Thursday),
+        "vendredi" => Some(jiff::civil::Weekday::Friday),
+        "samedi" => Some(jiff::civil::Weekday::Saturday),
+        "dimanche" => Some(jiff::civil::Weekday::Sunday),
+        "segunda-feira" | "segunda" => Some(jiff::civil::Weekday::Monday),
+        "terça-feira" | "terca-feira" | "terça" | "terca" => Some(jiff::civil::Weekday::Tuesday),
+        "quarta-feira" | "quarta" => Some(jiff::civil::Weekday::Wednesday),
+        "quinta-feira" | "quinta" => Some(jiff::civil::Weekday::Thursday),
+        "sexta-feira" | "sexta" => Some(jiff::civil::Weekday::Friday),
         "月曜日" | "月曜" | "月" => Some(jiff::civil::Weekday::Monday),
         "火曜日" | "火曜" | "火" => Some(jiff::civil::Weekday::Tuesday),
         "水曜日" | "水曜" | "水" => Some(jiff::civil::Weekday::Wednesday),
@@ -3640,6 +4108,13 @@ fn parse_weekday(text: &str) -> Option<jiff::civil::Weekday> {
         "金曜日" | "金曜" | "金" => Some(jiff::civil::Weekday::Friday),
         "土曜日" | "土曜" | "土" => Some(jiff::civil::Weekday::Saturday),
         "日曜日" | "日曜" | "日" => Some(jiff::civil::Weekday::Sunday),
+        "周一" | "星期一" | "一" => Some(jiff::civil::Weekday::Monday),
+        "周二" | "星期二" | "二" => Some(jiff::civil::Weekday::Tuesday),
+        "周三" | "星期三" | "三" => Some(jiff::civil::Weekday::Wednesday),
+        "周四" | "星期四" | "四" => Some(jiff::civil::Weekday::Thursday),
+        "周五" | "星期五" | "五" => Some(jiff::civil::Weekday::Friday),
+        "周六" | "星期六" | "六" => Some(jiff::civil::Weekday::Saturday),
+        "周日" | "星期日" | "星期天" | "天" => Some(jiff::civil::Weekday::Sunday),
         _ => None,
     }
 }
@@ -3880,6 +4355,7 @@ const LEGACY_UNIT_COMPLETIONS: &[(&str, &str, Dimension)] = &[
 const DATE_COMPLETIONS: &[&str] = &[
     "today",
     "tomorrow",
+    "yesterday",
     "next monday",
     "next tuesday",
     "next wednesday",
@@ -3887,8 +4363,15 @@ const DATE_COMPLETIONS: &[&str] = &[
     "next friday",
     "next saturday",
     "next sunday",
+    "this friday",
+    "last friday",
+    "mañana",
+    "demain",
+    "amanhã",
+    "明天",
     "今日",
     "明日",
+    "昨日",
     "来週月曜日",
     "来週火曜日",
     "来週水曜日",
@@ -3896,9 +4379,10 @@ const DATE_COMPLETIONS: &[&str] = &[
     "来週金曜日",
     "来週土曜日",
     "来週日曜日",
+    "下周五",
 ];
 
-const TIME_COMPLETIONS: &[&str] = &["noon", "midnight"];
+const TIME_COMPLETIONS: &[&str] = &["noon", "midnight", "午後3時", "午前9時"];
 
 const CURRENCY_COMPLETIONS: &[(&str, &str)] = &[
     ("USD", "USD"),
@@ -4380,12 +4864,17 @@ mod tests {
         assert_eq!(contract_version(), "unravel-nl.parse.v1");
         assert!(parse_input_schema_json().contains("\"text\""));
         assert!(parse_input_schema_json().contains("\"strictness\""));
+        assert!(parse_input_schema_json().contains("\"timezone\""));
         assert!(parsed_output_schema_json().contains("\"findings\""));
         assert!(parsed_output_schema_json().contains("\"currency\""));
         assert!(parsed_output_schema_json().contains("\"temperature\""));
         assert!(mcp_tool_schema_json().contains("unravel_nl_parse"));
         assert!(mcp_tool_schema_json().contains("inputSchema"));
         assert!(mcp_tool_schema_json().contains("outputSchema"));
+        assert_eq!(
+            IssueCode::TimezoneUnsupported.as_str(),
+            "TIMEZONE_UNSUPPORTED"
+        );
     }
 
     #[test]
@@ -4744,6 +5233,30 @@ mod tests {
 
         let noon = parse("noon", None).best.expect("noon");
         assert_close(noon.value.unwrap(), 12.0 * 3600.0);
+
+        let japanese_afternoon = parse("午後3時", None).best.expect("Japanese afternoon");
+        assert_eq!(japanese_afternoon.unit.as_deref(), Some("s"));
+        assert_eq!(japanese_afternoon.dimension, Some(Dimension::Time));
+        assert_close(japanese_afternoon.value.unwrap(), 15.0 * 3600.0);
+
+        let japanese_morning = parse("午前9時30分", None).best.expect("Japanese morning");
+        assert_close(japanese_morning.value.unwrap(), 9.5 * 3600.0);
+
+        let japanese_half = parse("午後3時半", None).best.expect("Japanese half hour");
+        assert_close(japanese_half.value.unwrap(), 15.5 * 3600.0);
+    }
+
+    #[test]
+    fn rejects_timezone_qualified_clock_without_adapter_policy() {
+        let parsed = parse("3pm EST", None);
+        assert!(parsed.best.is_none());
+        assert_eq!(
+            parsed.findings.skipped[0].code,
+            IssueCode::TimezoneUnsupported
+        );
+        assert_eq!(parsed.findings.skipped[0].ref_text, "EST");
+        assert_eq!(parsed.findings.skipped[0].span.start, 4);
+        assert_eq!(parsed.findings.skipped[0].span.end, 7);
     }
 
     #[test]
@@ -5265,6 +5778,7 @@ mod tests {
         let ctx = Some(ParseCtx {
             locale: Some(Locale::Ja),
             reference_date: Date::new(2026, 7, 19),
+            timezone: Some("Asia/Tokyo".to_owned()),
             ..ParseCtx::default()
         });
 
@@ -5279,6 +5793,82 @@ mod tests {
         assert_eq!(
             parse("来週金曜日", ctx).best.unwrap().date.as_deref(),
             Some("2026-07-24")
+        );
+    }
+
+    #[cfg(feature = "dates-jiff")]
+    #[test]
+    fn parses_broader_relative_dates_with_jiff() {
+        let ctx = Some(ParseCtx {
+            locale: Some(Locale::En),
+            reference_date: Date::new(2026, 7, 19),
+            timezone: Some("Asia/Tokyo".to_owned()),
+            ..ParseCtx::default()
+        });
+
+        assert_eq!(
+            parse("yesterday", ctx.clone())
+                .best
+                .unwrap()
+                .date
+                .as_deref(),
+            Some("2026-07-18")
+        );
+        assert_eq!(
+            parse("2 days ago", ctx.clone())
+                .best
+                .unwrap()
+                .date
+                .as_deref(),
+            Some("2026-07-17")
+        );
+        assert_eq!(
+            parse("this friday", ctx.clone())
+                .best
+                .unwrap()
+                .date
+                .as_deref(),
+            Some("2026-07-24")
+        );
+        assert_eq!(
+            parse("last friday", ctx).best.unwrap().date.as_deref(),
+            Some("2026-07-17")
+        );
+    }
+
+    #[cfg(feature = "dates-jiff")]
+    #[test]
+    fn parses_broader_japanese_relative_dates_with_jiff() {
+        let ctx = Some(ParseCtx {
+            locale: Some(Locale::Ja),
+            reference_date: Date::new(2026, 7, 19),
+            timezone: Some("Asia/Tokyo".to_owned()),
+            ..ParseCtx::default()
+        });
+
+        assert_eq!(
+            parse("昨日", ctx.clone()).best.unwrap().date.as_deref(),
+            Some("2026-07-18")
+        );
+        assert_eq!(
+            parse("一昨日", ctx.clone()).best.unwrap().date.as_deref(),
+            Some("2026-07-17")
+        );
+        assert_eq!(
+            parse("2日前", ctx.clone()).best.unwrap().date.as_deref(),
+            Some("2026-07-17")
+        );
+        assert_eq!(
+            parse("今週金曜日", ctx.clone())
+                .best
+                .unwrap()
+                .date
+                .as_deref(),
+            Some("2026-07-24")
+        );
+        assert_eq!(
+            parse("先週金曜日", ctx).best.unwrap().date.as_deref(),
+            Some("2026-07-17")
         );
     }
 
