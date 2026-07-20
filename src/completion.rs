@@ -171,12 +171,21 @@ pub(crate) fn push_unit_fanout(
     let mut units = units_for_completion_fanout(ctx);
     units.truncate(12);
     for unit in units {
+        let converted = value * unit.factor;
+        // A value that overflowed to infinity or collapsed to `NaN` is not a
+        // reading of the input, so it is not offered as a candidate. Parsing
+        // reports the same loss through `finalize_parsed`; completion ranks
+        // candidates and has no findings channel, so the impossible candidate
+        // is simply left out.
+        if !converted.is_finite() {
+            continue;
+        }
         push_completion_reading_if_new(
             completions,
             CompletionReading {
                 text: format!("{} {}", text.trim(), unit.id),
                 reading: Reading::quantity(
-                    value * unit.factor,
+                    converted,
                     unit.canonical_unit,
                     unit.dimension,
                     unit.provenance,
@@ -195,8 +204,14 @@ pub(crate) fn push_unit_fanout(
         {
             continue;
         }
+        // A caller-supplied factor can be huge or non-finite; the product is
+        // held to the same finiteness bar as the built-in units above.
+        let converted = value * unit.factor;
+        if !converted.is_finite() {
+            continue;
+        }
         let mut reading = Reading::quantity(
-            value * unit.factor,
+            converted,
             &unit.canonical_unit,
             unit.dimension,
             Provenance::TradeCustom,
@@ -433,6 +448,60 @@ pub(crate) fn completion_score(prefix: &str, value: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unit_fanout_never_offers_a_non_finite_candidate() {
+        // A 308-digit integer is finite, but multiplying it by the km factor
+        // overflows; the overflowed candidate is not a reading of the input.
+        let text = "1".repeat(308);
+        let completions = complete_readings(&text, None);
+        assert!(!completions.is_empty());
+        for completion in &completions {
+            assert!(
+                completion
+                    .reading
+                    .value
+                    .is_none_or(|value| value.is_finite()),
+                "{completion:?}"
+            );
+        }
+        // The same input is refused outright by the parse path.
+        let parsed = parse(&format!("{text} km"), None);
+        assert!(parsed.best.is_none());
+    }
+
+    #[test]
+    fn custom_unit_fanout_never_offers_a_non_finite_candidate() {
+        let ctx = ParseCtx {
+            custom_units: vec![
+                CustomUnit::new("huge", "m", &[], Dimension::Length, f64::MAX),
+                CustomUnit::new("inf", "m", &[], Dimension::Length, f64::INFINITY),
+                CustomUnit::new("nan", "m", &[], Dimension::Length, f64::NAN),
+            ],
+            ..ParseCtx::default()
+        };
+        // 300 digits is a finite number, but every one of these factors pushes
+        // it past `f64::MAX` or straight to `NaN`.
+        let completions = complete_readings(&"1".repeat(300), Some(ctx));
+        assert!(!completions.is_empty());
+        for completion in &completions {
+            assert!(
+                completion
+                    .reading
+                    .value
+                    .is_none_or(|value| value.is_finite()),
+                "{completion:?}"
+            );
+        }
+        assert!(
+            completions
+                .iter()
+                .all(|completion| !completion.text.ends_with(" inf")
+                    && !completion.text.ends_with(" nan")
+                    && !completion.text.ends_with(" huge")),
+            "{completions:?}"
+        );
+    }
 
     #[test]
     fn cheap_prefilter_never_rejects_a_real_completion() {

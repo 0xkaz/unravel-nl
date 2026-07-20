@@ -25,15 +25,20 @@ The browser adapter files are `web/unravel-adapters.js` and
 `web/unravel-adapters.d.ts`. A Method A browser artifact should include those
 adapter files plus the generated `pkg/` web target and a checksum manifest.
 
-## Local Snapshot
+## Artifact Size
 
-Measured on the development machine on 2026-07-20:
+`wasm-pack build --target web --out-dir pkg -- --features wasm` produces a
+`pkg/` directory of roughly 380 KB, of which `pkg/unravel_nl_bg.wasm` is about
+330 KB. Treat both as ballpark figures: they move with the toolchain version.
 
-| Command | Output | Size / digest |
-| --- | --- | --- |
-| `wasm-pack build --target web --out-dir pkg -- --features wasm` | `pkg/` | 328K |
-| same | `pkg/unravel_nl_bg.wasm` | 282,534 bytes |
-| same | `pkg/unravel_nl_bg.wasm` sha256 | `c1b52c62e2d8255bd51e5888026e518a0311f38c2d1cc8af3fb974bb0d6d3c87` |
+No reference digest is published here, because the build is not reproducible
+across machines or toolchain versions — the same source produces a different
+`unravel_nl_bg.wasm` hash on different setups. Compute the digest for the
+artifact you actually ship, and pin that:
+
+```sh
+shasum -a 256 pkg/unravel_nl_bg.wasm
+```
 
 Smoke checks:
 

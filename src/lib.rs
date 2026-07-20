@@ -15,13 +15,49 @@
 //!   the parser committing to one.
 //! - **No I/O and no runtime dependencies** on the default compute path.
 //!
+//! # Choosing an entry point
+//!
+//! [`parse`] is the broad entry point: use it when the input could be any of a
+//! quantity, date, time, range, recurrence, conversion request, or plain
+//! number. Every other entry point is narrower, and narrower is better whenever
+//! the caller already knows what the field holds — a dedicated entry point does
+//! less grammar dispatch, so it is faster and, more importantly, it cannot
+//! misread the input as some other kind of value. A date field parsed with
+//! [`parse_date_fast`] will never come back holding a currency.
+//!
+//! | Entry point | Use when |
+//! | --- | --- |
+//! | [`parse`] | The kind of value is unknown. |
+//! | [`parse_quantity_fast`] | The field holds a measurement. |
+//! | [`parse_number_fast`] | The field holds a bare number. |
+//! | [`parse_date_fast`] | The field holds a date. |
+//! | [`parse_recurrence_fast`] | The field holds a repeating schedule. |
+//! | [`parse_all`] | Free text that may contain several values. |
+//! | [`parse_dimensions_for_editor`] | Free text where only lengths and areas count. |
+//!
+//! # Reading the result
+//!
+//! The reading the parser ranked first is in [`Parsed::best`], competing
+//! readings are in [`Parsed::alternatives`], and anything the parser could not
+//! resolve silently is in [`Parsed::findings`]. An empty [`Findings`] means the
+//! whole input was consumed with no guesswork; a non-empty one tells you
+//! exactly where the parser had to skip, choose, or approximate. Finding spans
+//! address the string you passed in, so they can be used directly to highlight
+//! it — see [`Span`].
+//!
+//! # Cargo features
+//!
+//! Everything above works with no features enabled. The optional ones are:
+//!
+//! | Feature | Adds |
+//! | --- | --- |
+//! | `dates-jiff` | Calendar arithmetic: relative dates such as `next friday` or `来週金曜日`, and three-part numeric dates. Without it these are reported as findings rather than resolved. |
+//! | `timezones-jiff` | IANA time zone resolution, e.g. `3pm Europe/Paris`. Implies `dates-jiff`. |
+//! | `wasm` | `wasm-bindgen` exports for browser and Node adapters. |
+//!
 //! # Getting started
 //!
-//! Use [`parse`] when the kind of value is unknown, or a narrower entry point
-//! such as [`parse_quantity_fast`], [`parse_date_fast`], or
-//! [`parse_dimensions_for_editor`] when the field type is already known — see
-//! the entry point table in those functions' documentation.
-//!
+
 //! ```
 //! use unravel_nl::{humanize, parse, HumanizeCtx, Locale, ParseCtx};
 //!

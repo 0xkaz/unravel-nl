@@ -1,22 +1,9 @@
 //! Entry points.
 //!
-//! [`parse`] is the broad entry point: use it when the input could be any of a
-//! quantity, date, time, range, recurrence, conversion request, or plain
-//! number. Every other entry point here is narrower, and narrower is better
-//! whenever the caller already knows what the field holds — a dedicated entry
-//! point does less grammar dispatch, so it is faster and, more importantly, it
-//! cannot misread the input as some other kind of value. A date field parsed
-//! with [`parse_date_fast`] will never come back holding a currency.
-//!
-//! | Entry point | Use when |
-//! | --- | --- |
-//! | [`parse`] | The kind of value is unknown. |
-//! | [`parse_quantity_fast`] | The field holds a measurement. |
-//! | [`parse_number_fast`] | The field holds a bare number. |
-//! | [`parse_date_fast`] | The field holds a date. |
-//! | [`parse_recurrence_fast`] | The field holds a repeating schedule. |
-//! | [`parse_all`] | Free text that may contain several values. |
-//! | [`parse_dimensions_for_editor`] | Free text where only lengths and areas count. |
+//! [`parse`] is the broad entry point; the rest are narrower, and narrower is
+//! better whenever the caller already knows what the field holds. The selection
+//! table lives in the crate-level docs, because this module is private and its
+//! prose does not reach the rendered documentation.
 
 use crate::*;
 
@@ -326,6 +313,18 @@ pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &
 
     if features.has_slash
         && let Some(ambiguous) = parse_ambiguous_slash_date_or_fraction(trimmed, ctx)
+    {
+        parsed.best = ambiguous.best;
+        parsed.alternatives = ambiguous.alternatives;
+        parsed.findings.ambiguities.push(ambiguous.ambiguity);
+        return;
+    }
+
+    // A three-part slash date has the same day-first/month-first question the
+    // two-part form has, so it is answered the same way: both readings stay on
+    // the table and the choice is reported.
+    if features.maybe_date
+        && let Some(ambiguous) = parse_ambiguous_numeric_slash_date(trimmed, ctx)
     {
         parsed.best = ambiguous.best;
         parsed.alternatives = ambiguous.alternatives;
@@ -774,7 +773,11 @@ pub(crate) fn parse_number_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut
 }
 
 pub(crate) fn parse_date_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
-    if let Some(reading) = parse_relative_date(trimmed, ctx) {
+    if let Some(ambiguous) = parse_ambiguous_numeric_slash_date(trimmed, ctx) {
+        parsed.best = ambiguous.best;
+        parsed.alternatives = ambiguous.alternatives;
+        parsed.findings.ambiguities.push(ambiguous.ambiguity);
+    } else if let Some(reading) = parse_relative_date(trimmed, ctx) {
         parsed.best = Some(reading);
     } else {
         parsed

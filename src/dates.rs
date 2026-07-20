@@ -239,8 +239,8 @@ pub(crate) fn parse_relative_date(text: &str, ctx: &ParseCtx) -> Option<Reading>
             .map(|date| Reading::date(date, 0.95));
     }
 
-    if let Some(date) = parse_numeric_slash_date(text, ctx) {
-        return Some(Reading::date(date, 0.94));
+    if let Some(readings) = numeric_slash_date_readings(text, ctx) {
+        return readings.into_iter().next();
     }
 
     if let Ok(date) = lowered.parse::<JiffDate>() {
@@ -274,8 +274,20 @@ pub(crate) fn from_jiff_date(date: jiff::civil::Date) -> Option<Date> {
     )
 }
 
+/// Reads a three-part slash date as every calendar date it can denote.
+///
+/// `5/6/2026` is `2026-05-06` read month-first and `2026-06-05` read day-first,
+/// and the text carries nothing that settles the question. Both readings are
+/// returned, ordered by locale (`en-GB` writes the day first, every other
+/// locale the month), so the losing order can be offered as an alternative
+/// rather than dropped. When only one order names a date the calendar actually
+/// has — `5/25/2026`, `31/12/2026` — there is exactly one reading and nothing
+/// is ambiguous.
+///
+/// Validation goes through [`checked_date`], the same gate the two-part slash
+/// path uses, so both paths agree on which dates exist.
 #[cfg(feature = "dates-jiff")]
-pub(crate) fn parse_numeric_slash_date(text: &str, ctx: &ParseCtx) -> Option<Date> {
+pub(crate) fn numeric_slash_date_readings(text: &str, ctx: &ParseCtx) -> Option<Vec<Reading>> {
     let mut parts = text.trim().split('/');
     let first = parse_whole_i64(parts.next()?.trim())?;
     let second = parse_whole_i64(parts.next()?.trim())?;
@@ -284,18 +296,76 @@ pub(crate) fn parse_numeric_slash_date(text: &str, ctx: &ParseCtx) -> Option<Dat
         return None;
     }
     let year = i32::try_from(year).ok()?;
-    let (month, day) = if ctx.locale == Some(Locale::EnGb) {
-        (second, first)
+    // Years outside `jiff`'s civil-date range were never readable here and
+    // still are not.
+    i16::try_from(year).ok()?;
+    let first = u8::try_from(first).ok()?;
+    let second = u8::try_from(second).ok()?;
+
+    let orders = if ctx.locale == Some(Locale::EnGb) {
+        [(second, first), (first, second)]
     } else {
-        (first, second)
+        [(first, second), (second, first)]
     };
-    let date = jiff::civil::Date::new(
-        i16::try_from(year).ok()?,
-        i8::try_from(month).ok()?,
-        i8::try_from(day).ok()?,
-    )
-    .ok()?;
-    from_jiff_date(date)
+
+    let mut readings: Vec<Reading> = Vec::new();
+    let mut confidence = 0.94;
+    for (month, day) in orders {
+        let Some(date) = checked_date(year, month, day) else {
+            continue;
+        };
+        let iso = date.iso();
+        if readings
+            .iter()
+            .any(|reading| reading.date.as_deref() == Some(iso.as_str()))
+        {
+            continue;
+        }
+        readings.push(Reading::date(date, confidence));
+        confidence -= 0.02;
+    }
+
+    if readings.is_empty() {
+        return None;
+    }
+    Some(readings)
+}
+
+/// Surfaces a three-part slash date that has two readings as an ambiguity.
+///
+/// Returns `None` when the text is not a three-part slash date or when only one
+/// order is a real calendar date, so an unambiguous date stays a plain reading
+/// with no finding attached.
+#[cfg(feature = "dates-jiff")]
+pub(crate) fn parse_ambiguous_numeric_slash_date(
+    text: &str,
+    ctx: &ParseCtx,
+) -> Option<AmbiguousParse> {
+    let readings = numeric_slash_date_readings(text, ctx)?;
+    if readings.len() < 2 {
+        return None;
+    }
+    let candidate_count = readings.len();
+    let mut readings = readings.into_iter();
+    let best = readings.next()?;
+    Some(AmbiguousParse {
+        best: Some(best),
+        alternatives: readings.collect(),
+        ambiguity: ambiguity(
+            text,
+            "Slash date can be read day-first or month-first.",
+            Some(candidate_count),
+            IssueCode::AmbiguousDate,
+        ),
+    })
+}
+
+#[cfg(not(feature = "dates-jiff"))]
+pub(crate) fn parse_ambiguous_numeric_slash_date(
+    _text: &str,
+    _ctx: &ParseCtx,
+) -> Option<AmbiguousParse> {
+    None
 }
 
 #[cfg(feature = "dates-jiff")]
@@ -478,6 +548,123 @@ mod tests {
         assert_eq!(parsed.alternatives.len(), 1);
         assert_eq!(parsed.alternatives[0].date.as_deref(), Some("2026-05-25"));
         assert_eq!(parsed.findings.ambiguities[0].candidate_count, Some(2));
+    }
+
+    #[cfg(feature = "dates-jiff")]
+    #[test]
+    fn three_part_slash_dates_offer_both_orders() {
+        let parsed = parse(
+            "5/6/2026",
+            Some(ParseCtx {
+                reference_date: Date::new(2026, 7, 19),
+                ..ParseCtx::default()
+            }),
+        );
+        // Month-first wins outside en-GB, but day-first is not thrown away.
+        assert_eq!(
+            parsed.best.as_ref().unwrap().date.as_deref(),
+            Some("2026-05-06")
+        );
+        assert_eq!(parsed.alternatives.len(), 1);
+        assert_eq!(parsed.alternatives[0].date.as_deref(), Some("2026-06-05"));
+        assert_eq!(parsed.findings.ambiguities.len(), 1);
+        assert_eq!(
+            parsed.findings.ambiguities[0].code,
+            IssueCode::AmbiguousDate
+        );
+        assert_eq!(parsed.findings.ambiguities[0].candidate_count, Some(2));
+    }
+
+    #[cfg(feature = "dates-jiff")]
+    #[test]
+    fn three_part_slash_dates_honour_en_gb_day_first_order() {
+        let parsed = parse(
+            "5/6/2026",
+            Some(ParseCtx {
+                locale: Some(Locale::EnGb),
+                reference_date: Date::new(2026, 7, 19),
+                ..ParseCtx::default()
+            }),
+        );
+        assert_eq!(
+            parsed.best.as_ref().unwrap().date.as_deref(),
+            Some("2026-06-05")
+        );
+        assert_eq!(parsed.alternatives.len(), 1);
+        assert_eq!(parsed.alternatives[0].date.as_deref(), Some("2026-05-06"));
+        assert_eq!(
+            parsed.findings.ambiguities[0].code,
+            IssueCode::AmbiguousDate
+        );
+        assert_eq!(parsed.findings.ambiguities[0].candidate_count, Some(2));
+    }
+
+    #[cfg(feature = "dates-jiff")]
+    #[test]
+    fn parse_date_fast_reports_three_part_slash_ambiguity() {
+        let ctx = ParseCtx {
+            reference_date: Date::new(2026, 7, 19),
+            ..ParseCtx::default()
+        };
+        let parsed = parse_date_fast("5/6/2026", Some(ctx.clone()));
+        assert_eq!(
+            parsed.best.as_ref().unwrap().date.as_deref(),
+            Some("2026-05-06")
+        );
+        assert_eq!(parsed.alternatives[0].date.as_deref(), Some("2026-06-05"));
+        assert_eq!(
+            parsed.findings.ambiguities[0].code,
+            IssueCode::AmbiguousDate
+        );
+        assert_eq!(parsed.findings.ambiguities[0].candidate_count, Some(2));
+
+        let gb = parse_date_fast(
+            "5/6/2026",
+            Some(ParseCtx {
+                locale: Some(Locale::EnGb),
+                ..ctx
+            }),
+        );
+        assert_eq!(
+            gb.best.as_ref().unwrap().date.as_deref(),
+            Some("2026-06-05")
+        );
+        assert_eq!(gb.alternatives[0].date.as_deref(), Some("2026-05-06"));
+        assert_eq!(gb.findings.ambiguities[0].candidate_count, Some(2));
+    }
+
+    #[cfg(feature = "dates-jiff")]
+    #[test]
+    fn three_part_slash_dates_with_one_real_order_are_not_ambiguous() {
+        // 25 cannot be a month and 31 cannot be a month, so each input has
+        // exactly one reading and nothing to report.
+        for (input, expected) in [("5/25/2026", "2026-05-25"), ("31/12/2026", "2026-12-31")] {
+            for locale in [None, Some(Locale::En), Some(Locale::EnGb)] {
+                let parsed = parse(
+                    input,
+                    Some(ParseCtx {
+                        locale: locale.clone(),
+                        reference_date: Date::new(2026, 7, 19),
+                        ..ParseCtx::default()
+                    }),
+                );
+                assert_eq!(
+                    parsed.best.as_ref().and_then(|best| best.date.as_deref()),
+                    Some(expected),
+                    "{input} {locale:?}"
+                );
+                assert!(parsed.alternatives.is_empty(), "{input} {locale:?}");
+                assert!(
+                    parsed
+                        .findings
+                        .ambiguities
+                        .iter()
+                        .all(|found| found.code != IssueCode::AmbiguousDate),
+                    "{input} {locale:?}: {:?}",
+                    parsed.findings.ambiguities
+                );
+            }
+        }
     }
 
     #[cfg(feature = "dates-jiff")]

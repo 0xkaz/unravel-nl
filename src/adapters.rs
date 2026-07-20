@@ -161,8 +161,10 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
 /// A reading that carries no usable value still renders as a word rather than
 /// an empty string, so the output is always displayable: `unknown date`,
 /// `unknown recurrence`, `unresolved range`, `unresolved`, and — for a value
-/// that is infinite or `NaN`, which [`parse`] never produces but a hand-built
-/// [`Reading`] can hold — the literal `unrepresentable`.
+/// that is infinite or `NaN` — the literal `unrepresentable`. No library entry
+/// point hands back such a value: [`parse`] reports it as a loss and
+/// [`complete_readings`] leaves the candidate out. It reaches [`humanize`] only
+/// through a [`Reading`] the caller assembled or edited themselves.
 ///
 /// ```
 /// use unravel_nl::{humanize, parse, HumanizeCtx, Locale, ParseCtx};
@@ -381,8 +383,11 @@ pub(crate) fn humanize_japanese_area(area: f64) -> String {
 ///
 /// `format_number` never emits `inf`, `-inf`, or `NaN`: those are not numbers a
 /// caller can act on, and they are not valid JSON numbers either. Parsing
-/// rejects non-finite readings outright (see `finalize_parsed`), so this token
-/// only surfaces for [`Reading`] values a caller built by hand.
+/// rejects non-finite readings outright (see `finalize_parsed`) and the
+/// completion fan-out drops non-finite candidates (see `push_unit_fanout`), so
+/// this token surfaces only for a [`Reading`] the caller assembled or edited
+/// themselves — including one built from a [`CustomUnit`] factor applied
+/// outside the library.
 pub(crate) const NON_FINITE_TEXT: &str = "unrepresentable";
 
 pub(crate) fn format_number(value: f64) -> String {
