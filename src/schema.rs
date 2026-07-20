@@ -35,7 +35,7 @@ pub(crate) const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
       "type": "string",
       "enum": ["general", "quantity", "number", "date", "recurrence", "dimension_editor"],
       "default": "general",
-      "description": "Selects the parser grammar. This is a hard filter, not a hint: any value other than general parses exactly as the matching narrow entry point would, and input the selected grammar does not read is refused with NO_VALUE. Use dimension_editor for UI fields that only accept building dimensions."
+      "description": "Selects the parser grammar. This is a hard filter, not a hint: input the selected grammar does not read is refused with NO_VALUE. quantity, number, date, and recurrence parse exactly as the matching narrow entry point would. dimension_editor is for UI fields that only accept building dimensions; it runs the editor grammar over the whole input and is not equivalent to the parse_dimensions_for_editor extractor, which additionally scans free text for candidates and infers the expected dimension from a neighbouring label."
     },
     "accept": {
       "type": "object",

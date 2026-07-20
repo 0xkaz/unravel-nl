@@ -1,4 +1,4 @@
-.PHONY: all fmt lint test test-dates test-wasm build-wasm web-test check package clean
+.PHONY: all fmt lint test test-default test-dates test-timezones test-wasm build-wasm web-test check package clean
 
 all: check
 
@@ -12,8 +12,16 @@ lint:
 test:
 	cargo test --all-features
 
+# The build most crates.io users get.
+test-default:
+	cargo test
+
 test-dates:
 	cargo test --features dates-jiff
+
+# Exercised on its own because code reachable only here has shipped bugs before.
+test-timezones:
+	cargo test --features timezones-jiff
 
 build-wasm:
 	wasm-pack build --target web --out-dir pkg -- --features wasm
@@ -30,7 +38,7 @@ web-test:
 package:
 	cargo publish --dry-run
 
-check: lint test test-dates
+check: lint test test-default test-dates test-timezones
 
 clean:
 	cargo clean

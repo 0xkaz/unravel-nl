@@ -42,10 +42,12 @@ pub enum IssueCode {
     /// The date has more than one plausible reading, e.g. `05/06/2026`.
     ///
     /// That three-part numeric slash form is only read when the `dates-jiff`
-    /// feature is enabled; on a default build it produces no reading and no
-    /// finding at all. The two-part form (`05/06`, which also competes with a
-    /// fraction reading) reports this code on any build, provided
-    /// [`ParseCtx::reference_date`] supplies the year.
+    /// feature is enabled. On a default build it produces no reading and no
+    /// ambiguity — but it is not dropped silently: `best` is `None` and the
+    /// input is reported in [`Findings::skipped`] with [`IssueCode::NoValue`].
+    /// The two-part form (`05/06`, which also competes with a fraction reading)
+    /// reports this code on any build, provided [`ParseCtx::reference_date`]
+    /// supplies the year.
     AmbiguousDate,
     /// The unit has more than one plausible reading, e.g. a locale-dependent cup.
     AmbiguousUnit,
@@ -643,6 +645,17 @@ mod tests {
         {
             assert!(three_part.best.is_none());
             assert!(three_part.findings.ambiguities.is_empty());
+            // No reading and no ambiguity, but not silence: the input still has
+            // to come back as a finding, which is what the doc promises.
+            assert!(
+                three_part
+                    .findings
+                    .skipped
+                    .iter()
+                    .any(|issue| issue.code == IssueCode::NoValue),
+                "a default build must still report the unread date: {:?}",
+                three_part.findings
+            );
         }
 
         let two_part = parse(

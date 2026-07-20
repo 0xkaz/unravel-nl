@@ -162,7 +162,7 @@ pub(crate) fn parse_relative_date(text: &str, ctx: &ParseCtx) -> Option<Reading>
             .or_else(|| tail.strip_suffix(" day"))
     }) {
         let days = parse_whole_i64(days_text.trim())?;
-        return from_jiff_date(base.checked_add(days.days()).ok()?)
+        return from_jiff_date(base.checked_add(day_span(days)?).ok()?)
             .map(|date| Reading::date(date, 0.96));
     }
 
@@ -171,19 +171,19 @@ pub(crate) fn parse_relative_date(text: &str, ctx: &ParseCtx) -> Option<Reading>
         .or_else(|| lowered.strip_suffix(" day ago"))
     {
         let days = parse_whole_i64(days_text.trim())?;
-        return from_jiff_date(base.checked_sub(days.days()).ok()?)
+        return from_jiff_date(base.checked_sub(day_span(days)?).ok()?)
             .map(|date| Reading::date(date, 0.96));
     }
 
     if let Some(days_text) = text.strip_suffix("日後") {
         let days = parse_whole_i64(days_text.trim())?;
-        return from_jiff_date(base.checked_add(days.days()).ok()?)
+        return from_jiff_date(base.checked_add(day_span(days)?).ok()?)
             .map(|date| Reading::date(date, 0.96));
     }
 
     if let Some(days_text) = text.strip_suffix("日前") {
         let days = parse_whole_i64(days_text.trim())?;
-        return from_jiff_date(base.checked_sub(days.days()).ok()?)
+        return from_jiff_date(base.checked_sub(day_span(days)?).ok()?)
             .map(|date| Reading::date(date, 0.96));
     }
 
@@ -253,6 +253,17 @@ pub(crate) fn parse_relative_date(text: &str, ctx: &ParseCtx) -> Option<Reading>
 #[cfg(not(feature = "dates-jiff"))]
 pub(crate) fn parse_relative_date(_text: &str, _ctx: &ParseCtx) -> Option<Reading> {
     None
+}
+
+/// Builds a day span without panicking.
+///
+/// `jiff`'s `ToSpan::days` is a panicking constructor: a day count outside
+/// `-7304484..=7304484` aborts. Day counts here come from user text
+/// (`in 99999999999 days`), so the fallible constructor is the only safe one —
+/// an unrepresentable count is simply not a date this parser can read.
+#[cfg(feature = "dates-jiff")]
+pub(crate) fn day_span(days: i64) -> Option<jiff::Span> {
+    jiff::Span::new().try_days(days).ok()
 }
 
 #[cfg(feature = "dates-jiff")]
@@ -444,6 +455,38 @@ pub(crate) fn parse_weekday(text: &str) -> Option<jiff::civil::Weekday> {
 mod tests {
     use super::*;
     use crate::test_util::assert_close;
+
+    /// A day count too large for a `jiff` span must not panic.
+    ///
+    /// `ToSpan::days` is a panicking constructor and the count comes straight
+    /// from user text, so an unrepresentable one has to be refused, not
+    /// asserted on.
+    #[cfg(feature = "dates-jiff")]
+    #[test]
+    fn out_of_range_day_offsets_do_not_panic() {
+        let ctx = ParseCtx {
+            reference_date: Date::new(2026, 7, 19),
+            ..ParseCtx::default()
+        };
+        for text in [
+            "in 99999999999 days",
+            "99999999999 days ago",
+            "in 9223372036854775807 days",
+            "9223372036854775807 days ago",
+        ] {
+            assert!(
+                parse_relative_date(text, &ctx).is_none(),
+                "{text} is not a date this parser can represent"
+            );
+        }
+        // The representable case still reads.
+        assert_eq!(
+            parse_relative_date("in 3 days", &ctx)
+                .and_then(|reading| reading.date)
+                .as_deref(),
+            Some("2026-07-22")
+        );
+    }
 
     #[test]
     fn surfaces_slash_fraction_date_ambiguity() {

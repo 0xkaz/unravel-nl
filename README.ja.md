@@ -169,13 +169,18 @@ node tests/wasm_node_smoke.mjs
 ## 開発
 
 ```sh
-make lint        # cargo fmt --check + clippy -D warnings
-make test        # cargo test --all-features
-make test-dates  # cargo test --features dates-jiff
-make test-wasm   # wasm-pack ビルド + Node / ブラウザアダプタのスモークテスト
-make web-test    # TypeScript 型定義の型チェック
-make check       # lint + test + test-dates
+make lint           # cargo fmt --check + clippy -D warnings
+make test           # cargo test --all-features
+make test-default   # cargo test          （多くの利用者が使うビルド）
+make test-dates     # cargo test --features dates-jiff
+make test-timezones # cargo test --features timezones-jiff
+make test-wasm      # wasm-pack ビルド + Node / ブラウザアダプタのスモークテスト
+make web-test       # TypeScript 型定義の型チェック
+make check          # lint + 上記の全 feature 構成
 ```
+
+`make check` は `--all-features` だけに頼らず各 feature 構成を個別に実行します。
+片方の構成でしか到達しないコードで実際にバグが出たことがあるためです。
 
 `make test-wasm` には [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) と
 Node.js が必要です。`make web-test` は事前に `web/` で `npm install` が必要です。

@@ -280,6 +280,16 @@ pub(crate) fn parse_utc_offset_seconds(text: &str) -> Option<i32> {
     Some(sign * (hours * 3600 + minutes * 60))
 }
 
+/// Resolves an IANA zone offset for a wall-clock time on the reference day.
+///
+/// Every step is fallible on purpose. `ParseCtx::reference_date` is built by
+/// [`Date::new`], which range-checks month and day independently and so accepts
+/// days the calendar does not have (`2026-02-31`), and its year is an `i32`
+/// while `jiff` only models `-9999..=9999`. Both are rejected here — through
+/// [`checked_date`] and [`to_jiff_date`], the same gates the date parser uses —
+/// rather than handed to a panicking `jiff` constructor. Returning `None` lets
+/// the caller fall through to the `TimezoneUnsupported` skipped finding, so the
+/// input is reported rather than dropped or crashed on.
 #[cfg(feature = "timezones-jiff")]
 pub(crate) fn iana_timezone_offset_seconds(
     zone: &str,
@@ -290,13 +300,16 @@ pub(crate) fn iana_timezone_offset_seconds(
         return None;
     }
     let date = reference_date?;
-    let year = i16::try_from(date.year).ok()?;
+    let date = to_jiff_date(checked_date(date.year, date.month, date.day)?)?;
+    if !seconds.is_finite() {
+        return None;
+    }
     let clock_seconds = seconds.round() as i64;
     let hour = i8::try_from(clock_seconds / 3600).ok()?;
     let minute = i8::try_from((clock_seconds % 3600) / 60).ok()?;
     let second = i8::try_from(clock_seconds % 60).ok()?;
-    let datetime =
-        jiff::civil::date(year, date.month as i8, date.day as i8).at(hour, minute, second, 0);
+    let time = jiff::civil::Time::new(hour, minute, second, 0).ok()?;
+    let datetime = date.to_datetime(time);
     let (canonical_name, data) = jiff_tzdb::get(zone)?;
     let timezone = jiff::tz::TimeZone::tzif(canonical_name, data).ok()?;
     datetime
@@ -611,6 +624,54 @@ mod tests {
         .expect("winter IANA timezone");
         assert_eq!(winter.timezone.as_deref(), Some("UTC"));
         assert_close(winter.value.unwrap(), 14.0 * 3600.0);
+    }
+
+    /// A reference date the calendar does not have, or a year `jiff` cannot
+    /// model, must not reach a panicking `jiff` constructor.
+    ///
+    /// `Date::new` range-checks month and day independently, so a caller can
+    /// hand in `2026-02-31`, and its year is an `i32` while `jiff` models only
+    /// `-9999..=9999`. Both used to panic inside `jiff::civil::date`. The
+    /// timezone is simply unresolvable against such a date, so the input falls
+    /// through to the existing `TimezoneUnsupported` finding.
+    #[cfg(feature = "timezones-jiff")]
+    #[test]
+    fn impossible_reference_dates_do_not_panic() {
+        let impossible = [
+            Date::new(2026, 2, 31),
+            Date::new(2026, 2, 30),
+            Date::new(2026, 4, 31),
+            Date::new(2026, 6, 31),
+            Date::new(20000, 1, 1),
+        ];
+        for reference_date in impossible {
+            assert!(reference_date.is_some(), "Date::new accepts these today");
+            let ctx = ParseCtx {
+                reference_date,
+                ..ParseCtx::default()
+            };
+
+            let parsed = parse("3pm America/New_York", Some(ctx.clone()));
+            assert!(parsed.best.is_none(), "{reference_date:?}");
+            assert!(
+                parsed
+                    .findings
+                    .skipped
+                    .iter()
+                    .any(|issue| issue.code == IssueCode::TimezoneUnsupported),
+                "{reference_date:?} must be reported, not dropped: {:?}",
+                parsed.findings
+            );
+
+            // The completion route reaches the same code and used to panic too.
+            let completions = complete_readings("3pm America/New_York", Some(ctx));
+            assert!(
+                completions
+                    .iter()
+                    .all(|candidate| candidate.reading.timezone.as_deref() != Some("UTC")),
+                "{reference_date:?}"
+            );
+        }
     }
 
     #[test]

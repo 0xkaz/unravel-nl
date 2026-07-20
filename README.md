@@ -558,13 +558,19 @@ assert!(values[0].message.as_ref().unwrap().contains("[APPROXIMATION]"));
 ## Development
 
 ```sh
-make lint        # cargo fmt --check + clippy -D warnings
-make test        # cargo test --all-features
-make test-dates  # cargo test --features dates-jiff
-make test-wasm   # wasm-pack builds + Node/browser adapter smoke tests
-make web-test    # TypeScript definition type-check
-make check       # lint + test + test-dates
+make lint           # cargo fmt --check + clippy -D warnings
+make test           # cargo test --all-features
+make test-default   # cargo test          (the build most users get)
+make test-dates     # cargo test --features dates-jiff
+make test-timezones # cargo test --features timezones-jiff
+make test-wasm      # wasm-pack builds + Node/browser adapter smoke tests
+make web-test       # TypeScript definition type-check
+make check          # lint + every feature configuration above
 ```
+
+`make check` runs each feature configuration separately rather than relying on
+`--all-features` alone, because code reachable only under one of them has
+shipped bugs before.
 
 `make test-wasm` requires [`wasm-pack`](https://rustwasm.github.io/wasm-pack/)
 and Node.js. `make test-wasm` and `make web-test` both require `npm install`

@@ -390,6 +390,12 @@ pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &
             );
             return;
         }
+        // An endpoint that is a three-part slash date has two readings, and the
+        // range collapsed it to one. Report the choice rather than let it vanish.
+        parsed
+            .findings
+            .ambiguities
+            .extend(range_endpoint_ambiguities(trimmed, ctx));
         parsed.best = Some(reading);
         return;
     }

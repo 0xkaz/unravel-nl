@@ -177,7 +177,11 @@ pub enum NumberFormat {
     DotDecimal,
 }
 
-/// Hints which parser grammar is appropriate for the caller's task.
+/// Selects which parser grammar [`parse`] runs.
+///
+/// Carried by [`ParseCtx::purpose`], where it is a hard filter rather than a
+/// hint: input the selected grammar does not read is refused rather than handed
+/// to another grammar.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ParsePurpose {
     /// General-purpose parsing.
@@ -326,15 +330,29 @@ pub struct ParseCtx {
     pub number_format: NumberFormat,
     /// Selects which grammar [`parse`] runs. This is a hard filter, not a hint.
     ///
-    /// A non-[`ParsePurpose::General`] value makes [`parse`] behave exactly as
-    /// if the corresponding narrow entry point had been called
-    /// ([`parse_quantity_fast`], [`parse_number_fast`], [`parse_date_fast`],
-    /// [`parse_recurrence_fast`], [`parse_dimensions_for_editor`]), so input
-    /// that the selected grammar does not read is refused rather than handed to
-    /// another grammar: `parse("5 kg", ..)` with
+    /// Input that the selected grammar does not read is refused rather than
+    /// handed to another grammar: `parse("5 kg", ..)` with
     /// `purpose: ParsePurpose::Number` and `parse("next friday", ..)` with
     /// `purpose: ParsePurpose::Quantity` both return `best: None` and report
     /// [`IssueCode::NoValue`].
+    ///
+    /// For the four whole-string purposes this is exactly the corresponding
+    /// narrow entry point: [`ParsePurpose::Quantity`] is
+    /// [`parse_quantity_fast`], [`ParsePurpose::Number`] is
+    /// [`parse_number_fast`], [`ParsePurpose::Date`] is [`parse_date_fast`],
+    /// and [`ParsePurpose::Recurrence`] is [`parse_recurrence_fast`].
+    ///
+    /// [`ParsePurpose::DimensionEditor`] is the exception, and is **not**
+    /// equivalent to [`parse_dimensions_for_editor`]. That function is an
+    /// extractor: it scans free text for numeric candidates, infers an expected
+    /// dimension from a neighbouring label, and keeps only the candidates that
+    /// survive that filter. This purpose runs the same editor grammar over the
+    /// whole input with neither step, so the two diverge in both directions:
+    /// `parse("幅3m", ..)` with this purpose returns `best: None` while
+    /// `parse_dimensions_for_editor("幅3m", ..)` extracts `3 m` from after the
+    /// label, and `parse("3640", ..)` with this purpose returns the unitless
+    /// number while `parse_dimensions_for_editor("3640", ..)` returns nothing,
+    /// because an unlabelled bare number is not a dimension.
     ///
     /// Contrast [`ParseCtx::expected_dimension`], which really is only a hint.
     pub purpose: ParsePurpose,
@@ -806,6 +824,43 @@ mod tests {
             with_purpose(ParsePurpose::Recurrence)("every monday"),
             parse_recurrence_fast("every monday", None)
         );
+    }
+
+    /// `ParsePurpose::DimensionEditor` is *not* `parse_dimensions_for_editor`.
+    ///
+    /// The purpose runs the editor grammar over the whole input; the function is
+    /// an extractor that finds candidates inside free text and infers an
+    /// expected dimension from a neighbouring label. They diverge in both
+    /// directions, and the field documentation now says so.
+    #[test]
+    fn dimension_editor_purpose_differs_from_the_editor_extractor() {
+        let with_purpose = |text: &str| {
+            parse(
+                text,
+                Some(ParseCtx {
+                    purpose: ParsePurpose::DimensionEditor,
+                    ..ParseCtx::default()
+                }),
+            )
+        };
+
+        // A labelled dimension: the extractor reads past the label, the whole
+        // string does not parse as a quantity.
+        let labelled = with_purpose("幅3m");
+        assert!(labelled.best.is_none());
+        let extracted = parse_dimensions_for_editor("幅3m", None);
+        assert_eq!(extracted.len(), 1);
+        let best = extracted[0].parsed.best.as_ref().expect("a reading");
+        assert_eq!(best.unit.as_deref(), Some("m"));
+        assert_eq!(best.value, Some(3.0));
+
+        // An unlabelled bare number: the purpose reads it, the extractor refuses
+        // it because nothing says it is a dimension.
+        let bare = with_purpose("3640");
+        let best = bare.best.as_ref().expect("a reading");
+        assert_eq!(best.kind, Kind::Number);
+        assert_eq!(best.value, Some(3640.0));
+        assert!(parse_dimensions_for_editor("3640", None).is_empty());
     }
 
     /// `ParseCtx::expected_dimension` really is only a hint for `parse`.

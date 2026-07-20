@@ -369,6 +369,37 @@ pub(crate) fn parse_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     Some(Reading::range(from, to, 0.94))
 }
 
+/// Reports the reading question a range endpoint carries in its own right.
+///
+/// [`parse_range`] reduces each endpoint to a single [`Reading`] through
+/// [`parse_endpoint`], which takes the first reading of a three-part slash date
+/// and drops the competing one. Standing alone, `5/6/2026` reports an
+/// `AmbiguousDate`; as a range endpoint the same text used to commit silently
+/// to one order. This restores the report.
+///
+/// The endpoints themselves stay exactly as parsed, and no alternative range is
+/// produced. Re-reading both ends independently would multiply into up to four
+/// candidate ranges, most of them combinations no reader intends (nobody writes
+/// `5/6/2026 to 7/8/2026` meaning May 6th to August 7th), and the crate's
+/// promise is that nothing is dropped *silently* — not that every combination
+/// is enumerated. The finding names the endpoint that is in question and
+/// carries its span, so a caller can ask about exactly that fragment.
+pub(crate) fn range_endpoint_ambiguities(text: &str, ctx: &ParseCtx) -> Vec<Ambiguity> {
+    let Some((left, right)) = split_range_text(text) else {
+        return Vec::new();
+    };
+    [left, right]
+        .into_iter()
+        .map(str::trim)
+        .filter_map(|endpoint| {
+            let ambiguous = parse_ambiguous_numeric_slash_date(endpoint, ctx)?;
+            let mut ambiguity = ambiguous.ambiguity;
+            ambiguity.span = span_in(text, endpoint);
+            Some(ambiguity)
+        })
+        .collect()
+}
+
 pub(crate) fn split_range_text(text: &str) -> Option<(&str, &str)> {
     let trimmed = text.trim();
     if let Some(inner) = trimmed.strip_prefix("between ") {
@@ -586,6 +617,74 @@ mod tests {
         assert_eq!(range.to.dimension, Some(Dimension::Time));
         assert_close(range.from.value.unwrap(), 172_800.0);
         assert_close(range.to.value.unwrap(), 259_200.0);
+    }
+
+    /// A slash-date range must not swallow the day-first/month-first question.
+    ///
+    /// `parse("5/6/2026", ..)` reports an `AmbiguousDate`; as a range endpoint
+    /// the same text used to commit to one order with no finding at all, and
+    /// under `en-GB` it silently committed to the other order.
+    #[cfg(feature = "dates-jiff")]
+    #[test]
+    fn slash_date_range_endpoints_keep_their_ambiguity() {
+        let ctx = ParseCtx {
+            reference_date: Date::new(2026, 7, 19),
+            ..ParseCtx::default()
+        };
+        let parsed = parse("5/6/2026 to 7/8/2026", Some(ctx.clone()));
+        let best = parsed.best.as_ref().expect("a range");
+        let range = best.range.as_ref().expect("range endpoints");
+        assert_eq!(range.from.date.as_deref(), Some("2026-05-06"));
+        assert_eq!(range.to.date.as_deref(), Some("2026-07-08"));
+
+        let ambiguities: Vec<_> = parsed
+            .findings
+            .ambiguities
+            .iter()
+            .filter(|issue| issue.code == IssueCode::AmbiguousDate)
+            .collect();
+        assert_eq!(
+            ambiguities.len(),
+            2,
+            "both endpoints have two readings: {:?}",
+            parsed.findings
+        );
+        assert_eq!(ambiguities[0].ref_text, "5/6/2026");
+        assert_eq!(ambiguities[0].span.start, 0);
+        assert_eq!(ambiguities[1].ref_text, "7/8/2026");
+        assert_eq!(ambiguities[1].span.start, 12);
+
+        // `en-GB` reads the other order, and must report the choice just the same.
+        let gb = parse(
+            "5/6/2026 to 7/8/2026",
+            Some(ParseCtx {
+                locale: Some(Locale::EnGb),
+                ..ctx.clone()
+            }),
+        );
+        let range = gb
+            .best
+            .as_ref()
+            .and_then(|best| best.range.as_ref())
+            .expect("a range");
+        assert_eq!(range.from.date.as_deref(), Some("2026-06-05"));
+        assert_eq!(range.to.date.as_deref(), Some("2026-08-07"));
+        assert_eq!(
+            gb.findings
+                .ambiguities
+                .iter()
+                .filter(|issue| issue.code == IssueCode::AmbiguousDate)
+                .count(),
+            2
+        );
+
+        // An endpoint only one order can name is not ambiguous and reports nothing.
+        let unambiguous = parse("5/25/2026 to 6/26/2026", Some(ctx));
+        assert!(
+            unambiguous.findings.ambiguities.is_empty(),
+            "{:?}",
+            unambiguous.findings
+        );
     }
 
     #[test]
