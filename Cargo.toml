@@ -2,12 +2,16 @@
 name = "unravel-nl"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "Deterministic natural-language parsing and humanizing for informal quantities, units, and values."
 license = "MIT"
 repository = "https://github.com/0xkaz/unravel-nl"
 readme = "README.md"
 keywords = ["natural-language", "units", "parser", "humanize"]
 categories = ["parser-implementations", "value-formatting"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lib]
 crate-type = ["rlib", "cdylib"]

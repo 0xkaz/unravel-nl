@@ -65,6 +65,32 @@ The first slice focuses on:
 The default compute path has no I/O and no runtime dependencies. Calendar
 arithmetic is available behind the optional `dates-jiff` feature.
 
+Japanese documentation: [README.ja.md](README.ja.md)
+
+## Installation
+
+```sh
+cargo add unravel-nl
+```
+
+Or add it to `Cargo.toml` directly:
+
+```toml
+[dependencies]
+unravel-nl = "0.1"
+```
+
+Minimum supported Rust version: **1.88** (2024 edition, let-chains).
+
+### Feature Flags
+
+| Feature | Default | Description |
+| --- | --- | --- |
+| _(none)_ | yes | Core parsing and humanizing. No I/O, no runtime dependencies. |
+| `dates-jiff` | no | Calendar arithmetic and relative dates (`next friday`, `in 3 days`) via `jiff`. |
+| `timezones-jiff` | no | IANA time zone handling. Implies `dates-jiff`. |
+| `wasm` | no | `wasm-bindgen` exports for browser and Node adapters. See [docs/wasm.md](docs/wasm.md). |
+
 ## Example
 
 ```rust
@@ -502,8 +528,26 @@ assert!(!values[0].ok);
 assert!(values[0].message.as_ref().unwrap().contains("[APPROXIMATION]"));
 ```
 
+## Development
+
+```sh
+make lint        # cargo fmt --check + clippy -D warnings
+make test        # cargo test --all-features
+make test-dates  # cargo test --features dates-jiff
+make test-wasm   # wasm-pack builds + Node/browser adapter smoke tests
+make web-test    # TypeScript definition type-check
+make check       # lint + test + test-dates
+```
+
+`make test-wasm` requires [`wasm-pack`](https://rustwasm.github.io/wasm-pack/)
+and Node.js. `make web-test` requires `npm install` inside `web/` first.
+
 ## Attribution
 
 The public API direction is inspired by `pascalorg/lingo` (MIT). This crate is
 an independent Rust implementation and does not copy source code from that
 project.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
