@@ -2771,13 +2771,12 @@ fn broad_clause_dispatch(clause: &str) -> BroadClauseDispatch {
     if trimmed.starts_with('約') {
         return BroadClauseDispatch::Prefix;
     }
-    let lower = ascii_lower_cow(trimmed);
-    if lower.starts_with("between ")
-        || lower.starts_with("from ")
-        || lower.starts_with("about ")
-        || lower.starts_with("around ")
-        || lower.starts_with("roughly ")
-        || lower.starts_with("approximately ")
+    if strip_prefix_ascii_case(trimmed, "between ").is_some()
+        || strip_prefix_ascii_case(trimmed, "from ").is_some()
+        || strip_prefix_ascii_case(trimmed, "about ").is_some()
+        || strip_prefix_ascii_case(trimmed, "around ").is_some()
+        || strip_prefix_ascii_case(trimmed, "roughly ").is_some()
+        || strip_prefix_ascii_case(trimmed, "approximately ").is_some()
     {
         BroadClauseDispatch::Prefix
     } else if has_at_most_three_words(trimmed) {
