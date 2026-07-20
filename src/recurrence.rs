@@ -279,7 +279,9 @@ pub(crate) fn valid_monthly_byday(text: &str) -> bool {
     if text.len() < 3 {
         return false;
     }
-    let (ordinal_text, weekday_text) = text.split_at(text.len() - 2);
+    let Some((ordinal_text, weekday_text)) = text.split_at_checked(text.len() - 2) else {
+        return false;
+    };
     matches!(weekday_text, "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU")
         && matches!(ordinal_text, "-1" | "1" | "2" | "3" | "4" | "5")
 }
@@ -314,5 +316,67 @@ pub(crate) fn recurrence_weekday(text: &str) -> Option<&'static str> {
             Some("SU")
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_no_reading(text: &str) {
+        let parsed = parse(text, None);
+        assert!(parsed.best.is_none(), "unexpected reading for {text:?}");
+        assert!(
+            !parsed.findings.skipped.is_empty(),
+            "expected a skipped finding for {text:?}"
+        );
+    }
+
+    #[test]
+    fn monthly_byday_with_multibyte_tail_does_not_panic() {
+        // `あ` is 3 bytes, so a naive byte split lands mid-character.
+        assert!(!valid_monthly_byday("あ"));
+        assert!(!valid_monthly_byday("あい"));
+        assert!(!valid_monthly_byday("1あ"));
+        assert!(!valid_monthly_byday("€uro"));
+        assert!(!valid_monthly_byday("1€"));
+        assert!(!valid_monthly_byday("1𝍄"));
+        assert!(!valid_monthly_byday("𝍄"));
+    }
+
+    #[test]
+    fn parse_multibyte_monthly_byday_yields_no_reading() {
+        assert_no_reading("FREQ=MONTHLY;BYDAY=あ");
+        assert_no_reading("FREQ=MONTHLY;BYDAY=あい");
+        assert_no_reading("FREQ=MONTHLY;BYDAY=1あ");
+        assert_no_reading("FREQ=MONTHLY;BYDAY=1€");
+        assert_no_reading("FREQ=MONTHLY;BYDAY=1𝍄");
+    }
+
+    #[test]
+    fn parse_recurrence_fast_multibyte_monthly_byday_yields_no_reading() {
+        let parsed = parse_recurrence_fast("FREQ=MONTHLY;BYDAY=あ", None);
+        assert!(parsed.best.is_none());
+        assert!(!parsed.findings.skipped.is_empty());
+    }
+
+    #[test]
+    fn valid_monthly_byday_still_accepts_supported_rrules() {
+        assert!(valid_monthly_byday("2MO"));
+        assert!(valid_monthly_byday("-1FR"));
+        assert!(valid_monthly_byday("5SU"));
+        assert!(!valid_monthly_byday("6MO"));
+        assert!(!valid_monthly_byday("2XX"));
+    }
+
+    #[test]
+    fn ordinary_recurrence_inputs_still_parse() {
+        let rrule = parse("FREQ=MONTHLY;BYDAY=2MO", None).best.expect("rrule");
+        assert_eq!(rrule.kind, Kind::Recurrence);
+        assert_eq!(rrule.recurrence.as_deref(), Some("FREQ=MONTHLY;BYDAY=2MO"));
+
+        let weekly = parse("every monday", None).best.expect("weekly");
+        assert_eq!(weekly.kind, Kind::Recurrence);
+        assert_eq!(weekly.recurrence.as_deref(), Some("FREQ=WEEKLY;BYDAY=MO"));
     }
 }

@@ -83,7 +83,14 @@ pub(crate) fn push_reading_json(json: &mut String, reading: &Reading) {
     }
     if let Some(value) = reading.value {
         json.push_str(",\"value\":");
-        json.push_str(&format_number(value));
+        // JSON has no literal for infinity or NaN, and the output schema already
+        // declares `value` as ["number", "null"], so a non-finite value is
+        // emitted as null rather than as a token that breaks `JSON.parse`.
+        if value.is_finite() {
+            json.push_str(&format_number(value));
+        } else {
+            json.push_str("null");
+        }
     }
     if let Some(unit) = &reading.unit {
         json.push_str(",\"unit\":");
@@ -152,5 +159,154 @@ mod tests {
         assert!(failed.contains("\"ok\":false"));
         assert!(failed.contains("\"code\":\"TIMEZONE_UNSUPPORTED\""));
         assert!(failed.contains("\"severity\":\"error\""));
+    }
+
+    #[test]
+    fn emits_valid_json_for_non_finite_readings() {
+        // `JSON.parse` on the browser side must not see a bare inf/-inf/NaN
+        // token, so a non-finite value is emitted as null (the output schema
+        // already declares "value": ["number", "null"]).
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let mut json = String::new();
+            push_reading_json(&mut json, &Reading::number(value, 0.9));
+            assert_eq!(json, "{\"kind\":\"number\",\"value\":null}", "{value}");
+            assert!(!json.contains("inf"), "{value}");
+            assert!(!json.contains("NaN"), "{value}");
+            assert!(!json.contains("nan"), "{value}");
+            assert!(is_valid_json(&json), "{json}");
+        }
+
+        let mut json = String::new();
+        push_reading_json(
+            &mut json,
+            &Reading::quantity(
+                f64::INFINITY,
+                "kg",
+                Dimension::Mass,
+                Provenance::SiMultiple,
+                false,
+                0.9,
+            ),
+        );
+        assert!(json.contains("\"value\":null"), "{json}");
+        assert!(is_valid_json(&json), "{json}");
+    }
+
+    #[test]
+    fn emits_valid_json_for_overflowing_input() {
+        let overflowing = parsed_summary_json(&parse(&"9".repeat(400), None));
+        assert!(overflowing.contains("\"ok\":false"), "{overflowing}");
+        assert!(overflowing.contains("\"best\":null"), "{overflowing}");
+        assert!(!overflowing.contains("inf"), "{overflowing}");
+        assert!(!overflowing.contains("NaN"), "{overflowing}");
+        assert!(is_valid_json(&overflowing), "{overflowing}");
+
+        let large = parsed_summary_json(&parse("100000000000000000000", None));
+        assert!(large.contains("\"value\":100000000000000000000"), "{large}");
+        assert!(is_valid_json(&large), "{large}");
+    }
+
+    /// Minimal structural JSON validator, enough to catch a bare `inf`/`NaN`
+    /// token appearing where a number belongs.
+    fn is_valid_json(text: &str) -> bool {
+        let mut rest = text;
+        json_value(&mut rest) && rest.trim().is_empty()
+    }
+
+    fn json_value(rest: &mut &str) -> bool {
+        *rest = rest.trim_start();
+        match rest.chars().next() {
+            Some('{') => json_container(rest, '}', true),
+            Some('[') => json_container(rest, ']', false),
+            Some('"') => json_string(rest),
+            Some('t') => json_literal(rest, "true"),
+            Some('f') => json_literal(rest, "false"),
+            Some('n') => json_literal(rest, "null"),
+            Some(_) => json_number(rest),
+            None => false,
+        }
+    }
+
+    fn json_container(rest: &mut &str, close: char, keyed: bool) -> bool {
+        *rest = &rest[1..];
+        *rest = rest.trim_start();
+        if rest.starts_with(close) {
+            *rest = &rest[close.len_utf8()..];
+            return true;
+        }
+        loop {
+            if keyed {
+                *rest = rest.trim_start();
+                if !json_string(rest) {
+                    return false;
+                }
+                *rest = rest.trim_start();
+                if !rest.starts_with(':') {
+                    return false;
+                }
+                *rest = &rest[1..];
+            }
+            if !json_value(rest) {
+                return false;
+            }
+            *rest = rest.trim_start();
+            if rest.starts_with(',') {
+                *rest = &rest[1..];
+                continue;
+            }
+            if rest.starts_with(close) {
+                *rest = &rest[close.len_utf8()..];
+                return true;
+            }
+            return false;
+        }
+    }
+
+    fn json_string(rest: &mut &str) -> bool {
+        if !rest.starts_with('"') {
+            return false;
+        }
+        let mut chars = rest.char_indices().skip(1);
+        while let Some((idx, ch)) = chars.next() {
+            match ch {
+                '\\' => {
+                    if chars.next().is_none() {
+                        return false;
+                    }
+                }
+                '"' => {
+                    *rest = &rest[idx + 1..];
+                    return true;
+                }
+                ch if ch.is_control() => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn json_literal(rest: &mut &str, literal: &str) -> bool {
+        if let Some(tail) = rest.strip_prefix(literal) {
+            *rest = tail;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn json_number(rest: &mut &str) -> bool {
+        let end = rest
+            .find(|ch: char| !matches!(ch, '0'..='9' | '-' | '+' | '.' | 'e' | 'E'))
+            .unwrap_or(rest.len());
+        let (number, tail) = rest.split_at(end);
+        if number.is_empty() || number.parse::<f64>().is_err() {
+            return false;
+        }
+        // Rust accepts "inf"/"NaN" in `parse::<f64>`, JSON does not.
+        if !number.starts_with(|ch: char| ch.is_ascii_digit() || ch == '-') {
+            return false;
+        }
+        *rest = tail;
+        true
     }
 }

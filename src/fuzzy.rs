@@ -324,7 +324,11 @@ pub(crate) fn parse_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
 
     let from = parse_endpoint(left_text, ctx)?;
     let to = parse_endpoint(right.trim(), ctx)?;
-    if from.kind != to.kind {
+    // Endpoints must agree on kind, dimension, and canonical unit: a range whose
+    // ends measure different things is not a range, and inventing a conversion
+    // between dimensions is not this parser's job. Matches the check
+    // `parse_plus_minus_range` already applies.
+    if from.kind != to.kind || from.dimension != to.dimension || from.unit != to.unit {
         return None;
     }
     Some(Reading::range(from, to, 0.94))
@@ -654,5 +658,59 @@ mod tests {
         assert_close(range.from.value.unwrap(), 27.0);
         assert_close(range.to.value.unwrap(), 35.0);
         assert_eq!(japanese_hot.findings.approximations[0].ref_text, "暑い");
+    }
+
+    #[test]
+    fn refuses_ranges_whose_endpoints_have_different_dimensions() {
+        for input in [
+            "5kg to 10m",
+            "5kg〜10m",
+            "between 5kg and 10m",
+            "3m to 5kg",
+            "from 10kg to 2m",
+        ] {
+            let parsed = parse(input, None);
+            // No range may be built across dimensions, and no conversion
+            // between them may be invented.
+            assert!(
+                parsed
+                    .best
+                    .as_ref()
+                    .is_none_or(|best| best.kind != Kind::Range),
+                "{input}: {:?}",
+                parsed.best
+            );
+            // The loss is reported rather than dropped.
+            assert!(
+                !parsed.findings.skipped.is_empty()
+                    || !parsed.findings.ambiguities.is_empty()
+                    || parsed.best.is_some(),
+                "{input}"
+            );
+            if parsed.best.is_none() {
+                assert_eq!(
+                    parsed.findings.skipped[0].code,
+                    IssueCode::NoValue,
+                    "{input}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn refuses_ranges_whose_endpoints_have_different_units() {
+        let ctx = ParseCtx::default();
+        // Same dimension, different canonical unit is also refused: two
+        // currencies are not endpoints of one range.
+        assert!(parse_range("10 USD to 20 JPY", &ctx).is_none());
+        assert!(parse("10 USD to 20 JPY", None).best.is_none());
+        // Same dimension and same canonical unit still builds a range.
+        let range = parse_range("5cm to 10m", &ctx).expect("length range");
+        assert_eq!(range.kind, Kind::Range);
+        let range = range.range.expect("endpoints");
+        assert_eq!(range.from.unit.as_deref(), Some("m"));
+        assert_eq!(range.to.unit.as_deref(), Some("m"));
+        assert_close(range.from.value.unwrap(), 0.05);
+        assert_close(range.to.value.unwrap(), 10.0);
     }
 }

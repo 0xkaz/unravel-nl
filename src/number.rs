@@ -208,22 +208,22 @@ pub(crate) fn parse_english_number_words(text: &str) -> Option<i64> {
 
     for word in normalized.split_whitespace() {
         if word == "a" || word == "an" {
-            current += 1;
+            current = current.checked_add(1)?;
             saw_word = true;
             continue;
         }
         if let Some(value) = small_number_word(word) {
-            current += value;
+            current = current.checked_add(value)?;
             saw_word = true;
             continue;
         }
         if word == "hundred" {
-            current *= 100;
+            current = current.checked_mul(100)?;
             saw_word = true;
             continue;
         }
         if word == "thousand" {
-            total += current * 1000;
+            total = total.checked_add(current.checked_mul(1000)?)?;
             current = 0;
             saw_word = true;
             continue;
@@ -231,7 +231,10 @@ pub(crate) fn parse_english_number_words(text: &str) -> Option<i64> {
         return None;
     }
 
-    saw_word.then_some(total + current)
+    if !saw_word {
+        return None;
+    }
+    total.checked_add(current)
 }
 
 pub(crate) fn small_number_word(word: &str) -> Option<i64> {
@@ -285,24 +288,24 @@ pub(crate) fn parse_cjk_number(text: &str) -> Option<i64> {
             '百' => 100,
             '千' => 1000,
             '万' => {
-                section += number;
-                total += section * 10_000;
+                section = section.checked_add(number)?;
+                total = total.checked_add(section.checked_mul(10_000)?)?;
                 section = 0;
                 number = 0;
                 saw = true;
                 continue;
             }
             '億' => {
-                section += number;
-                total += section * 100_000_000;
+                section = section.checked_add(number)?;
+                total = total.checked_add(section.checked_mul(100_000_000)?)?;
                 section = 0;
                 number = 0;
                 saw = true;
                 continue;
             }
             '兆' => {
-                section += number;
-                total += section * 1_000_000_000_000;
+                section = section.checked_add(number)?;
+                total = total.checked_add(section.checked_mul(1_000_000_000_000)?)?;
                 section = 0;
                 number = 0;
                 saw = true;
@@ -310,12 +313,20 @@ pub(crate) fn parse_cjk_number(text: &str) -> Option<i64> {
             }
             _ => return None,
         };
-        section += if number == 0 { unit } else { number * unit };
+        let addend = if number == 0 {
+            unit
+        } else {
+            number.checked_mul(unit)?
+        };
+        section = section.checked_add(addend)?;
         number = 0;
         saw = true;
     }
 
-    saw.then_some(total + section + number)
+    if !saw {
+        return None;
+    }
+    total.checked_add(section)?.checked_add(number)
 }
 
 pub(crate) fn cjk_digit(ch: char) -> Option<i64> {
@@ -431,6 +442,56 @@ mod tests {
         let best = parsed.best.expect("best reading");
         assert_eq!(best.unit.as_deref(), Some("kg"));
         assert_close(best.value.unwrap(), 35.0);
+    }
+
+    #[test]
+    fn cjk_number_overflow_returns_none_instead_of_panicking() {
+        let overflowing = "九千兆".repeat(1026);
+        assert_eq!(parse_cjk_number(&overflowing), None);
+        assert!(parse(&overflowing, None).best.is_none());
+    }
+
+    #[test]
+    fn cjk_number_just_below_overflow_still_parses() {
+        // Each `九千兆` adds 9_000 * 10^12; 1024 repeats is the largest count
+        // that fits in i64 (1025 overflows), so the fix must not reject 1024.
+        assert_eq!(
+            parse_cjk_number(&"九千兆".repeat(1024)),
+            Some(9_216_000_000_000_000_000)
+        );
+        assert_eq!(parse_cjk_number(&"九千兆".repeat(1025)), None);
+    }
+
+    #[test]
+    fn cjk_number_ordinary_inputs_still_parse() {
+        assert_eq!(parse_cjk_number("九千"), Some(9000));
+        assert_eq!(parse_cjk_number("三十五"), Some(35));
+        assert_eq!(parse_cjk_number("一億二千万"), Some(120_000_000));
+    }
+
+    #[test]
+    fn english_number_words_overflow_returns_none_instead_of_panicking() {
+        let text = "ten hundred hundred hundred hundred hundred hundred hundred hundred hundred";
+        assert_eq!(parse_english_number_words(text), None);
+        assert!(parse(text, None).best.is_none());
+    }
+
+    #[test]
+    fn english_number_words_just_below_overflow_still_parses() {
+        // 10 * 100^8 = 1e17, still inside i64.
+        let text = "ten hundred hundred hundred hundred hundred hundred hundred hundred";
+        assert_eq!(
+            parse_english_number_words(text),
+            Some(100_000_000_000_000_000)
+        );
+    }
+
+    #[test]
+    fn english_number_words_ordinary_inputs_still_parse() {
+        assert_eq!(parse_english_number_words("ten hundred"), Some(1000));
+        assert_eq!(parse_english_number_words("two hundred"), Some(200));
+        assert_eq!(parse_english_number_words("twenty-five"), Some(25));
+        assert_eq!(parse_english_number_words("three thousand"), Some(3000));
     }
 
     #[test]

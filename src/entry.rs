@@ -270,6 +270,11 @@ pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<Par
 }
 
 pub(crate) fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+    parse_normalized_dispatch(trimmed, ctx, parsed);
+    finalize_parsed(trimmed, parsed);
+}
+
+pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     let features = InputFeatures::new(trimmed);
 
     if let Some(result) = parse_qualified_reading(trimmed, ctx) {
@@ -606,6 +611,11 @@ pub(crate) fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut 
 }
 
 pub(crate) fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+    parse_quantity_fast_dispatch(trimmed, ctx, parsed);
+    finalize_parsed(trimmed, parsed);
+}
+
+pub(crate) fn parse_quantity_fast_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     if let Some(result) = parse_qualified_reading(trimmed, ctx) {
         if ctx.strictness == Strictness::Strict {
             parsed.findings.skipped.push(skipped_with_span(
@@ -740,6 +750,7 @@ pub(crate) fn parse_number_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut
             .skipped
             .push(skipped(trimmed, "no supported number matched"));
     }
+    finalize_parsed(trimmed, parsed);
 }
 
 pub(crate) fn parse_date_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
@@ -796,6 +807,96 @@ pub(crate) fn set_plain_number_result(
     parsed.best = Some(reading);
 }
 
+pub(crate) const NON_FINITE_REASON: &str =
+    "numeric value overflowed to a magnitude with no finite representation";
+
+pub(crate) const DESCENDING_RANGE_REASON: &str = "Range endpoints run from high to low; the written order was preserved rather than silently swapped.";
+
+/// Applies the checks that every parse result must pass before it is returned.
+///
+/// Runs after grammar dispatch, so it sees the reading whichever grammar won.
+/// It is idempotent: nested dispatch paths may run it more than once.
+pub(crate) fn finalize_parsed(text: &str, parsed: &mut Parsed) {
+    reject_non_finite(text, parsed);
+    flag_descending_range(text, parsed);
+}
+
+/// Drops readings whose value overflowed to infinity or collapsed to NaN.
+///
+/// A non-finite value is not a reading of the input, it is the loss of one, so
+/// it is reported rather than handed back as a clean value.
+pub(crate) fn reject_non_finite(text: &str, parsed: &mut Parsed) {
+    let best_lost = parsed
+        .best
+        .as_ref()
+        .is_some_and(|best| !reading_is_finite(best));
+    let alternative_lost = parsed
+        .alternatives
+        .iter()
+        .any(|reading| !reading_is_finite(reading));
+    if !best_lost && !alternative_lost {
+        return;
+    }
+
+    if best_lost {
+        parsed.best = None;
+    }
+    parsed.alternatives.retain(reading_is_finite);
+    parsed.findings.skipped.push(skipped_with_span(
+        text,
+        NON_FINITE_REASON,
+        IssueCode::NoValue,
+        span(text),
+    ));
+}
+
+pub(crate) fn reading_is_finite(reading: &Reading) -> bool {
+    reading.value.is_none_or(f64::is_finite)
+        && reading
+            .range
+            .as_ref()
+            .is_none_or(|range| reading_is_finite(&range.from) && reading_is_finite(&range.to))
+}
+
+/// Records a range whose endpoints descend, without reordering them.
+///
+/// A caller iterating `from..to` would get an empty sweep, so the reading is
+/// kept exactly as written and the surprise is reported instead. Reordering
+/// silently would itself lose what the input said.
+pub(crate) fn flag_descending_range(text: &str, parsed: &mut Parsed) {
+    if !parsed.best.as_ref().is_some_and(range_is_descending) {
+        return;
+    }
+    if parsed
+        .findings
+        .ambiguities
+        .iter()
+        .any(|issue| issue.reason == DESCENDING_RANGE_REASON)
+    {
+        return;
+    }
+    parsed.findings.ambiguities.push(ambiguity_with_span(
+        text,
+        DESCENDING_RANGE_REASON,
+        Some(2),
+        IssueCode::AmbiguousNumber,
+        span(text),
+    ));
+}
+
+pub(crate) fn range_is_descending(reading: &Reading) -> bool {
+    let Some(range) = reading.range.as_ref() else {
+        return false;
+    };
+    if let (Some(from), Some(to)) = (range.from.value, range.to.value) {
+        return from > to;
+    }
+    if let (Some(from), Some(to)) = (range.from.date.as_deref(), range.to.date.as_deref()) {
+        return from > to;
+    }
+    false
+}
+
 pub(crate) fn reject_candidate(parsed: &mut Parsed, text: &str, reading: Reading, reason: &str) {
     parsed.alternatives.push(reading);
     parsed.findings.skipped.push(skipped_with_span(
@@ -844,5 +945,99 @@ mod tests {
         assert_eq!(parsed.alternatives.len(), 1);
         assert_eq!(parsed.alternatives[0].unit.as_deref(), Some("mm"));
         assert_eq!(parsed.findings.ambiguities.len(), 1);
+    }
+
+    #[test]
+    fn rejects_numbers_that_overflow_to_non_finite() {
+        for input in [
+            "1".repeat(400),
+            "9".repeat(400),
+            format!("{}kg", "9".repeat(400)),
+        ] {
+            let parsed = parse(&input, None);
+            assert!(parsed.best.is_none(), "{input}");
+            assert!(
+                parsed
+                    .alternatives
+                    .iter()
+                    .all(|reading| reading.value.is_none_or(f64::is_finite)),
+                "{input}"
+            );
+            let skipped = parsed
+                .findings
+                .skipped
+                .iter()
+                .find(|issue| issue.reason == NON_FINITE_REASON)
+                .unwrap_or_else(|| panic!("non-finite finding for {input}"));
+            assert_eq!(skipped.code, IssueCode::NoValue);
+        }
+
+        // The magnitude just below the overflow threshold is still readable.
+        let finite = parse("100000000000000000000", None);
+        assert_eq!(finite.best.expect("number").value, Some(1e20));
+        assert!(finite.findings.skipped.is_empty());
+    }
+
+    #[test]
+    fn rejects_non_finite_through_narrow_entry_points() {
+        let overflowing = "9".repeat(400);
+        for parsed in [
+            parse_number_fast(&overflowing, None),
+            parse_quantity_fast(&format!("{overflowing}kg"), None),
+        ] {
+            assert!(parsed.best.is_none());
+            assert!(
+                parsed
+                    .findings
+                    .skipped
+                    .iter()
+                    .any(|issue| issue.reason == NON_FINITE_REASON)
+            );
+        }
+    }
+
+    #[test]
+    fn reports_descending_ranges_without_reordering_them() {
+        for (input, from, to) in [
+            ("from 10kg to 2kg", 10.0, 2.0),
+            ("10-5 kg", 10.0, 5.0),
+            ("100〜50m", 100.0, 50.0),
+            ("10 ± -3 mm", 0.013, 0.007),
+        ] {
+            let parsed = parse(input, None);
+            let best = parsed.best.as_ref().expect(input);
+            assert_eq!(best.kind, Kind::Range, "{input}");
+            let range = best.range.as_ref().expect(input);
+            // Endpoints are preserved exactly as written; silently swapping
+            // them would itself be a loss.
+            crate::test_util::assert_close(range.from.value.unwrap(), from);
+            crate::test_util::assert_close(range.to.value.unwrap(), to);
+
+            let issue = parsed
+                .findings
+                .ambiguities
+                .iter()
+                .find(|issue| issue.reason == DESCENDING_RANGE_REASON)
+                .unwrap_or_else(|| panic!("descending finding for {input}"));
+            assert_eq!(issue.code, IssueCode::AmbiguousNumber, "{input}");
+            assert_eq!(issue.candidate_count, Some(2), "{input}");
+            assert_eq!(issue.span.text, input, "{input}");
+        }
+    }
+
+    #[test]
+    fn leaves_ascending_ranges_unflagged() {
+        for input in ["from 2kg to 10kg", "5-10 kg", "50〜100m", "10 ± 3 mm"] {
+            let parsed = parse(input, None);
+            assert_eq!(parsed.best.as_ref().expect(input).kind, Kind::Range);
+            assert!(
+                !parsed
+                    .findings
+                    .ambiguities
+                    .iter()
+                    .any(|issue| issue.reason == DESCENDING_RANGE_REASON),
+                "{input}"
+            );
+        }
     }
 }

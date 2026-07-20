@@ -744,6 +744,7 @@ pub(crate) fn parse_editor_dimension_number_into(text: &str, ctx: &ParseCtx, par
             .skipped
             .push(skipped(text, "no supported number matched"));
     }
+    finalize_parsed(text, &mut number);
 
     if parsed_is_editor_dimension(&number, Some(expected_dimension), Some(expected_dimension)) {
         *parsed = number;

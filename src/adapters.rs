@@ -371,10 +371,34 @@ pub(crate) fn humanize_japanese_area(area: f64) -> String {
     format!("{} m2", format_number(area))
 }
 
+/// Rendered in place of a value that has no finite decimal representation.
+///
+/// `format_number` never emits `inf`, `-inf`, or `NaN`: those are not numbers a
+/// caller can act on, and they are not valid JSON numbers either. Parsing
+/// rejects non-finite readings outright (see `finalize_parsed`), so this token
+/// only surfaces for [`Reading`] values a caller built by hand.
+pub(crate) const NON_FINITE_TEXT: &str = "unrepresentable";
+
 pub(crate) fn format_number(value: f64) -> String {
-    let rounded = (value * 1_000_000.0).round() / 1_000_000.0;
+    if !value.is_finite() {
+        return NON_FINITE_TEXT.to_owned();
+    }
+    // Rounding to six decimals overflows to infinity above ~1.7e302, and above
+    // 2^53 there is no fractional part left to round, so skip it for magnitudes
+    // that cannot carry one.
+    let rounded = if value.abs() < 1e15 {
+        (value * 1_000_000.0).round() / 1_000_000.0
+    } else {
+        value
+    };
+    if rounded == 0.0 {
+        // Normalizes -0.0, which would otherwise render as "-0".
+        return "0".to_owned();
+    }
     if (rounded - rounded.trunc()).abs() < f64::EPSILON {
-        format!("{}", rounded as i64)
+        // `f64` Display renders integral values without a fractional part and
+        // without an exponent, and unlike `as i64` it does not saturate.
+        format!("{rounded}")
     } else {
         let mut text = format!("{rounded:.6}");
         while text.ends_with('0') {
@@ -410,5 +434,45 @@ mod tests {
             ),
             "5尺3寸 (approx.)"
         );
+    }
+
+    #[test]
+    fn formats_large_finite_values_without_saturating() {
+        // `value as i64` used to saturate here and render i64::MAX.
+        let best = parse("100000000000000000000", None).best.expect("number");
+        assert_eq!(best.value, Some(1e20));
+        assert_eq!(humanize(&best, None), "100000000000000000000");
+        assert_eq!(
+            describe_reading(&best).summary,
+            "100000000000000000000".to_owned()
+        );
+
+        assert_eq!(format_number(1e20), "100000000000000000000");
+        assert_eq!(format_number(-1e20), "-100000000000000000000");
+        assert_eq!(format_number(1e300), format!("1{}", "0".repeat(300)));
+        // Above 2^53 the shortest round-tripping decimal is used, which maps
+        // back to exactly this f64 — unlike the old i64 saturation.
+        let big = 9_223_372_036_854_775_807.0_f64 * 4.0;
+        assert_eq!(format_number(big), "36893488147419103000");
+        assert_eq!("36893488147419103000".parse::<f64>().unwrap(), big);
+    }
+
+    #[test]
+    fn never_formats_non_finite_values_as_inf_or_nan() {
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            let text = format_number(value);
+            assert_eq!(text, NON_FINITE_TEXT, "{value}");
+            assert!(!text.contains("inf") && !text.contains("NaN"), "{value}");
+        }
+
+        // A caller can still hand `humanize` a non-finite reading directly.
+        let reading = Reading::number(f64::INFINITY, 0.9);
+        assert_eq!(humanize(&reading, None), NON_FINITE_TEXT);
+    }
+
+    #[test]
+    fn formats_signed_zero_as_plain_zero() {
+        assert_eq!(format_number(-0.0), "0");
+        assert_eq!(format_number(0.0), "0");
     }
 }
