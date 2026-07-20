@@ -59,8 +59,15 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         ParsePurpose::Recurrence => parse_recurrence_fast_into(trimmed, &mut parsed),
         ParsePurpose::DimensionEditor => {
             // The refusal it reports is already on `parsed`; only the editor
-            // extractor needs the answer as a value.
-            let _ = parse_editor_dimension_into(trimmed, &ctx, &mut parsed);
+            // extractor needs the answer as a value. There is no neighbouring
+            // label here, so the declaration is the only thing that decides
+            // what a bare number stands for.
+            let _ = parse_editor_dimension_into(
+                trimmed,
+                &ctx,
+                EditorDimensions::declared_only(ctx.expected_dimensions),
+                &mut parsed,
+            );
         }
     }
     enforce_expected_dimensions(trimmed, &ctx, &mut parsed);
@@ -288,11 +295,24 @@ pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
 ///
 /// With an empty [`ParseCtx::expected_dimensions`] the accepted set is decided
 /// as it always was, by the label next to each candidate. A non-empty set
-/// narrows that: only the declared domains are kept, and a candidate that
-/// *would* have been a dimension but is not in the declared set is returned as
-/// a match with `best: None` and an [`IssueCode::RejectedByPolicy`] finding,
-/// rather than dropped. Text that is no dimension at all — `予算1234`,
-/// `next friday` — is still simply not a match, since nothing was refused.
+/// **composes with that label rather than replacing it**: the two intersect, so
+/// a declaration can only narrow what the label already allowed. Declaring
+/// lengths does not make `面積3640` — a bare number under an *area* label — into
+/// one, and it does not make `予算1234`, which carries no dimension label at
+/// all, into one either. Text that is no dimension under its own label is
+/// simply not a match, whatever was declared, since nothing was refused.
+///
+/// What the declaration does do is refuse: a candidate that *would* have been a
+/// dimension under its label but is not in the declared set is returned as a
+/// match with `best: None`, the refused reading in [`Parsed::alternatives`],
+/// and an [`IssueCode::RejectedByPolicy`] finding, rather than dropped. That
+/// covers a labelled bare number as well as a labelled unit — `寸法3640` is a
+/// millimetre length, and an area-only field says so instead of quietly
+/// dropping it.
+///
+/// The label is this crate's own inference, so it never produces a refusal of
+/// its own: with nothing declared, every result is exactly what it was before
+/// the field existed.
 ///
 /// ```
 /// use unravel_nl::{parse_dimensions_for_editor, Locale, ParseCtx};
@@ -1033,7 +1053,7 @@ pub(crate) fn report_closed_compound_alternative(trimmed: &str, parsed: &mut Par
     parsed.alternatives.push(alternative);
     parsed.findings.ambiguities.push(ambiguity(
         trimmed,
-        "Written closed up, this is both a registry unit and a compound quantity; the registry unit was read.",
+        CLOSED_COMPOUND_REGISTRY_UNIT_READ,
         Some(2),
         IssueCode::AmbiguousUnit,
     ));
@@ -1180,8 +1200,45 @@ pub(crate) fn enforce_expected_dimensions(text: &str, ctx: &ParseCtx, parsed: &m
         IssueCode::RejectedByPolicy,
         span(text),
     ));
+    retell_closed_compound_ambiguity(parsed);
     true
 }
+
+/// Corrects the closed-compound ambiguity after a refusal moved `best`.
+///
+/// [`report_closed_compound_alternative`] runs while the registry unit is still
+/// the reading, and says so. When the declared dimensions then refuse that
+/// registry unit, the sentence it left behind states the opposite of what
+/// happened — `5m3` under a length field reads as the compound, and the
+/// ambiguity claimed the cubic metre was read. That finding is the one place a
+/// caller is told which of the two readings won, so the refusal rewrites it
+/// rather than adding a second, contradicting one.
+pub(crate) fn retell_closed_compound_ambiguity(parsed: &mut Parsed) {
+    let promoted = parsed.best.is_some();
+    for ambiguity in &mut parsed.findings.ambiguities {
+        if ambiguity.code == IssueCode::AmbiguousUnit
+            && ambiguity.reason == CLOSED_COMPOUND_REGISTRY_UNIT_READ
+        {
+            ambiguity.reason = if promoted {
+                CLOSED_COMPOUND_COMPOUND_READ.to_owned()
+            } else {
+                CLOSED_COMPOUND_NEITHER_READ.to_owned()
+            };
+        }
+    }
+}
+
+/// What [`report_closed_compound_alternative`] says while the registry unit is
+/// still the reading.
+pub(crate) const CLOSED_COMPOUND_REGISTRY_UNIT_READ: &str = "Written closed up, this is both a registry unit and a compound quantity; the registry unit was read.";
+
+/// What it says once the declared dimensions refused the registry unit and the
+/// compound quantity took its place.
+pub(crate) const CLOSED_COMPOUND_COMPOUND_READ: &str = "Written closed up, this is both a registry unit and a compound quantity; the registry unit is outside the expected dimensions, so the compound quantity was read.";
+
+/// What it says when the declared dimensions refused the registry unit and left
+/// nothing in its place.
+pub(crate) const CLOSED_COMPOUND_NEITHER_READ: &str = "Written closed up, this is both a registry unit and a compound quantity; the registry unit is outside the expected dimensions, and neither reading was accepted.";
 
 /// Returns the first dimension of `reading` that `expected` does not allow.
 ///

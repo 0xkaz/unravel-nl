@@ -37,9 +37,10 @@ export interface ParseContext {
    * Measurement domains the field accepts. A hard filter: a reading from any
    * other domain is refused with REJECTED_BY_POLICY rather than returned.
    * Readings with no dimension at all are not refused. Several domains are
-   * written as a comma-separated list, e.g. "length,area".
+   * written as a comma-separated list, e.g. "length,area". A list in which no
+   * name is recognized refuses the call rather than lifting the filter.
    */
-  expected_dimension?: Dimension | `${Dimension},${string}` | null;
+  expected_dimensions?: Dimension | `${Dimension},${string}` | null;
   number_format?: "auto" | "comma_decimal" | "dot_decimal";
   purpose?: "general" | "quantity" | "number" | "date" | "recurrence" | "dimension_editor";
   strictness?: "forgiving" | "confirm" | "strict";

@@ -20,10 +20,10 @@ pub(crate) const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
       "enum": ["quantity", "date", "range", "number", "recurrence"],
       "description": "Optional expected top-level reading kind. This does not constrain parsing; it only filters completion candidates and adds a millimeter length alternative for a bare number when set to quantity. Use purpose to restrict what is parsed."
     },
-    "expected_dimension": {
+    "expected_dimensions": {
       "type": "string",
-      "enum": ["length", "area", "mass", "time", "volume", "currency", "temperature", "speed", "data", "data_rate", "flow_rate", "concentration", "acceleration", "force", "torque", "pressure", "power", "charge", "voltage", "current", "resistance", "illuminance", "radiation_equivalent_dose", "radioactivity"],
-      "description": "Optional expected quantity dimension. This is a hard filter, not a hint: a reading from any other measurement domain is refused with REJECTED_BY_POLICY rather than returned. Readings that carry no dimension at all — a bare number, a date, a recurrence — are not refused. Omit it to accept every dimension."
+      "pattern": "^(length|area|mass|time|volume|currency|temperature|speed|data|data_rate|flow_rate|concentration|acceleration|force|torque|pressure|power|charge|voltage|current|resistance|illuminance|radiation_equivalent_dose|radioactivity)( *, *(length|area|mass|time|volume|currency|temperature|speed|data|data_rate|flow_rate|concentration|acceleration|force|torque|pressure|power|charge|voltage|current|resistance|illuminance|radiation_equivalent_dose|radioactivity))*$",
+      "description": "Optional measurement domains the field accepts, as one name or a comma-separated list such as \"length,area\". This is a hard filter, not a hint: a reading from any other measurement domain is refused with REJECTED_BY_POLICY rather than returned. Readings that carry no dimension at all — a bare number, a date, a recurrence — are not refused. Omit it to accept every dimension; a name that is not on this list is refused rather than ignored."
     },
     "number_format": {
       "type": "string",

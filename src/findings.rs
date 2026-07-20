@@ -57,7 +57,20 @@ pub enum IssueCode {
     TimezoneUnsupported,
     /// A recurrence phrase was recognized but is not expressible as a rule.
     RecurrenceUnsupported,
-    /// A reading was found but refused by the active [`Strictness`] policy.
+    /// A reading was found and then refused by a policy the caller set.
+    ///
+    /// Two policies emit this, and [`Strictness`] is neither of them — a strict
+    /// refusal is reported under the code for what it refused, so `about 20kg`
+    /// is [`IssueCode::Approximation`] and `5 meterz` is
+    /// [`IssueCode::TypoCorrected`]:
+    ///
+    /// - [`AcceptOptions`] — a broad shape the caller switched off, such as a
+    ///   range or a conversion.
+    /// - [`ParseCtx::expected_dimensions`] — a reading from a measurement
+    ///   domain the caller did not declare.
+    ///
+    /// Either way the refused reading is kept in [`Parsed::alternatives`], so
+    /// the refusal is visible rather than a silent loss.
     RejectedByPolicy,
     /// The value is approximate, e.g. `about 20kg` or a shakkanhō conversion.
     Approximation,

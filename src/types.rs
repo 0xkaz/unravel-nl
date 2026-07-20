@@ -566,9 +566,14 @@ pub struct ParseCtx {
     /// number, a date, and a recurrence have no measurement domain, so they
     /// cannot collide with one; restricting the domains a unit may come from
     /// says nothing about whether the field may hold `3640`. This is what lets
-    /// [`parse_number_fast`] stay useful under a restriction, and what keeps a
-    /// labelled bare number readable by [`parse_dimensions_for_editor`].
+    /// [`parse_number_fast`] stay useful under a restriction.
     /// [`complete`] is deliberately stricter — see its documentation.
+    ///
+    /// [`parse_dimensions_for_editor`] is the one place a bare number *does*
+    /// carry a domain, because a label gave it one: `寸法3640` is a millimetre
+    /// length, and a field that declared areas refuses it rather than dropping
+    /// it. The declaration composes with that label by intersection, so it
+    /// narrows what the label allowed and never widens it.
     ///
     /// ```
     /// use unravel_nl::{parse_quantity_fast, Dimension, DimensionSet, IssueCode, ParseCtx};

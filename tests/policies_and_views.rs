@@ -130,6 +130,64 @@ fn completion_readings_are_capped_ordered_and_bounded() {
     );
 }
 
+/// `REJECTED_BY_POLICY` names the two policies that emit it, and `Strictness`
+/// is not one of them.
+///
+/// The variant's own documentation said "refused by the active `Strictness`
+/// policy", which no path does: a strict refusal is reported under the code for
+/// what it refused. Only `AcceptOptions` and `ParseCtx::expected_dimensions`
+/// reach this code, and a caller that branches on it needs that to be true.
+#[test]
+fn rejected_by_policy_comes_from_acceptance_and_dimensions_not_strictness() {
+    let rejection = |parsed: &unravel_nl::Parsed| {
+        parsed
+            .findings
+            .skipped
+            .iter()
+            .map(|issue| issue.code)
+            .collect::<Vec<_>>()
+    };
+
+    // Strictness refuses, but under the code for what it refused.
+    let strict = |text: &str| {
+        parse(
+            text,
+            Some(ParseCtx {
+                strictness: unravel_nl::Strictness::Strict,
+                ..ParseCtx::default()
+            }),
+        )
+    };
+    let approximate = strict("about 20kg");
+    assert!(approximate.best.is_none());
+    assert_eq!(rejection(&approximate), vec![IssueCode::Approximation]);
+    let typo = strict("5 meterz");
+    assert!(typo.best.is_none());
+    assert_eq!(rejection(&typo), vec![IssueCode::TypoCorrected]);
+
+    // The two policies that do emit it.
+    let shape = parse(
+        "between 5 and 10 kg",
+        Some(ParseCtx {
+            accept: AcceptOptions {
+                ranges: false,
+                ..AcceptOptions::default()
+            },
+            ..ParseCtx::default()
+        }),
+    );
+    assert!(rejection(&shape).contains(&IssueCode::RejectedByPolicy));
+
+    let domain = parse(
+        "5 kg",
+        Some(ParseCtx {
+            expected_dimensions: DimensionSet::from(Dimension::Length),
+            ..ParseCtx::default()
+        }),
+    );
+    assert!(rejection(&domain).contains(&IssueCode::RejectedByPolicy));
+}
+
 #[test]
 fn acceptance_controls_reject_shapes_but_keep_candidates() {
     let parsed = parse(

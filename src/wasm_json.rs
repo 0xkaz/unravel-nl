@@ -97,6 +97,9 @@ pub fn parse_json_with_locale(text: &str, locale: &str) -> String {
 /// Returns the same compact summary envelope as [`parse_json`] — `{ok, input,
 /// best, issues}` — which is deliberately not the parse contract published by
 /// [`parsed_output_schema_json`].
+///
+/// An `expected_dimension` tag that names nothing this build can read is
+/// refused rather than parsed; see [`unreadable_dimension_tag`].
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -106,6 +109,9 @@ pub fn parse_json_with_context(
     expected_dimension: &str,
     strictness: &str,
 ) -> String {
+    if unreadable_dimension_tag(expected_dimension) {
+        return parsed_summary_json(&unreadable_dimension_tag_parsed(text, expected_dimension));
+    }
     parsed_summary_json(&parse(
         text,
         Some(parse_wasm_context(locale, expected_dimension, strictness)),
@@ -174,6 +180,9 @@ pub fn parse_all_json_with_context(
     expected_dimension: &str,
     strictness: &str,
 ) -> String {
+    if unreadable_dimension_tag(expected_dimension) {
+        return unreadable_dimension_tag_matches_json(text, expected_dimension);
+    }
     parsed_matches_summary_json(
         text,
         &parse_all(
@@ -219,6 +228,9 @@ pub fn parse_dimensions_for_editor_json_with_context(
     expected_dimension: &str,
     strictness: &str,
 ) -> String {
+    if unreadable_dimension_tag(expected_dimension) {
+        return unreadable_dimension_tag_matches_json(text, expected_dimension);
+    }
     let mut ctx = parse_wasm_context(locale, expected_dimension, strictness);
     ctx.purpose = ParsePurpose::DimensionEditor;
     parsed_matches_summary_json(text, &parse_dimensions_for_editor(text, Some(ctx)))
@@ -255,12 +267,61 @@ pub(crate) fn parse_wasm_context(
 /// The boundary is a fixed `&str` signature, so a set is written as a
 /// comma-separated list: `"length"`, `"length,area"`. An empty tag is the empty
 /// set — no restriction — and an unrecognized name is dropped, as every tag
-/// parser here drops what it cannot read.
+/// parser here drops what it cannot read. When *every* name is unreadable the
+/// result would be the empty set, and the caller's entry point refuses the call
+/// instead of running it unrestricted; see [`unreadable_dimension_tag`].
 #[cfg(feature = "wasm")]
 pub(crate) fn parse_dimension_set_tag(text: &str) -> DimensionSet {
     text.split(',')
         .filter_map(|tag| parse_dimension_tag(tag.trim()))
         .collect()
+}
+
+/// Whether a tag names dimensions but none this build can read.
+///
+/// Dropping *some* members of a list is documented and harmless: the ones that
+/// were read still restrict the parse, so the field is narrower than it asked
+/// for, never wider. Dropping *all* of them is the opposite — `"lenght"` would
+/// leave the empty set, which is no restriction at all, so a single typo turns
+/// a hard filter into none and `5 kg` comes back from a length field with
+/// `ok:true` and nothing said. That failure is silent and it fails open, so the
+/// entry points that take this tag refuse the call rather than answer it under
+/// a policy they could not read.
+#[cfg(feature = "wasm")]
+pub(crate) fn unreadable_dimension_tag(tag: &str) -> bool {
+    !tag.trim().is_empty() && parse_dimension_set_tag(tag).is_empty()
+}
+
+/// The refusal a `*_with_context` entry point returns for such a tag.
+#[cfg(feature = "wasm")]
+pub(crate) fn unreadable_dimension_tag_parsed(text: &str, tag: &str) -> Parsed {
+    let mut parsed = parsed_shell(text, &ParseCtx::default());
+    parsed.findings.skipped.push(skipped_with_span(
+        text,
+        &format!(
+            "expected_dimension names no readable dimension: {tag:?}; the call was refused rather than parsed with no restriction at all"
+        ),
+        IssueCode::RejectedByPolicy,
+        span(text),
+    ));
+    parsed
+}
+
+/// The same refusal, in the array envelope the scanning entry points return.
+///
+/// One match spanning the whole input, because an empty array is exactly the
+/// silence this refuses to answer with.
+#[cfg(feature = "wasm")]
+pub(crate) fn unreadable_dimension_tag_matches_json(text: &str, tag: &str) -> String {
+    parsed_matches_summary_json(
+        text,
+        &[ParsedMatch {
+            start: 0,
+            end: text.len(),
+            text: text.to_owned(),
+            parsed: unreadable_dimension_tag_parsed(text, tag),
+        }],
+    )
 }
 
 #[cfg(feature = "wasm")]
@@ -433,6 +494,14 @@ mod wasm_tests {
         assert_eq!(sloppy.expected_dimensions, DimensionSet::new());
         assert_eq!(sloppy.strictness, Strictness::Forgiving);
 
+        // Every name the published input schema offers is one this reads back,
+        // so the contract and the boundary cannot drift apart.
+        for dimension in ALL_DIMENSIONS {
+            let name = dimension.as_str();
+            assert_eq!(parse_dimension_tag(name), Some(dimension), "{name}");
+            assert!(parse_input_schema_json().contains(name), "{name}");
+        }
+
         // Several dimensions are written as a comma-separated list, and an
         // unreadable member is dropped without taking the rest with it.
         assert_eq!(
@@ -511,10 +580,29 @@ mod wasm_tests {
         assert!(is_valid_json(&bare), "{bare}");
         assert!(!bare.contains("UNIT_ASSUMED"), "{bare}");
 
-        // A misspelled dimension tag behaves exactly like no tag at all — the
-        // silent failure this module exists to make visible.
+        // A misspelled dimension tag is refused, not absorbed: behaving like no
+        // tag at all would turn a hard filter into none, and a length field
+        // handed `5 kg` would answer `ok:true` with nothing said.
         let typo = parse_json_with_context("3640", "", "lenght", "forgiving");
-        assert_eq!(typo, bare);
+        assert_ne!(typo, bare);
+        assert_eq!(
+            typo,
+            "{\"ok\":false,\"input\":\"3640\",\"best\":null,\"issues\":[\
+             {\"code\":\"REJECTED_BY_POLICY\",\"severity\":\"error\",\"rank\":90,\
+             \"ref_text\":\"3640\"}]}"
+        );
+        assert_eq!(
+            parse_json_with_context("5 kg", "", "lenght", ""),
+            "{\"ok\":false,\"input\":\"5 kg\",\"best\":null,\"issues\":[\
+             {\"code\":\"REJECTED_BY_POLICY\",\"severity\":\"error\",\"rank\":90,\
+             \"ref_text\":\"5 kg\"}]}"
+        );
+        // Only the all-unreadable tag is refused. A list that keeps a readable
+        // member still parses, under the members that were read.
+        assert_eq!(
+            parse_json_with_context("3640", "", "length,lenght", "forgiving"),
+            parse_json_with_context("3640", "", "length", "forgiving")
+        );
     }
 
     #[test]
@@ -577,11 +665,19 @@ mod wasm_tests {
         assert!(!untagged.contains("UNIT_ASSUMED"), "{untagged}");
         assert_ne!(tagged, untagged);
 
-        // A misspelled dimension tag is absorbed silently and behaves exactly
-        // like no tag at all.
+        // A misspelled dimension tag is refused rather than absorbed, and the
+        // refusal arrives as one match over the whole input: an empty array
+        // would be the same silence, and answering `untagged` would be the
+        // fail-open this refuses.
+        let typo = parse_all_json_with_context("幅3640 高さ2400", "ja", "lenght", "forgiving");
+        assert_ne!(typo, untagged);
         assert_eq!(
-            parse_all_json_with_context("幅3640 高さ2400", "ja", "lenght", "forgiving"),
-            untagged
+            typo,
+            "[{\"start\":0,\"end\":18,\"byteStart\":0,\"byteEnd\":18,\"charStart\":0,\
+             \"charEnd\":12,\"text\":\"幅3640 高さ2400\",\"parsed\":{\"ok\":false,\
+             \"input\":\"幅3640 高さ2400\",\"best\":null,\"issues\":[\
+             {\"code\":\"REJECTED_BY_POLICY\",\"severity\":\"error\",\"rank\":90,\
+             \"ref_text\":\"幅3640 高さ2400\"}]}}]"
         );
     }
 
@@ -616,7 +712,9 @@ mod wasm_tests {
     #[test]
     fn parse_dimensions_for_editor_json_with_context_applies_the_tags() {
         // The dimension tag is a filter here, unlike in `parse`: a width label
-        // survives `length` and is dropped entirely under `mass`.
+        // survives `length`, and under `mass` the millimetre length it would
+        // have been is refused — out loud, keeping its span, rather than
+        // vanishing from the results.
         let as_length =
             parse_dimensions_for_editor_json_with_context("幅3640", "ja", "length", "forgiving");
         assert!(is_valid_json(&as_length), "{as_length}");
@@ -626,7 +724,18 @@ mod wasm_tests {
         );
         assert_eq!(
             parse_dimensions_for_editor_json_with_context("幅3640", "ja", "mass", "forgiving"),
-            "[]"
+            "[{\"start\":3,\"end\":7,\"byteStart\":3,\"byteEnd\":7,\"charStart\":1,\
+             \"charEnd\":5,\"text\":\"3640\",\"parsed\":{\"ok\":false,\"input\":\"3640\",\
+             \"best\":null,\"issues\":[{\"code\":\"REJECTED_BY_POLICY\",\
+             \"severity\":\"error\",\"rank\":90,\"ref_text\":\"3640\"}]}}]"
+        );
+        // An unreadable tag is refused rather than run unrestricted.
+        assert_eq!(
+            parse_dimensions_for_editor_json_with_context("幅3640", "ja", "lenght", "forgiving"),
+            "[{\"start\":0,\"end\":7,\"byteStart\":0,\"byteEnd\":7,\"charStart\":0,\
+             \"charEnd\":5,\"text\":\"幅3640\",\"parsed\":{\"ok\":false,\"input\":\"幅3640\",\
+             \"best\":null,\"issues\":[{\"code\":\"REJECTED_BY_POLICY\",\
+             \"severity\":\"error\",\"rank\":90,\"ref_text\":\"幅3640\"}]}}]"
         );
 
         // The strictness tag is read too: an approximate quantity is kept under
@@ -891,5 +1000,36 @@ mod tests {
         assert!(schema.contains("Reserved for adapter layers and currently ignored by the parser"));
         assert!(schema.contains("This is a hard filter, not a hint"));
         assert!(schema.contains("This does not constrain parsing"));
+    }
+
+    /// The published input schema must accept exactly what the code accepts.
+    ///
+    /// A substring assertion is what let the schema keep declaring the old
+    /// singular `expected_dimension` with an `enum` of single names, which
+    /// rejects the `"length,area"` that `docs/wasm.md` and the TypeScript
+    /// declarations tell callers to send. A validator applying the published
+    /// contract would have refused the documented value.
+    #[test]
+    fn input_schema_declares_the_dimension_set_the_parser_reads() {
+        let schema = parse_input_schema_json();
+        assert!(schema.contains("\"expected_dimensions\": {"), "{schema}");
+        // The singular property, and the `enum` that forbade the list form, are
+        // gone rather than merely joined by a second property.
+        assert!(!schema.contains("\"expected_dimension\": {"), "{schema}");
+        assert!(
+            schema.contains("comma-separated list such as \\\"length,area\\\""),
+            "{schema}"
+        );
+
+        // Every dimension is offered by the schema.
+        for dimension in ALL_DIMENSIONS {
+            let name = dimension.as_str();
+            assert!(
+                schema.contains(&format!("{name}|")) || schema.contains(&format!("|{name})")),
+                "{name}"
+            );
+        }
+        // And the shape it declares admits a list, not just one name.
+        assert!(schema.contains("( *, *("), "{schema}");
     }
 }

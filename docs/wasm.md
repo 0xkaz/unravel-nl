@@ -22,7 +22,12 @@ being returned. Readings that carry no dimension at all — a bare number, a
 date, a recurrence — are not refused by it. Several domains are written as a
 comma-separated list (`"length,area"`); an empty string accepts every domain,
 and an unrecognized name is dropped without taking the rest of the list with
-it.
+it. If *every* name in the tag is unrecognized — a bare `"lenght"` — the call
+is refused with `REJECTED_BY_POLICY` rather than run: dropping the last member
+would leave the empty set, which is no restriction at all, so a typo would
+silently turn a hard filter into none. The array-returning exports report that
+refusal as one match spanning the whole input, since an empty array would be
+the same silence.
 Single-value exports return a compact JSON summary object with exactly the keys
 `ok`, `input`, `best`, and ranked `issues` — `input` is always present, echoing
 the string that was parsed. When `best` is a range reading it also carries a
