@@ -279,6 +279,108 @@ fn parse_purpose_limits_broad_parser_work() {
     assert!(non_dimension.best.is_none(), "{non_dimension:#?}");
 }
 
+/// A number the scanner can read must not be lost because the window around it
+/// guessed at a unit that was not there.
+///
+/// The candidate window crosses a space whenever what follows *could* start a
+/// unit, so `"1 and 2"` offers the window `"1 and"`. That window does not parse,
+/// and the scanner used to resume after it — dropping the `1` with nothing on
+/// any findings channel to say so, even though `parse("1")` reads it fine.
+#[test]
+fn recovers_numbers_from_windows_that_guessed_at_a_unit() {
+    for (input, expected) in [
+        ("I bought 3 and 4 apples", vec![("3", 9, 10), ("4", 15, 16)]),
+        ("1 and 2", vec![("1", 0, 1), ("2", 6, 7)]),
+        (
+            "10 and 20 and 30",
+            vec![("10", 0, 2), ("20", 7, 9), ("30", 14, 16)],
+        ),
+        ("rooms 2 and 3", vec![("2", 6, 7), ("3", 12, 13)]),
+        // The comma is not a clause separator between two digits, so this is
+        // one clause holding three numbers.
+        ("1, 2 and 3", vec![("1,", 0, 2), ("2", 3, 4), ("3", 9, 10)]),
+        // A clause that is nothing but a guessed-at window.
+        ("1 and", vec![("1", 0, 1)]),
+        ("4 apples", vec![("4", 0, 1)]),
+        // The core keeps the whole number, not just its first digit.
+        ("1.234 apples", vec![("1.234", 0, 5)]),
+    ] {
+        let matches = parse_all(input, None);
+        assert_eq!(
+            texts(&matches),
+            expected
+                .iter()
+                .map(|(text, _, _)| *text)
+                .collect::<Vec<_>>(),
+            "{input:?}"
+        );
+        for (found, (text, start, end)) in matches.iter().zip(&expected) {
+            assert_eq!((found.start, found.end), (*start, *end), "{input:?}");
+            assert_eq!(input.get(found.start..found.end), Some(*text), "{input:?}");
+            assert_eq!(found.text, *text, "{input:?}");
+            let best = found.parsed.best.as_ref().expect("reading");
+            assert_eq!(best.kind, Kind::Number, "{input:?}");
+        }
+        assert!(
+            matches.windows(2).all(|pair| pair[0].end <= pair[1].start),
+            "{input:?}: {matches:#?}"
+        );
+    }
+
+    assert_eq!(
+        parse_all("1 and 2", None)[0].parsed.best,
+        parse("1", None).best
+    );
+}
+
+/// The recovery must not fire where the window was right, and must not fire at
+/// all where the window never guessed.
+#[test]
+fn keeps_windows_that_read_without_the_numeric_core_fallback() {
+    // `in` and `to` are real unit aliases, so these windows parse as written
+    // and must stay quantities rather than decaying into bare numbers.
+    let inches = parse_all("1 in 2", None);
+    assert_eq!(texts(&inches), vec!["1 in", "2"]);
+    assert_quantity(&inches[0], 0.0254, "m", Dimension::Length);
+
+    let tonnes = parse_all("add 1 to 2", None);
+    assert_eq!(texts(&tonnes), vec!["1 to", "2"]);
+    assert_quantity(&tonnes[0], 1000.0, "kg", Dimension::Mass);
+
+    // One range, not two numbers.
+    assert_eq!(
+        texts(&parse_all("between 5 and 10 kg", None)),
+        vec!["between 5 and 10 kg"]
+    );
+
+    // Windows that never cross a space have no narrower reading to fall back
+    // to, so text the scanner cannot read stays unread rather than decaying
+    // into whichever digits happen to come first.
+    assert!(parse_all("3pm-4pm", None).is_empty());
+    assert!(parse_all("100-120㎡", None).is_empty());
+
+    let ja = Some(ParseCtx {
+        locale: Some(Locale::Ja),
+        ..ParseCtx::default()
+    });
+    assert_eq!(texts(&parse_all("2〜3日", ja.clone())), vec!["2〜3日"]);
+    assert_eq!(texts(&parse_all("1,234", None)), vec!["1,234"]);
+    assert_eq!(
+        texts(&parse_all("延床100㎡、敷地面積120㎡、高さ3.5m", ja.clone())),
+        vec!["延床100㎡", "120㎡", "3.5m"]
+    );
+
+    // The editor extractor reads the same windows and is unchanged by the
+    // fallback, which is deliberately confined to `parse_all`.
+    assert_eq!(
+        texts(&parse_dimensions_for_editor(
+            "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640",
+            ja,
+        )),
+        vec!["3m", "4m", "6帖", "3640"]
+    );
+}
+
 fn texts(matches: &[unravel_nl::ParsedMatch]) -> Vec<&str> {
     matches
         .iter()

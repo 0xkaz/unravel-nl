@@ -195,9 +195,15 @@ pub enum NumberFormat {
     ///   dots would have to be grouping, and none of them groups three digits,
     ///   so reading them as decimals would contradict the declared format.
     ///
-    /// The validation belongs to the bare-number grammar. A quantity still
-    /// reads its number by the general rules, so `1.5 kg` parses as 1.5 kg
-    /// under this format even though `1.5` alone is refused.
+    /// The declared format is applied wherever a grammar reads its number
+    /// through the parsing context, which includes quantities: `1.234 kg` is
+    /// 1234 kg, and `$1.5` and `1.5 m 2.5 cm` are refused with an
+    /// [`IssueCode::NoValue`] finding just as `1.5` alone is.
+    ///
+    /// `1.5 kg` is the exception, and parses as 1.5 kg: it is read by a
+    /// fallback grammar that does not consult the declared format. The
+    /// asymmetry is accepted rather than intended — do not read it as a rule
+    /// that quantities are exempt from the format.
     CommaDecimal,
     /// Treats a dot as the decimal separator and a comma as the grouping
     /// separator.
@@ -208,7 +214,10 @@ pub enum NumberFormat {
     /// - Decimal dot: `1.5` is 1.5 and `1,234.56` is 1234.56.
     /// - Grouping comma: `1,234` is 1234, `1,234,567` is 1234567, and the
     ///   Indian `12,34,567` shape is 1234567.
-    /// - Refused: `1,5`, `1,23`, and `1,2,3`.
+    /// - Refused: `1,5`, `1,23`, and `1,2,3` — under this format those commas
+    ///   would have to be grouping, and none of them groups three digits. Also
+    ///   refused: `1.234.567` and `1.2.3`, which carry more than one decimal
+    ///   separator, exactly as `CommaDecimal` refuses `1,234,567`.
     DotDecimal,
 }
 

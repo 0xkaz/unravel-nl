@@ -146,6 +146,36 @@ const values = canonicalizeValuesForUi(
 );
 assert.equal(values[0].issues[0].code, "UNIT_ASSUMED");
 
+// The core breaks a rank tie with `String::cmp` (UTF-8 bytes, i.e. code points).
+// `localeCompare` disagreed with that on plain ASCII — it puts "a" before "B" —
+// so the adapter and the Rust envelope could disagree about which issue is
+// issues[0], which is the one a UI surfaces.
+{
+  const issue = (rank, refText) => ({
+    code: "AMBIGUOUS_NUMBER",
+    severity: "warning",
+    rank,
+    recoverable: true,
+    ref_text: refText,
+    reason: "tie",
+    span: { start: 0, end: 1, text: refText },
+  });
+
+  const ranked = rankIssues({
+    issues: [issue(55, "a"), issue(55, "B"), issue(55, "\uff11"), issue(55, "Z")],
+  });
+  assert.deepEqual(
+    ranked.map((entry) => entry.ref_text),
+    ["B", "Z", "a", "\uff11"],
+    "equal ranks must break the tie by code point, as String::cmp does",
+  );
+
+  // Rank still dominates the tie-break.
+  const byRank = rankIssues({ issues: [issue(30, "a"), issue(90, "z")] });
+  assert.deepEqual(byRank.map((entry) => entry.rank), [90, 30]);
+}
+
+
 function mockElement(value) {
   const listeners = new Map();
   return {

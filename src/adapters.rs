@@ -185,7 +185,7 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
 /// );
 /// ```
 pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
-    let locale = ctx.and_then(|ctx| ctx.locale);
+    let locale = ctx.as_ref().and_then(|ctx| ctx.locale.as_ref());
     match (locale, value.kind, value.value, value.unit.as_deref()) {
         (Some(Locale::Ja), Kind::Quantity, Some(meters), Some("m")) => {
             humanize_japanese_length(meters)
@@ -218,13 +218,17 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
             .recurrence
             .clone()
             .unwrap_or_else(|| "unknown recurrence".to_owned()),
+        // The endpoints are rendered with the caller's context, not with `None`:
+        // a range is still the same reading it would be on its own, so dropping
+        // the context here would have silently turned off locale-sensitive
+        // rendering exactly when the reading happens to be a range.
         (_, Kind::Range, _, _) => value.range.as_ref().map_or_else(
             || "unresolved range".to_owned(),
             |range| {
                 format!(
                     "{} to {}",
-                    humanize(&range.from, None),
-                    humanize(&range.to, None)
+                    humanize(&range.from, ctx.clone()),
+                    humanize(&range.to, ctx.clone())
                 )
             },
         ),
@@ -235,8 +239,16 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
 /// Flattens a reading into a labelled field list for UI and tool layers.
 ///
 /// Only the fields the reading actually carries are emitted, so the view can be
-/// rendered generically without checking each `Option`. The view's summary is
-/// the locale-independent [`humanize`] rendering.
+/// rendered generically without checking each `Option`. A range reading carries
+/// its payload in its endpoints, which are flattened into the same list under
+/// dotted names — `range.from.value`, `range.to.unit`, and so on — so no part of
+/// the reading is left out of the machine-readable view.
+///
+/// `value` is written at full precision, as the shortest decimal that reads
+/// back as the same `f64`: this list is what a tool layer acts on, so it must
+/// not lose data the way a display rendering may. The six-decimal rounding
+/// belongs to [`ResourceView::summary`], which is the human-readable
+/// [`humanize`] line and is locale-independent here.
 pub fn describe_reading(reading: &Reading) -> ResourceView {
     let object = match reading.kind {
         Kind::Quantity => "unravel.quantity",
@@ -247,46 +259,62 @@ pub fn describe_reading(reading: &Reading) -> ResourceView {
     }
     .to_owned();
     let mut fields = Vec::new();
-    push_resource_field(&mut fields, "kind", kind_str(reading.kind));
-    if let Some(custom_kind) = &reading.custom_kind {
-        push_resource_field(&mut fields, "custom_kind", custom_kind);
-    }
-    if let Some(value) = reading.value {
-        push_resource_field(&mut fields, "value", &format_number(value));
-    }
-    if let Some(unit) = &reading.unit {
-        push_resource_field(&mut fields, "unit", unit);
-    }
-    if let Some(dimension) = reading.dimension {
-        push_resource_field(&mut fields, "dimension", dimension.as_str());
-    }
-    if let Some(date) = &reading.date {
-        push_resource_field(&mut fields, "date", date);
-    }
-    if let Some(recurrence) = &reading.recurrence {
-        push_resource_field(&mut fields, "recurrence", recurrence);
-    }
-    if let Some(timezone) = &reading.timezone {
-        push_resource_field(&mut fields, "timezone", timezone);
-    }
-    if let Some(provenance) = reading.provenance {
-        push_resource_field(&mut fields, "provenance", provenance.as_str());
-    }
-    if let Some(approximate) = reading.approximate {
-        push_resource_field(
-            &mut fields,
-            "approximate",
-            if approximate { "true" } else { "false" },
-        );
-    }
-    if let Some(confidence) = reading.confidence {
-        push_resource_field(&mut fields, "confidence", &format_number(confidence));
-    }
+    push_reading_fields(&mut fields, "", reading);
     let summary = humanize(reading, None);
     ResourceView {
         object,
         summary,
         fields,
+    }
+}
+
+/// Appends one reading's fields to `fields`, each name carrying `prefix`.
+///
+/// The endpoints of a range are appended by the same function, under
+/// `range.from.` and `range.to.`, so an endpoint contributes exactly the fields
+/// a top-level reading does. Nesting is as deep as the reading the caller built:
+/// [`parse`] never nests a range inside a range, and the endpoints of the ranges
+/// it does build carry no endpoints of their own.
+fn push_reading_fields(fields: &mut Vec<ResourceField>, prefix: &str, reading: &Reading) {
+    let named = |name: &str| format!("{prefix}{name}");
+    push_resource_field(fields, &named("kind"), kind_str(reading.kind));
+    if let Some(custom_kind) = &reading.custom_kind {
+        push_resource_field(fields, &named("custom_kind"), custom_kind);
+    }
+    if let Some(value) = reading.value {
+        push_resource_field(fields, &named("value"), &format_number_exact(value));
+    }
+    if let Some(unit) = &reading.unit {
+        push_resource_field(fields, &named("unit"), unit);
+    }
+    if let Some(dimension) = reading.dimension {
+        push_resource_field(fields, &named("dimension"), dimension.as_str());
+    }
+    if let Some(date) = &reading.date {
+        push_resource_field(fields, &named("date"), date);
+    }
+    if let Some(recurrence) = &reading.recurrence {
+        push_resource_field(fields, &named("recurrence"), recurrence);
+    }
+    if let Some(timezone) = &reading.timezone {
+        push_resource_field(fields, &named("timezone"), timezone);
+    }
+    if let Some(provenance) = reading.provenance {
+        push_resource_field(fields, &named("provenance"), provenance.as_str());
+    }
+    if let Some(approximate) = reading.approximate {
+        push_resource_field(
+            fields,
+            &named("approximate"),
+            if approximate { "true" } else { "false" },
+        );
+    }
+    if let Some(confidence) = reading.confidence {
+        push_resource_field(fields, &named("confidence"), &format_number(confidence));
+    }
+    if let Some(range) = &reading.range {
+        push_reading_fields(fields, &named("range.from."), &range.from);
+        push_reading_fields(fields, &named("range.to."), &range.to);
     }
 }
 
@@ -391,6 +419,25 @@ pub(crate) fn humanize_japanese_area(area: f64) -> String {
 /// outside the library.
 pub(crate) const NON_FINITE_TEXT: &str = "unrepresentable";
 
+/// Renders a number for a machine consumer, without display rounding.
+///
+/// `format_number` rounds to six decimals for a human reader, which collapses
+/// `0.0000001` to `0` and truncates `0.473176473` to `0.473176`. A field list or
+/// a JSON envelope is acted on rather than read, so it takes this rendering
+/// instead: `f64`'s `Display` writes the shortest decimal that round-trips back
+/// to the same `f64`, and — unlike `Debug` — never uses exponent notation, so
+/// every finite value comes out as a plain decimal number.
+pub(crate) fn format_number_exact(value: f64) -> String {
+    if !value.is_finite() {
+        return NON_FINITE_TEXT.to_owned();
+    }
+    if value == 0.0 {
+        // Normalizes -0.0, which would otherwise render as "-0".
+        return "0".to_owned();
+    }
+    value.to_string()
+}
+
 pub(crate) fn format_number(value: f64) -> String {
     if !value.is_finite() {
         return NON_FINITE_TEXT.to_owned();
@@ -480,6 +527,98 @@ mod tests {
         // A caller can still hand `humanize` a non-finite reading directly.
         let reading = Reading::number(f64::INFINITY, 0.9);
         assert_eq!(humanize(&reading, None), NON_FINITE_TEXT);
+    }
+
+    /// The field list is the machine-readable side of this adapter, so it must
+    /// not lose data to the six-decimal display rounding the way the summary
+    /// does: `0.0000001 m` used to describe its value as `0`, and `2 cups` as
+    /// `0.473176` for a reading holding `0.473176473`.
+    #[test]
+    fn describes_values_at_full_precision() {
+        let tiny = parse("0.0000001 m", None).best.expect("quantity");
+        let view = describe_reading(&tiny);
+        assert_eq!(field(&view, "value").as_deref(), Some("0.0000001"));
+        assert_eq!(
+            field(&view, "value")
+                .expect("value")
+                .parse::<f64>()
+                .expect("round trip"),
+            tiny.value.expect("value")
+        );
+        // The summary stays the human-readable `humanize` line.
+        assert_eq!(view.summary, "0 m");
+
+        let cups = parse("2 cups", None).best.expect("quantity");
+        let view = describe_reading(&cups);
+        assert_eq!(field(&view, "value").as_deref(), Some("0.473176473"));
+        assert_eq!(view.summary, "0.473176 L");
+
+        // No finite value may reach the field list as an exponent form.
+        for value in [f64::MIN_POSITIVE, 5e-324, f64::MAX, -f64::MAX, 1e20, -0.0] {
+            let text = format_number_exact(value);
+            assert!(
+                !text.contains('e') && !text.contains('E'),
+                "{value}: {text}"
+            );
+            assert_eq!(text.parse::<f64>().expect(&text), value, "{value}");
+        }
+        assert_eq!(format_number_exact(-0.0), "0");
+        assert_eq!(format_number_exact(f64::NAN), NON_FINITE_TEXT);
+        assert_eq!(format_number_exact(f64::INFINITY), NON_FINITE_TEXT);
+    }
+
+    /// A range reading used to describe itself as `[kind, approximate,
+    /// confidence]`: both endpoints, and with them the whole payload, were
+    /// missing from the view.
+    #[test]
+    fn describes_both_range_endpoints() {
+        let range = parse("100-120㎡", None).best.expect("range");
+        let view = describe_reading(&range);
+        assert_eq!(view.object, "unravel.range");
+        assert_eq!(field(&view, "range.from.value").as_deref(), Some("100"));
+        assert_eq!(field(&view, "range.from.unit").as_deref(), Some("m2"));
+        assert_eq!(
+            field(&view, "range.from.dimension").as_deref(),
+            Some("area")
+        );
+        assert_eq!(field(&view, "range.to.value").as_deref(), Some("120"));
+        assert_eq!(field(&view, "range.to.unit").as_deref(), Some("m2"));
+        assert_eq!(field(&view, "range.from.kind").as_deref(), Some("quantity"));
+        assert_eq!(field(&view, "range.to.kind").as_deref(), Some("quantity"));
+        assert_eq!(view.summary, "100 m2 to 120 m2");
+    }
+
+    /// `humanize` recursed into the endpoints with `None`, so a range lost the
+    /// locale-sensitive rendering a single reading kept.
+    #[test]
+    fn humanizes_range_endpoints_in_the_callers_locale() {
+        let ja = || {
+            Some(ParseCtx {
+                locale: Some(Locale::Ja),
+                ..ParseCtx::default()
+            })
+        };
+        let ctx = Some(HumanizeCtx {
+            locale: Some(Locale::Ja),
+        });
+
+        let single = parse("3.3㎡", ja()).best.expect("area");
+        assert_eq!(humanize(&single, ctx.clone()), "1坪 (approx.)");
+
+        let range = parse("3.3㎡〜6.6㎡", ja()).best.expect("range");
+        assert_eq!(
+            humanize(&range, ctx.clone()),
+            "1坪 (approx.) to 2坪 (approx.)"
+        );
+        // Without a locale the endpoints still render locale-independently.
+        assert_eq!(humanize(&range, None), "3.3 m2 to 6.6 m2");
+    }
+
+    fn field(view: &ResourceView, name: &str) -> Option<String> {
+        view.fields
+            .iter()
+            .find(|field| field.name == name)
+            .map(|field| field.value.clone())
     }
 
     #[test]

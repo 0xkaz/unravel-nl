@@ -228,6 +228,27 @@ export function defineUnravelElement(parser, options = {}) {
   return UnravelInputElement;
 }
 
+/**
+ * Orders two reference texts the way the Rust core does.
+ *
+ * The core breaks a rank tie with `String::cmp`, which compares UTF-8 bytes and
+ * therefore code points. `localeCompare` does not: it puts `"a"` before `"B"`
+ * where the core puts `"B"` first, so the two sides disagreed on which issue is
+ * `issues[0]` — and that is the one a UI shows.
+ */
+function compareRefText(left, right) {
+  const a = Array.from(String(left ?? ""));
+  const b = Array.from(String(right ?? ""));
+  const shared = Math.min(a.length, b.length);
+  for (let index = 0; index < shared; index += 1) {
+    const diff = a[index].codePointAt(0) - b[index].codePointAt(0);
+    if (diff !== 0) {
+      return diff < 0 ? -1 : 1;
+    }
+  }
+  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+}
+
 export function rankIssues(parsed) {
   if (parsed && Array.isArray(parsed.issues)) {
     return parsed.issues
@@ -240,7 +261,7 @@ export function rankIssues(parsed) {
         reason: issue.reason,
         span: issue.span,
       }))
-      .sort((a, b) => b.rank - a.rank || String(a.ref_text || "").localeCompare(String(b.ref_text || "")));
+      .sort((a, b) => b.rank - a.rank || compareRefText(a.ref_text, b.ref_text));
   }
   const findings = (parsed && parsed.findings) || {};
   const issues = [
@@ -248,7 +269,7 @@ export function rankIssues(parsed) {
     ...mapIssues(findings.ambiguities || []),
     ...mapIssues(findings.approximations || []),
   ];
-  return issues.sort((a, b) => b.rank - a.rank || a.ref_text.localeCompare(b.ref_text));
+  return issues.sort((a, b) => b.rank - a.rank || compareRefText(a.ref_text, b.ref_text));
 }
 
 function mapIssues(issues) {

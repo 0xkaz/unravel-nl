@@ -109,6 +109,14 @@ pub(crate) fn normalize_locale_number(text: &str, number_format: NumberFormat) -
     }
 
     if compact.matches('.').count() > 1 {
+        if number_format == NumberFormat::DotDecimal {
+            // This format declares '.' as the decimal separator, so a number in
+            // it carries at most one. `1.234.567` is not a number in the format
+            // the caller declared and is refused rather than regrouped into
+            // 1234567 by the `Auto` rule below. Mirrors the way `CommaDecimal`
+            // refuses `1,234,567` above.
+            return None;
+        }
         if valid_dot_grouped_number(&compact) {
             return Some(compact.replace('.', ""));
         }
@@ -601,6 +609,113 @@ mod tests {
         assert_eq!(parse_english_number_words("two hundred"), Some(200));
         assert_eq!(parse_english_number_words("twenty-five"), Some(25));
         assert_eq!(parse_english_number_words("three thousand"), Some(3000));
+    }
+
+    /// `DotDecimal` declares the dot as the decimal separator, so a second dot
+    /// is not a number in that format. It used to fall through to the `Auto`
+    /// rule and regroup `1.234.567` into 1234567 with no finding, while the
+    /// mirroring `CommaDecimal` refused `1,234,567`.
+    #[test]
+    fn dot_decimal_refuses_multiple_decimal_points_like_comma_decimal() {
+        for (number_format, input) in [
+            (NumberFormat::DotDecimal, "1.234.567"),
+            (NumberFormat::DotDecimal, "1.2.3"),
+            (NumberFormat::CommaDecimal, "1,234,567"),
+            (NumberFormat::CommaDecimal, "1,2,3"),
+        ] {
+            let parsed = parse(
+                input,
+                Some(ParseCtx {
+                    number_format,
+                    ..ParseCtx::default()
+                }),
+            );
+            assert!(
+                parsed.best.is_none(),
+                "{number_format:?} {input}: {:?}",
+                parsed.best
+            );
+            assert_eq!(
+                parsed.findings.skipped.first().map(|issue| issue.code),
+                Some(IssueCode::NoValue),
+                "{number_format:?} {input}"
+            );
+        }
+
+        // The rest of the declared format is untouched: one dot is the decimal
+        // separator, and a comma still groups.
+        for (input, expected) in [
+            ("1.5", 1.5),
+            ("1.234", 1.234),
+            ("1,234", 1234.0),
+            ("1,234,567", 1_234_567.0),
+            ("12,34,567", 1_234_567.0),
+            ("1,234.56", 1234.56),
+        ] {
+            let parsed = parse(
+                input,
+                Some(ParseCtx {
+                    number_format: NumberFormat::DotDecimal,
+                    ..ParseCtx::default()
+                }),
+            );
+            let best = parsed.best.unwrap_or_else(|| panic!("{input}"));
+            assert_close(best.value.expect("value"), expected);
+        }
+
+        // `Auto` is unaffected: it still regroups a well-formed dot-grouped
+        // number and still refuses a malformed one.
+        assert_eq!(
+            normalize_locale_number("1.234.567", NumberFormat::Auto).as_deref(),
+            Some("1234567")
+        );
+        assert_eq!(
+            normalize_locale_number("1.234.567", NumberFormat::DotDecimal),
+            None
+        );
+        assert_eq!(normalize_locale_number("1.2.3", NumberFormat::Auto), None);
+        assert_close(
+            parse("1.234.567", None)
+                .best
+                .expect("auto")
+                .value
+                .expect("value"),
+            1_234_567.0,
+        );
+    }
+
+    /// The documented `CommaDecimal` asymmetry: the declared format reaches the
+    /// quantity grammars through the parsing context, and only a fallback
+    /// grammar that never consults it lets `1.5 kg` through.
+    #[test]
+    fn comma_decimal_applies_to_quantities_except_the_documented_fallback() {
+        let comma = |input: &str| {
+            parse(
+                input,
+                Some(ParseCtx {
+                    number_format: NumberFormat::CommaDecimal,
+                    ..ParseCtx::default()
+                }),
+            )
+        };
+
+        let grouped = comma("1.234 kg").best.expect("1.234 kg");
+        assert_close(grouped.value.expect("value"), 1234.0);
+        assert_eq!(grouped.unit.as_deref(), Some("kg"));
+
+        for refused in ["$1.5", "1.5 m 2.5 cm"] {
+            let parsed = comma(refused);
+            assert!(parsed.best.is_none(), "{refused}: {:?}", parsed.best);
+            assert_eq!(
+                parsed.findings.skipped.first().map(|issue| issue.code),
+                Some(IssueCode::NoValue),
+                "{refused}"
+            );
+        }
+
+        let fallback = comma("1.5 kg").best.expect("1.5 kg");
+        assert_close(fallback.value.expect("value"), 1.5);
+        assert_eq!(fallback.unit.as_deref(), Some("kg"));
     }
 
     #[test]

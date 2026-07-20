@@ -5,7 +5,7 @@
 
 英語版ドキュメント: [README.md](README.md)
 
-## 特徴
+## 保証
 
 - **決定論的**: 同じ入力と同じコンテキストからは常に同じ結果が出ます。乱数も推論モデルも
   使わず、ホストの時計やロケール環境も読みません。
@@ -186,7 +186,9 @@ make check          # lint test test-default test-dates test-timezones test-wasm
 `make web-test` は含まれません。
 
 `make test-wasm` には [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) と
-Node.js が必要です。`make web-test` は事前に `web/` で `npm install` が必要です。
+Node.js が必要です。`make test-wasm` と `make web-test` はどちらも事前に `web/` で
+`npm install` が必要です（React アダプタのスモークテストが `web/node_modules` から
+React を読み込むため）。
 どちらも `make check` とは別に自分で実行してください。
 
 ## 帰属

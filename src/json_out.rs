@@ -138,22 +138,15 @@ pub(crate) fn push_reading_json(json: &mut String, reading: &Reading) {
 
 /// Writes a finite `f64` as a JSON number without display rounding.
 ///
-/// The envelope is a machine transport: `format_number` rounds to six decimals
-/// for humans, which silently collapses `0.0000001 m` to `0` and truncates
-/// `2 cups` from `0.473176473` to `0.473176`. `f64`'s `Display` writes the
-/// shortest decimal that round-trips back to the same `f64`, and — unlike
-/// `Debug` — never uses exponent notation, so the output is always a plain
-/// JSON number for every finite value, including subnormals and magnitudes
-/// near `f64::MAX`.
+/// The envelope is a machine transport, so it shares `format_number_exact` with
+/// the field-list view rather than the six-decimal `format_number`, which
+/// silently collapses `0.0000001 m` to `0` and truncates `2 cups` from
+/// `0.473176473` to `0.473176`. The output is always a plain JSON number for
+/// every finite value, including subnormals and magnitudes near `f64::MAX`.
 #[cfg(any(feature = "wasm", test))]
 pub(crate) fn push_json_number(json: &mut String, value: f64) {
     debug_assert!(value.is_finite());
-    if value == 0.0 {
-        // Normalizes -0.0, which would otherwise render as "-0".
-        json.push('0');
-        return;
-    }
-    json.push_str(&value.to_string());
+    json.push_str(&crate::adapters::format_number_exact(value));
 }
 
 pub(crate) fn kind_str(kind: Kind) -> &'static str {

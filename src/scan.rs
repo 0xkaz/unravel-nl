@@ -42,7 +42,7 @@ pub(crate) fn push_clause_matches(
         && let Some(candidate) = first_numeric
         && Some((candidate.start, candidate.end)) == clause_bounds
     {
-        let _ = push_parsed_match(matches, text, candidate, ctx);
+        let _ = push_numeric_candidate_match(matches, text, candidate, ctx);
         return;
     }
 
@@ -56,7 +56,7 @@ pub(crate) fn push_clause_matches(
 
     if let Some(candidate) = first_numeric {
         if numeric_count == 1 {
-            let _ = push_parsed_match(matches, text, candidate, ctx);
+            let _ = push_numeric_candidate_match(matches, text, candidate, ctx);
         } else {
             push_numeric_window_matches(matches, text, start, end, ctx);
         }
@@ -76,6 +76,7 @@ pub(crate) fn push_broad_clause_match(
         CandidateSpan {
             start,
             end,
+            numeric_core_end: None,
             parser: CandidateParser::Broad,
         },
         ctx,
@@ -90,9 +91,49 @@ pub(crate) fn push_numeric_window_matches(
     ctx: &ParseCtx,
 ) {
     for_numeric_candidate_spans(text, start, end, |candidate| {
-        let _ = push_parsed_match(matches, text, candidate, ctx);
+        let _ = push_numeric_candidate_match(matches, text, candidate, ctx);
         true
     });
+}
+
+/// Pushes a numeric candidate window, falling back to its numeric core.
+///
+/// [`candidate_window`] speculates: after a number it will cross a space and keep
+/// consuming as long as what follows *could* be a unit, so `"1 and 2"` offers
+/// the window `"1 and"`. When the speculation is wrong the window does not
+/// parse, and before this fallback existed the scanner resumed *after* the
+/// failed window — so the `1` that reads perfectly well on its own was dropped
+/// with nothing on any findings channel to say so.
+///
+/// The retry is the number the window started from, without the text it
+/// speculatively absorbed ([`CandidateSpan::numeric_core_end`]). It only exists
+/// when the window actually crossed such a gap, so windows that never
+/// speculated (`"3pm-4pm"`, `"100-120㎡"`) are still all-or-nothing, and a
+/// window that parses (`"1 in"` as one inch, `"5 kg"`) never reaches the retry
+/// at all.
+pub(crate) fn push_numeric_candidate_match(
+    matches: &mut Vec<ParsedMatch>,
+    text: &str,
+    candidate: CandidateSpan,
+    ctx: &ParseCtx,
+) -> Option<bool> {
+    if let Some(pushed) = push_parsed_match(matches, text, candidate, ctx) {
+        return Some(pushed);
+    }
+    let core_end = candidate.numeric_core_end?;
+    if core_end >= candidate.end {
+        return None;
+    }
+    push_parsed_match(
+        matches,
+        text,
+        CandidateSpan {
+            end: core_end,
+            numeric_core_end: None,
+            ..candidate
+        },
+        ctx,
+    )
 }
 
 pub(crate) fn sorted_non_overlapping_matches(mut matches: Vec<ParsedMatch>) -> Vec<ParsedMatch> {
@@ -233,6 +274,11 @@ pub(crate) fn push_editor_dimension_match(
 pub(crate) struct CandidateSpan {
     pub(crate) start: usize,
     pub(crate) end: usize,
+    /// End of the number the window started from, when the window then crossed
+    /// a space to speculatively absorb a possible unit; `None` when it never
+    /// speculated. See [`push_numeric_candidate_match`], which retries this
+    /// narrower span when the whole window fails to parse.
+    pub(crate) numeric_core_end: Option<usize>,
     pub(crate) parser: CandidateParser,
 }
 
@@ -337,11 +383,12 @@ where
         };
         let abs = cursor + idx;
         if is_candidate_start_at(text, abs, ch) {
-            let candidate_end = candidate_end(text, abs, end);
+            let (candidate_end, numeric_core_end) = candidate_window(text, abs, end);
             if candidate_end > abs {
                 let should_continue = emit(CandidateSpan {
                     start: abs,
                     end: candidate_end,
+                    numeric_core_end,
                     parser: CandidateParser::TokenWindow,
                 });
                 if !should_continue {
@@ -575,8 +622,17 @@ pub(crate) fn is_candidate_number_start(ch: char) -> bool {
         || is_cjk_number_char(ch)
 }
 
-pub(crate) fn candidate_end(text: &str, start: usize, limit: usize) -> usize {
+/// Returns the candidate window and, when the window speculated across a space,
+/// the end of the number it started from.
+///
+/// The second value is exactly the `end` this scan had reached the moment
+/// before it took the "space, then something that could start a unit" branch —
+/// the point past which everything in the window is a guess. It is `None` when
+/// that branch never fired, so a window such as `"3pm-4pm"`, which never
+/// crosses a space, offers no narrower reading to fall back to.
+pub(crate) fn candidate_window(text: &str, start: usize, limit: usize) -> (usize, Option<usize>) {
     let mut end = start;
+    let mut numeric_core_end = None;
     let mut saw_unit = false;
     let mut saw_number = false;
     let mut previous_was_digit = false;
@@ -623,6 +679,7 @@ pub(crate) fn candidate_end(text: &str, start: usize, limit: usize) -> usize {
             }
             if saw_number && !saw_unit && resolved_char.is_some_and(is_candidate_unit_char) {
                 after_number_gap = true;
+                numeric_core_end.get_or_insert(end);
                 end = after;
                 continue;
             }
@@ -650,9 +707,9 @@ pub(crate) fn candidate_end(text: &str, start: usize, limit: usize) -> usize {
     end = start + text[start..end].trim_end_matches(char::is_whitespace).len();
 
     if !saw_number {
-        return start;
+        return (start, None);
     }
-    end
+    (end, numeric_core_end.filter(|core| *core < end))
 }
 
 pub(crate) fn is_digit_like(ch: char) -> bool {
@@ -876,7 +933,7 @@ mod tests {
     /// The scanner as it read before the whitespace run was resolved in one
     /// pass: a fresh forward walk over the rest of the run for every space.
     /// Kept as an oracle so "faster" stays provably "same answer".
-    fn candidate_end_reference(text: &str, start: usize, limit: usize) -> usize {
+    fn candidate_end_reference(text: &str, start: usize, limit: usize) -> (usize, Option<usize>) {
         fn next_nonspace_is(
             text: &str,
             mut cursor: usize,
@@ -897,6 +954,7 @@ mod tests {
         }
 
         let mut end = start;
+        let mut numeric_core_end = None;
         let mut saw_unit = false;
         let mut saw_number = false;
         let mut previous_was_digit = false;
@@ -930,6 +988,9 @@ mod tests {
                     && next_nonspace_is(text, abs + ch.len_utf8(), limit, is_candidate_unit_char)
                 {
                     after_number_gap = true;
+                    if numeric_core_end.is_none() {
+                        numeric_core_end = Some(end);
+                    }
                     end = abs + ch.len_utf8();
                     continue;
                 }
@@ -965,9 +1026,9 @@ mod tests {
         }
 
         if !saw_number {
-            return start;
+            return (start, None);
         }
-        end
+        (end, numeric_core_end.filter(|core| *core < end))
     }
 
     #[test]
@@ -1005,7 +1066,7 @@ mod tests {
                     continue;
                 }
                 assert_eq!(
-                    candidate_end(text, start, text.len()),
+                    candidate_window(text, start, text.len()),
                     candidate_end_reference(text, start, text.len()),
                     "{text:?} at {start}"
                 );
@@ -1030,6 +1091,38 @@ mod tests {
             // The whole run belongs to the match, exactly as one space does.
             assert_eq!(long[0].start, 0, "width {width}");
             assert_eq!(long[0].end, text.len(), "width {width}");
+        }
+    }
+
+    /// The core is offered exactly when the window crossed a space on the guess
+    /// that a unit followed, and it always ends the leading number.
+    #[test]
+    fn numeric_core_is_offered_only_for_speculative_windows() {
+        for (text, expected) in [
+            ("1 and", (5usize, Some(1usize))),
+            ("4 apples", (8, Some(1))),
+            ("3.5 metres", (10, Some(3))),
+            ("1 in", (4, Some(1))),
+            ("5 kg", (4, Some(1))),
+            // No space, so nothing was ever guessed at.
+            ("3pm-4pm", (7, None)),
+            ("100-120", (7, None)),
+            ("3m", (2, None)),
+            ("1,234", (5, None)),
+            // Digit-space-digit is a grouped number, not a guessed unit.
+            ("1 234 567", (9, None)),
+            // The run of spaces resolves to one gap, and the core sits before it.
+            ("12   kgg", (8, Some(2))),
+            // A space with nothing unit-like after it just ends the window.
+            ("5 3", (3, None)),
+            ("5   ", (1, None)),
+        ] {
+            assert_eq!(candidate_window(text, 0, text.len()), expected, "{text:?}");
+            if let Some(core) = expected.1 {
+                assert!(core < expected.0, "{text:?}");
+                assert!(text[..core].chars().any(is_digit_like), "{text:?}");
+                assert!(!text[..core].ends_with(char::is_whitespace), "{text:?}");
+            }
         }
     }
 
