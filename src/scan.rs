@@ -214,6 +214,7 @@ pub(crate) fn push_editor_dimension_match(
     };
     let mut parsed = parsed_shell(text, local_ctx);
     parse_editor_dimension_into(text, local_ctx, &mut parsed);
+    retarget_findings_to_input(&mut parsed);
     if !parsed_is_editor_dimension(&parsed, hint, ctx.expected_dimension) {
         return;
     }
@@ -747,7 +748,12 @@ pub(crate) fn parse_editor_dimension_number_into(text: &str, ctx: &ParseCtx, par
     finalize_parsed(text, &mut number);
 
     if parsed_is_editor_dimension(&number, Some(expected_dimension), Some(expected_dimension)) {
+        // `number` was built from the normalized text, so adopting it wholesale
+        // would replace the original input the caller handed in — and the spans
+        // are translated against that original afterwards.
+        let input = std::mem::take(&mut parsed.input);
         *parsed = number;
+        parsed.input = input;
         return;
     }
 

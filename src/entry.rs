@@ -56,6 +56,7 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             .findings
             .skipped
             .push(skipped(trimmed, "empty input"));
+        retarget_findings_to_input(&mut parsed);
         return parsed;
     }
 
@@ -67,6 +68,7 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         ParsePurpose::Recurrence => parse_recurrence_fast_into(trimmed, &mut parsed),
         ParsePurpose::DimensionEditor => parse_editor_dimension_into(trimmed, &ctx, &mut parsed),
     }
+    retarget_findings_to_input(&mut parsed);
     parsed
 }
 
@@ -105,9 +107,11 @@ pub(crate) fn parse_quantity_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed
             .findings
             .skipped
             .push(skipped(trimmed, "empty input"));
+        retarget_findings_to_input(&mut parsed);
         return parsed;
     }
     parse_quantity_fast_into(trimmed, ctx, &mut parsed);
+    retarget_findings_to_input(&mut parsed);
     parsed
 }
 
@@ -129,9 +133,11 @@ pub(crate) fn parse_number_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
             .findings
             .skipped
             .push(skipped(trimmed, "empty input"));
+        retarget_findings_to_input(&mut parsed);
         return parsed;
     }
     parse_number_fast_into(trimmed, ctx, &mut parsed);
+    retarget_findings_to_input(&mut parsed);
     parsed
 }
 
@@ -160,9 +166,11 @@ pub fn parse_recurrence_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             .findings
             .skipped
             .push(skipped(trimmed, "empty input"));
+        retarget_findings_to_input(&mut parsed);
         return parsed;
     }
     parse_recurrence_fast_into(trimmed, &mut parsed);
+    retarget_findings_to_input(&mut parsed);
     parsed
 }
 
@@ -182,9 +190,11 @@ pub fn parse_date_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
             .findings
             .skipped
             .push(skipped(trimmed, "empty input"));
+        retarget_findings_to_input(&mut parsed);
         return parsed;
     }
     parse_date_fast_into(trimmed, &ctx, &mut parsed);
+    retarget_findings_to_input(&mut parsed);
     parsed
 }
 

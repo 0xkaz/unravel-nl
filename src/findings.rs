@@ -73,6 +73,22 @@ impl IssueCode {
 }
 
 /// A byte range within the original input, with the text it covers.
+///
+/// The range addresses [`Parsed::input`] — the string the caller passed in, not
+/// the normalized copy the parser works on. `start` and `end` are always char
+/// boundaries of that string, `input[start..end]` is always valid, and it
+/// always equals [`Span::text`]. Slicing the input by a span is therefore safe,
+/// which is what makes spans usable for editor highlighting.
+///
+/// ```
+/// use unravel_nl::parse;
+///
+/// let parsed = parse("３pm Europe/Paris", None);
+/// let span = &parsed.findings.skipped[0].span;
+///
+/// assert_eq!(&parsed.input[span.start..span.end], span.text);
+/// assert_eq!(span.text, "Europe/Paris");
+/// ```
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Span {
     /// Byte offset of the first byte of the fragment.
@@ -80,6 +96,9 @@ pub struct Span {
     /// Byte offset one past the last byte of the fragment.
     pub end: usize,
     /// The fragment itself, as it appeared in the input.
+    ///
+    /// Written the way the user wrote it: `１,２３４` stays full-width rather
+    /// than being reported as the `1,234` the parser read.
     pub text: String,
 }
 
@@ -368,6 +387,88 @@ pub(crate) fn approximation_with_span(ref_text: &str, reason: &str, span: Span) 
         relative_error: None,
         span,
     }
+}
+
+/// Rewrites every finding span so it addresses [`Parsed::input`].
+///
+/// Grammar dispatch runs on the normalized, trimmed text, so the spans the
+/// grammars produce are in normalized coordinates while `input` holds the
+/// original. This pass translates them back and re-reads [`Span::text`] from
+/// `input`, which is what makes the documented guarantee true: `start` and
+/// `end` are char boundaries of `input`, `input[start..end]` exists, and it
+/// equals `text` — the fragment as the user typed it, not its normalized form.
+///
+/// `ref_text` follows `text` only when the two already agreed, since a
+/// `ref_text` that differs was never a quotation of the input (it is the
+/// corrected unit, the matched keyword, and so on).
+///
+/// Call this exactly once per [`Parsed`], at the entry point that owns `input`.
+/// It is not idempotent: a second pass would translate offsets that are already
+/// in original coordinates.
+pub(crate) fn retarget_findings_to_input(parsed: &mut Parsed) {
+    if parsed.findings.skipped.is_empty()
+        && parsed.findings.ambiguities.is_empty()
+        && parsed.findings.approximations.is_empty()
+    {
+        return;
+    }
+
+    let offsets = OriginalOffsets::for_input(&parsed.input);
+    let input = std::mem::take(&mut parsed.input);
+    for issue in &mut parsed.findings.skipped {
+        retarget_span(&input, &offsets, &mut issue.span, &mut issue.ref_text);
+    }
+    for issue in &mut parsed.findings.ambiguities {
+        retarget_span(&input, &offsets, &mut issue.span, &mut issue.ref_text);
+    }
+    for issue in &mut parsed.findings.approximations {
+        retarget_span(&input, &offsets, &mut issue.span, &mut issue.ref_text);
+    }
+    parsed.input = input;
+}
+
+fn retarget_span(input: &str, offsets: &OriginalOffsets, span: &mut Span, ref_text: &mut String) {
+    let start = floor_char_boundary(input, offsets.start(span.start));
+    let end = ceil_char_boundary(input, offsets.end(span.end)).max(start);
+    let Some(text) = input.get(start..end) else {
+        return;
+    };
+
+    let quoted_the_input = *ref_text == span.text;
+    span.start = start;
+    span.end = end;
+    if span.text != text {
+        span.text.clear();
+        span.text.push_str(text);
+    }
+    if quoted_the_input && ref_text.as_str() != text {
+        ref_text.clear();
+        ref_text.push_str(text);
+    }
+}
+
+/// Rounds `idx` down to the nearest char boundary of `text`.
+pub(crate) fn floor_char_boundary(text: &str, idx: usize) -> usize {
+    if idx >= text.len() {
+        return text.len();
+    }
+    let mut idx = idx;
+    while !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
+/// Rounds `idx` up to the nearest char boundary of `text`.
+pub(crate) fn ceil_char_boundary(text: &str, idx: usize) -> usize {
+    if idx >= text.len() {
+        return text.len();
+    }
+    let mut idx = idx;
+    while !text.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
 }
 
 pub(crate) fn span(text: &str) -> Span {

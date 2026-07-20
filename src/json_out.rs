@@ -68,9 +68,18 @@ pub(crate) fn parsed_matches_summary_json(source: &str, matches: &[ParsedMatch])
     json
 }
 
+/// Converts a byte offset in `text` to the char offset a JS caller can use.
+///
+/// `charStart`/`charEnd` have to describe the same fragment as `byteStart`/
+/// `byteEnd`, so both are measured against the original source string the
+/// caller passed in. An offset that is not on a char boundary would slice
+/// through a multi-byte character and panic, so it is rounded down to the
+/// boundary that contains it rather than taken on faith.
 #[cfg(feature = "wasm")]
 pub(crate) fn byte_to_char_offset(text: &str, byte_offset: usize) -> usize {
-    text[..byte_offset].chars().count()
+    text[..floor_char_boundary(text, byte_offset)]
+        .chars()
+        .count()
 }
 
 #[cfg(any(feature = "wasm", test))]
