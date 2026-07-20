@@ -1,0 +1,658 @@
+use crate::*;
+
+pub(crate) fn parse_qualified_reading(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
+    let (qualifier, rest) = strip_approximate_qualifier(text)?;
+    let mut reading = parse_endpoint(rest, ctx)?;
+    mark_approximate(&mut reading);
+    Some(ParsedReading {
+        reading,
+        approximations: vec![approximation_with_span(
+            qualifier,
+            "Approximate qualifier was preserved as an approximation finding.",
+            span_in(text, qualifier),
+        )],
+    })
+}
+
+pub(crate) fn strip_approximate_qualifier(text: &str) -> Option<(&str, &str)> {
+    let trimmed = text.trim();
+    for prefix in [
+        "approximately ",
+        "approx. ",
+        "approx ",
+        "around ",
+        "roughly ",
+        "about ",
+    ] {
+        if let Some(rest) = strip_prefix_ascii_case(trimmed, prefix)
+            && !rest.trim().is_empty()
+        {
+            return Some((trimmed.get(..prefix.len())?.trim(), rest.trim()));
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix('約')
+        && !rest.trim().is_empty()
+    {
+        return Some(("約", rest.trim()));
+    }
+    for suffix in [" (approx.)", " approx.", " approximately"] {
+        if let Some(rest) = strip_suffix_ascii_case(trimmed, suffix)
+            && !rest.trim().is_empty()
+        {
+            return Some((
+                trimmed.get(trimmed.len() - suffix.len()..)?.trim(),
+                rest.trim(),
+            ));
+        }
+    }
+    None
+}
+
+pub(crate) fn parse_fuzzy_reading(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
+    if let Some(rest) = strip_prefix_ascii_case(text.trim(), "a few ")
+        && !rest.trim().is_empty()
+    {
+        let from = parse_endpoint(&format!("2 {}", rest.trim()), ctx)?;
+        let to = parse_endpoint(&format!("4 {}", rest.trim()), ctx)?;
+        if from.kind == to.kind && from.dimension == to.dimension {
+            let mut reading = Reading::range(from, to, 0.72);
+            mark_approximate(&mut reading);
+            return Some(ParsedReading {
+                reading,
+                approximations: vec![approximation_with_span(
+                    "a few",
+                    "Fuzzy small-count phrase normalized to a 2 to 4 range.",
+                    span_in(text, "a few"),
+                )],
+            });
+        }
+    }
+
+    parse_custom_fuzzy_profile(text, ctx).or_else(|| parse_fuzzy_temperature(text, ctx))
+}
+
+pub(crate) fn parse_custom_fuzzy_profile(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
+    let normalized = normalize_alias(text);
+    for profile in &ctx.fuzzy_profiles {
+        if let Some(expected_dimension) = ctx.expected_dimension
+            && expected_dimension != profile.dimension
+        {
+            continue;
+        }
+        let Some(target_unit) = unit_by_alias(&profile.unit) else {
+            continue;
+        };
+        if target_unit.dimension != profile.dimension {
+            continue;
+        }
+        for term in &profile.terms {
+            if normalize_alias(&term.term) != normalized {
+                continue;
+            }
+            let mut reading = Reading::range(
+                Reading::quantity(
+                    term.low * target_unit.factor,
+                    target_unit.canonical_unit,
+                    profile.dimension,
+                    target_unit.provenance,
+                    target_unit.approximate,
+                    0.72,
+                ),
+                Reading::quantity(
+                    term.high * target_unit.factor,
+                    target_unit.canonical_unit,
+                    profile.dimension,
+                    target_unit.provenance,
+                    target_unit.approximate,
+                    0.72,
+                ),
+                0.72,
+            );
+            mark_approximate(&mut reading);
+            return Some(ParsedReading {
+                reading,
+                approximations: vec![approximation_with_span(
+                    text,
+                    "Custom fuzzy vocabulary normalized to a configured range.",
+                    span(text),
+                )],
+            });
+        }
+    }
+    None
+}
+
+pub(crate) fn parse_fuzzy_temperature(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
+    if ctx.expected_dimension != Some(Dimension::Temperature) {
+        return None;
+    }
+
+    let normalized = text.trim().to_ascii_lowercase();
+    let (label, low, high) = if text.contains("暑い") {
+        ("暑い", 27.0, 35.0)
+    } else if text.contains("暖か") {
+        ("暖か", 20.0, 27.0)
+    } else if text.contains("寒い") {
+        ("寒い", 0.0, 10.0)
+    } else if normalized.contains("hot") {
+        ("hot", 27.0, 35.0)
+    } else if normalized.contains("warm") {
+        ("warm", 20.0, 27.0)
+    } else if normalized.contains("cold") {
+        ("cold", 0.0, 10.0)
+    } else {
+        return None;
+    };
+
+    let mut reading = Reading::range(
+        temperature_celsius(low, 0.68),
+        temperature_celsius(high, 0.68),
+        0.68,
+    );
+    mark_approximate(&mut reading);
+    Some(ParsedReading {
+        reading,
+        approximations: vec![approximation_with_span(
+            label,
+            "Fuzzy temperature phrase normalized to a broad Celsius range.",
+            span_in(text, label),
+        )],
+    })
+}
+
+pub(crate) fn parse_plus_minus_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    let (left, right) = text
+        .split_once('±')
+        .or_else(|| split_once_ascii_case(text, "+/-"))?;
+    let left = left.trim();
+    let right = right.trim();
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+
+    let left_suffix = unit_suffix(left, ctx);
+    let right_suffix = unit_suffix(right, ctx);
+    let left_owned;
+    let right_owned;
+    let center_text = if left_suffix.is_none() {
+        if let Some(suffix) = right_suffix {
+            left_owned = format!("{left}{suffix}");
+            left_owned.as_str()
+        } else {
+            left
+        }
+    } else {
+        left
+    };
+    let delta_text = if right_suffix.is_none() {
+        if let Some(suffix) = left_suffix {
+            right_owned = format!("{right}{suffix}");
+            right_owned.as_str()
+        } else {
+            right
+        }
+    } else {
+        right
+    };
+
+    let center = parse_endpoint(center_text, ctx)?;
+    let delta = parse_endpoint(delta_text, ctx)?;
+    let (center_value, delta_value) = (center.value?, delta.value?);
+    if center.kind != Kind::Quantity
+        || delta.kind != Kind::Quantity
+        || center.dimension != delta.dimension
+        || center.unit != delta.unit
+    {
+        return None;
+    }
+
+    let unit = center.unit.as_deref()?;
+    let dimension = center.dimension?;
+    let provenance = center.provenance.unwrap_or(Provenance::TradeCustom);
+    let approximate = center.approximate.unwrap_or(false) || delta.approximate.unwrap_or(false);
+    Some(Reading::range(
+        Reading::quantity(
+            center_value - delta_value,
+            unit,
+            dimension,
+            provenance,
+            approximate,
+            0.93,
+        ),
+        Reading::quantity(
+            center_value + delta_value,
+            unit,
+            dimension,
+            provenance,
+            approximate,
+            0.93,
+        ),
+        0.93,
+    ))
+}
+
+pub(crate) fn parse_upper_bound_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    let trimmed = text.trim();
+    let rest = ["less than ", "under ", "below ", "up to ", "at most "]
+        .into_iter()
+        .find_map(|prefix| strip_prefix_ascii_case(trimmed, prefix))
+        .or_else(|| trimmed.strip_prefix("最大"))
+        .or_else(|| trimmed.strip_prefix("上限"))
+        .or_else(|| trimmed.strip_prefix('≤'))
+        .or_else(|| trimmed.strip_prefix('<'))
+        .or_else(|| {
+            ["以下", "未満", "まで"]
+                .into_iter()
+                .find_map(|suffix| trimmed.strip_suffix(suffix))
+        })?
+        .trim();
+    if rest.is_empty() {
+        return None;
+    }
+
+    let to = parse_endpoint(rest, ctx)?;
+    if to.kind != Kind::Quantity || to.value? < 0.0 {
+        return None;
+    }
+    let from = zero_like_quantity(&to)?;
+    Some(Reading::range(from, to, 0.86))
+}
+
+pub(crate) fn zero_like_quantity(reading: &Reading) -> Option<Reading> {
+    Some(Reading::quantity(
+        0.0,
+        reading.unit.as_deref()?,
+        reading.dimension?,
+        reading.provenance.unwrap_or(Provenance::TradeCustom),
+        reading.approximate.unwrap_or(false),
+        0.86,
+    ))
+}
+
+pub(crate) fn mark_approximate(reading: &mut Reading) {
+    reading.approximate = Some(true);
+    if let Some(confidence) = reading.confidence.as_mut() {
+        *confidence *= 0.9;
+    }
+    if let Some(range) = reading.range.as_mut() {
+        mark_approximate(&mut range.from);
+        mark_approximate(&mut range.to);
+    }
+}
+
+pub(crate) fn strip_prefix_ascii_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    if text.len() < prefix.len() {
+        return None;
+    }
+    let candidate = text.get(..prefix.len())?;
+    candidate
+        .eq_ignore_ascii_case(prefix)
+        .then(|| &text[prefix.len()..])
+}
+
+pub(crate) fn parse_ambiguous_number(text: &str, ctx: &ParseCtx) -> Option<AmbiguousParse> {
+    if ctx.number_format != NumberFormat::Auto {
+        return None;
+    }
+    if text.matches(',').count() != 1 || text.contains('.') || !valid_grouped_number(text) {
+        return None;
+    }
+    let best = parse_number(text)?;
+    let decimal = text.replace(',', ".").parse::<f64>().ok()?;
+    Some(AmbiguousParse {
+        best: Some(Reading::number(best, 0.64)),
+        alternatives: vec![Reading::number(decimal, 0.56)],
+        ambiguity: ambiguity(
+            text,
+            "Comma can be read as a thousands separator or a decimal separator.",
+            Some(2),
+            IssueCode::AmbiguousNumber,
+        ),
+    })
+}
+
+pub(crate) fn parse_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    let (left, right) = split_range_text(text)?;
+    let right_suffix = unit_suffix(right, ctx);
+    let left_with_unit;
+    let left_text = if right_suffix.is_some() && unit_suffix(left, ctx).is_none() {
+        left_with_unit = format!("{}{}", left.trim(), right_suffix?);
+        left_with_unit.as_str()
+    } else {
+        left.trim()
+    };
+
+    let from = parse_endpoint(left_text, ctx)?;
+    let to = parse_endpoint(right.trim(), ctx)?;
+    if from.kind != to.kind {
+        return None;
+    }
+    Some(Reading::range(from, to, 0.94))
+}
+
+pub(crate) fn split_range_text(text: &str) -> Option<(&str, &str)> {
+    let trimmed = text.trim();
+    if let Some(inner) = trimmed.strip_prefix("between ") {
+        return inner.split_once(" and ");
+    }
+    if let Some(inner) = trimmed.strip_prefix("from ") {
+        return inner.split_once(" to ");
+    }
+    for separator in ["〜", "～", " to ", ".."] {
+        if let Some((left, right)) = trimmed.split_once(separator) {
+            return non_empty_pair(left, right);
+        }
+    }
+    if let Some((left, right)) = split_clock_hyphen_range(trimmed) {
+        return Some((left, right));
+    }
+    split_ascii_hyphen_range(trimmed)
+}
+
+pub(crate) fn split_clock_hyphen_range(text: &str) -> Option<(&str, &str)> {
+    let (left, right) = text.split_once('-')?;
+    if parse_clock_seconds(left).is_some() && parse_clock_seconds(right).is_some() {
+        non_empty_pair(left, right)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn split_ascii_hyphen_range(text: &str) -> Option<(&str, &str)> {
+    let mut previous = None;
+    for (idx, ch) in text.char_indices() {
+        if ch != '-' {
+            previous = Some(ch);
+            continue;
+        }
+        let next = text[idx + 1..].chars().next();
+        if previous?.is_ascii_digit() && next?.is_ascii_digit() {
+            return non_empty_pair(&text[..idx], &text[idx + 1..]);
+        }
+    }
+    None
+}
+
+pub(crate) fn non_empty_pair<'a>(left: &'a str, right: &'a str) -> Option<(&'a str, &'a str)> {
+    let left = left.trim();
+    let right = right.trim();
+    if left.is_empty() || right.is_empty() {
+        None
+    } else {
+        Some((left, right))
+    }
+}
+
+pub(crate) fn unit_suffix<'a>(text: &str, ctx: &'a ParseCtx) -> Option<&'a str> {
+    let trimmed = text.trim();
+    let builtin_suffixes = [
+        "㎡", "m^2", "m2", "平米", "帖", "畳", "坪", "cm", "mm", "m", "kg", "g", "minutes",
+        "minute", "mins", "min", "hours", "hour", "hrs", "hr", "days", "day", "日",
+    ];
+    let all_builtin_suffixes = || {
+        builtin_suffixes.into_iter().chain(
+            UNIT_DEFS
+                .iter()
+                .flat_map(|unit| unit.aliases.iter().copied()),
+        )
+    };
+    let mut best = all_builtin_suffixes()
+        .filter(|suffix| trimmed.ends_with(suffix))
+        .max_by_key(|suffix| suffix.len())
+        .or_else(|| {
+            all_builtin_suffixes()
+                .filter(|suffix| ends_with_ascii_case(trimmed, suffix))
+                .max_by_key(|suffix| suffix.len())
+        });
+
+    for unit in &ctx.custom_units {
+        for suffix in
+            core::iter::once(unit.id.as_str()).chain(unit.aliases.iter().map(String::as_str))
+        {
+            if (trimmed.ends_with(suffix)
+                || best.is_none() && ends_with_ascii_case(trimmed, suffix))
+                && best.is_none_or(|current| suffix.len() > current.len())
+            {
+                best = Some(suffix);
+            }
+        }
+    }
+
+    best
+}
+
+pub(crate) fn ends_with_ascii_case(text: &str, suffix: &str) -> bool {
+    if text.ends_with(suffix) {
+        return true;
+    }
+    if text.len() < suffix.len() || !suffix.is_ascii() {
+        return false;
+    }
+    text.get(text.len() - suffix.len()..)
+        .is_some_and(|tail| tail.eq_ignore_ascii_case(suffix))
+}
+
+pub(crate) fn parse_endpoint(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    let normalized = normalize_input_cow(text);
+    let text = normalized.trim();
+    let features = InputFeatures::new(text);
+
+    if features.maybe_date
+        && let Some(reading) = parse_relative_date(text, ctx)
+    {
+        return Some(reading);
+    }
+    if features.maybe_japanese_length
+        && let Some(reading) = parse_japanese_length(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_tatami
+        && let Some(reading) = parse_tatami_area(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_tsubo
+        && let Some(reading) = parse_tsubo_area(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_area
+        && let Some(reading) = parse_square_meter(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_temperature
+        && let Some(reading) = parse_temperature(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_quantity
+        && let Some(reading) = parse_registered_quantity(text, ctx)
+    {
+        return Some(reading);
+    }
+    if features.maybe_metric_length
+        && let Some(reading) = parse_metric_length(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_mass
+        && let Some(reading) = parse_mass(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_clock
+        && let Some(reading) = parse_clock_time(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_duration
+        && let Some(reading) = parse_duration(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_feet_inches
+        && let Some(reading) = parse_feet_inches(text)
+    {
+        return Some(reading);
+    }
+    if features.maybe_currency
+        && let Some((best, _, _)) = parse_currency(text, ctx)
+    {
+        return Some(best);
+    }
+    if features.maybe_number {
+        return parse_plain_number(text);
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::assert_close;
+
+    #[test]
+    fn parses_japanese_area_range() {
+        let parsed = parse(
+            "100-120㎡",
+            Some(ParseCtx {
+                locale: Some(Locale::Ja),
+                ..ParseCtx::default()
+            }),
+        );
+        let best = parsed.best.expect("best reading");
+        assert_eq!(best.kind, Kind::Range);
+        let range = best.range.expect("range");
+        assert_eq!(range.from.unit.as_deref(), Some("m2"));
+        assert_eq!(range.to.unit.as_deref(), Some("m2"));
+        assert_close(range.from.value.unwrap(), 100.0);
+        assert_close(range.to.value.unwrap(), 120.0);
+    }
+
+    #[test]
+    fn parses_japanese_duration_range() {
+        let parsed = parse(
+            "2〜3日",
+            Some(ParseCtx {
+                locale: Some(Locale::Ja),
+                ..ParseCtx::default()
+            }),
+        );
+        let best = parsed.best.expect("best reading");
+        assert_eq!(best.kind, Kind::Range);
+        let range = best.range.expect("range");
+        assert_eq!(range.from.dimension, Some(Dimension::Time));
+        assert_eq!(range.to.dimension, Some(Dimension::Time));
+        assert_close(range.from.value.unwrap(), 172_800.0);
+        assert_close(range.to.value.unwrap(), 259_200.0);
+    }
+
+    #[test]
+    fn parses_between_mass_range() {
+        let parsed = parse("between 5 and 10 kg", None);
+        let best = parsed.best.expect("best reading");
+        assert_eq!(best.kind, Kind::Range);
+        let range = best.range.expect("range");
+        assert_eq!(range.from.unit.as_deref(), Some("kg"));
+        assert_eq!(range.to.unit.as_deref(), Some("kg"));
+        assert_close(range.from.value.unwrap(), 5.0);
+        assert_close(range.to.value.unwrap(), 10.0);
+    }
+
+    #[test]
+    fn parses_clock_time_ranges() {
+        let parsed = parse("3pm-4pm", None);
+        let best = parsed.best.expect("time slot");
+        assert_eq!(best.kind, Kind::Range);
+        let range = best.range.expect("range");
+        assert_eq!(range.from.dimension, Some(Dimension::Time));
+        assert_eq!(range.to.dimension, Some(Dimension::Time));
+        assert_close(range.from.value.unwrap(), 15.0 * 3600.0);
+        assert_close(range.to.value.unwrap(), 16.0 * 3600.0);
+    }
+
+    #[test]
+    fn parses_tolerance_and_bound_ranges() {
+        let tolerance = parse("10 ± 0.5 mm", None).best.expect("tolerance");
+        assert_eq!(tolerance.kind, Kind::Range);
+        let range = tolerance.range.expect("range");
+        assert_eq!(range.from.unit.as_deref(), Some("m"));
+        assert_close(range.from.value.unwrap(), 0.0095);
+        assert_close(range.to.value.unwrap(), 0.0105);
+
+        let upper = parse("under 10 minutes", None).best.expect("upper bound");
+        assert_eq!(upper.kind, Kind::Range);
+        let range = upper.range.expect("range");
+        assert_eq!(range.from.unit.as_deref(), Some("s"));
+        assert_close(range.from.value.unwrap(), 0.0);
+        assert_close(range.to.value.unwrap(), 600.0);
+
+        let japanese_upper = parse("10mm以下", None).best.expect("Japanese upper bound");
+        let range = japanese_upper.range.expect("range");
+        assert_eq!(range.from.unit.as_deref(), Some("m"));
+        assert_close(range.from.value.unwrap(), 0.0);
+        assert_close(range.to.value.unwrap(), 0.01);
+    }
+
+    #[test]
+    fn parses_approximate_and_fuzzy_readings() {
+        let approx = parse("about 20C", None);
+        let best = approx.best.expect("approximate temperature");
+        assert_eq!(best.dimension, Some(Dimension::Temperature));
+        assert_eq!(best.approximate, Some(true));
+        assert_eq!(approx.findings.approximations[0].ref_text, "about");
+
+        let japanese_approx = parse("約20kg", None);
+        let best = japanese_approx.best.expect("Japanese approximate mass");
+        assert_eq!(best.dimension, Some(Dimension::Mass));
+        assert_eq!(best.approximate, Some(true));
+        assert_eq!(japanese_approx.findings.approximations[0].ref_text, "約");
+
+        let strict = parse(
+            "about 20C",
+            Some(ParseCtx {
+                strictness: Strictness::Strict,
+                ..ParseCtx::default()
+            }),
+        );
+        assert!(strict.best.is_none());
+        assert_eq!(strict.findings.skipped[0].code, IssueCode::Approximation);
+
+        let few = parse("a few minutes", None);
+        let range = few.best.expect("few range").range.expect("range");
+        assert_close(range.from.value.unwrap(), 120.0);
+        assert_close(range.to.value.unwrap(), 240.0);
+        assert_eq!(few.findings.approximations[0].ref_text, "a few");
+
+        let hot = parse(
+            "it's hot",
+            Some(ParseCtx {
+                expected_dimension: Some(Dimension::Temperature),
+                ..ParseCtx::default()
+            }),
+        );
+        let range = hot.best.expect("hot range").range.expect("range");
+        assert_eq!(range.from.unit.as_deref(), Some("C"));
+        assert_close(range.from.value.unwrap(), 27.0);
+        assert_close(range.to.value.unwrap(), 35.0);
+
+        let japanese_hot = parse(
+            "今日は暑い",
+            Some(ParseCtx {
+                expected_dimension: Some(Dimension::Temperature),
+                ..ParseCtx::default()
+            }),
+        );
+        let range = japanese_hot
+            .best
+            .expect("Japanese hot range")
+            .range
+            .expect("range");
+        assert_eq!(range.from.unit.as_deref(), Some("C"));
+        assert_close(range.from.value.unwrap(), 27.0);
+        assert_close(range.to.value.unwrap(), 35.0);
+        assert_eq!(japanese_hot.findings.approximations[0].ref_text, "暑い");
+    }
+}

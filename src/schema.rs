@@ -1,0 +1,200 @@
+pub(crate) const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://0xkaz.github.io/unravel-nl/schema/parse-input.json",
+  "title": "unravel-nl parse input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["text"],
+  "properties": {
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Informal or ambiguous natural-language value to parse."
+    },
+    "locale": {
+      "type": "string",
+      "description": "Optional BCP-47 style locale hint such as ja, en, en-US, or en-GB."
+    },
+    "expect": {
+      "type": "string",
+      "enum": ["quantity", "date", "range", "number", "recurrence"],
+      "description": "Optional expected top-level reading kind."
+    },
+    "expected_dimension": {
+      "type": "string",
+      "enum": ["length", "area", "mass", "time", "volume", "currency", "temperature", "speed", "data", "data_rate", "flow_rate", "concentration", "acceleration", "force", "torque", "pressure", "power", "charge", "voltage", "current", "resistance", "illuminance", "radiation_equivalent_dose", "radioactivity"],
+      "description": "Optional expected quantity dimension."
+    },
+    "number_format": {
+      "type": "string",
+      "enum": ["auto", "comma_decimal", "dot_decimal"],
+      "default": "auto",
+      "description": "Explicit numeric punctuation policy. Use comma_decimal for 1,5 and dot_decimal for 1,234 grouping."
+    },
+    "purpose": {
+      "type": "string",
+      "enum": ["general", "quantity", "number", "date", "recurrence", "dimension_editor"],
+      "default": "general",
+      "description": "Optional grammar dispatch hint. Use dimension_editor for UI fields that only accept building dimensions."
+    },
+    "accept": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional acceptance controls for broad parser shapes.",
+      "properties": {
+        "ranges": { "type": "boolean", "default": true },
+        "conversions": { "type": "boolean", "default": true },
+        "compounds": { "type": "boolean", "default": true },
+        "fuzzy": { "type": "boolean", "default": true }
+      }
+    },
+    "reference_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Civil reference date for relative dates. The parser never reads the host system clock or timezone."
+    },
+    "timezone": {
+      "type": "string",
+      "description": "Optional caller-supplied IANA timezone hint for adapter layers. The core parser does not infer timezone from the Rust host environment."
+    },
+    "strictness": {
+      "type": "string",
+      "enum": ["forgiving", "confirm", "strict"],
+      "default": "forgiving"
+    }
+  }
+}"#;
+
+pub(crate) const PARSED_OUTPUT_SCHEMA_JSON: &str = r##"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://0xkaz.github.io/unravel-nl/schema/parsed-output.json",
+  "title": "unravel-nl parsed output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["input", "best", "alternatives", "suggestions", "findings"],
+  "properties": {
+    "input": { "type": "string" },
+    "locale": { "type": ["string", "null"] },
+    "best": {
+      "anyOf": [
+        { "$ref": "#/$defs/reading" },
+        { "type": "null" }
+      ]
+    },
+    "alternatives": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/reading" }
+    },
+    "suggestions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/suggestion" }
+    },
+    "findings": { "$ref": "#/$defs/findings" }
+  },
+  "$defs": {
+    "kind": { "type": "string", "enum": ["quantity", "date", "range", "number", "recurrence"] },
+    "dimension": {
+      "type": "string",
+      "enum": ["length", "area", "mass", "time", "volume", "currency", "temperature", "speed", "data", "data_rate", "flow_rate", "concentration", "acceleration", "force", "torque", "pressure", "power", "charge", "voltage", "current", "resistance", "illuminance", "radiation_equivalent_dose", "radioactivity"]
+    },
+    "provenance": {
+      "type": "string",
+      "enum": ["international_exact", "japanese_statute", "trade_custom", "si_multiple"]
+    },
+    "reading": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "$ref": "#/$defs/kind" },
+        "customKind": { "type": ["string", "null"] },
+        "value": { "type": ["number", "null"] },
+        "unit": { "type": ["string", "null"] },
+        "dimension": {
+          "anyOf": [
+            { "$ref": "#/$defs/dimension" },
+            { "type": "null" }
+          ]
+        },
+        "date": { "type": ["string", "null"], "format": "date" },
+        "recurrence": { "type": ["string", "null"], "description": "RRULE-style recurrence string for recurring expressions." },
+        "timezone": { "type": ["string", "null"], "description": "Canonical timezone for timezone-normalized readings." },
+        "range": {
+          "anyOf": [
+            { "$ref": "#/$defs/range" },
+            { "type": "null" }
+          ]
+        },
+        "provenance": {
+          "anyOf": [
+            { "$ref": "#/$defs/provenance" },
+            { "type": "null" }
+          ]
+        },
+        "approximate": { "type": ["boolean", "null"] },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "$ref": "#/$defs/reading" },
+        "to": { "$ref": "#/$defs/reading" }
+      }
+    },
+    "suggestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "score": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "text"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "text": { "type": "string" }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["code", "ref_text", "reason", "span"],
+      "properties": {
+        "code": { "type": "string" },
+        "ref_text": { "type": "string" },
+        "reason": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" }
+      }
+    },
+    "findings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skipped", "ambiguities", "approximations"],
+      "properties": {
+        "skipped": { "type": "array", "items": { "$ref": "#/$defs/issue" } },
+        "ambiguities": { "type": "array", "items": { "$ref": "#/$defs/issue" } },
+        "approximations": { "type": "array", "items": { "$ref": "#/$defs/issue" } }
+      }
+    }
+  }
+}"##;
+
+pub(crate) const MCP_TOOL_SCHEMA_JSON: &str = r#"{
+  "name": "unravel_nl_parse",
+  "description": "Parse informal or ambiguous natural-language quantities, dates, ranges, and values into deterministic canonical readings.",
+  "inputSchema": {
+    "$ref": "https://0xkaz.github.io/unravel-nl/schema/parse-input.json"
+  },
+  "outputSchema": {
+    "$ref": "https://0xkaz.github.io/unravel-nl/schema/parsed-output.json"
+  }
+}"#;
