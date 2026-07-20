@@ -227,14 +227,25 @@ fn every_issue_code_keeps_its_severity_rank_and_recoverability() {
         (IssueCode::Approximation, IssueSeverity::Warning, 30, true),
     ];
 
-    // Every variant appears exactly once, so a new code cannot be added without
-    // being classified here.
+    // No code is listed twice, so a row cannot be pinned twice and leave
+    // another unpinned while the count still looks right.
     let mut codes: Vec<&str> = table.iter().map(|row| row.0.as_str()).collect();
     codes.sort_unstable();
     codes.dedup();
     assert_eq!(codes.len(), table.len());
 
     for (code, severity, rank, recoverable) in table {
+        // The table above is a literal, so on its own it cannot notice a
+        // fourteenth variant. `pinned_classification` is an exhaustive match
+        // over `IssueCode` itself: a new variant stops this test compiling
+        // until it is classified there, and the assertion below then forces the
+        // table row to agree with it.
+        assert_eq!(
+            pinned_classification(code),
+            (severity, rank, recoverable),
+            "{code:?}"
+        );
+
         // A finding carrying the code is pushed through the real flattening
         // path, which is where a UI reads these three fields from.
         let mut parsed = parse("5 kg", None);
@@ -258,5 +269,30 @@ fn every_issue_code_keeps_its_severity_rank_and_recoverability() {
         assert_eq!(issues[0].recoverable, recoverable, "{code:?}");
         // The rank band the doc comment on `RankedIssue::rank` promises.
         assert!((30..=100).contains(&issues[0].rank), "{code:?}");
+    }
+}
+
+/// The `(severity, rank, recoverable)` every `IssueCode` is pinned to.
+///
+/// Deliberately an exhaustive `match` written out variant by variant rather
+/// than a lookup: it is the compile-time half of the test above. Adding a
+/// variant to `IssueCode` makes this match non-exhaustive, so the test fails to
+/// build until the new code is classified here — and its row is then required
+/// in the table, which asserts against this function.
+fn pinned_classification(code: IssueCode) -> (IssueSeverity, u16, bool) {
+    match code {
+        IssueCode::Empty => (IssueSeverity::Error, 100, false),
+        IssueCode::NoValue => (IssueSeverity::Error, 100, false),
+        IssueCode::UnknownUnit => (IssueSeverity::Error, 80, true),
+        IssueCode::TimezoneUnsupported => (IssueSeverity::Error, 90, true),
+        IssueCode::RecurrenceUnsupported => (IssueSeverity::Error, 90, true),
+        IssueCode::RejectedByPolicy => (IssueSeverity::Error, 90, true),
+        IssueCode::TypoCorrected => (IssueSeverity::Warning, 65, true),
+        IssueCode::AmbiguousNumber => (IssueSeverity::Warning, 55, true),
+        IssueCode::AmbiguousDate => (IssueSeverity::Warning, 55, true),
+        IssueCode::AmbiguousUnit => (IssueSeverity::Warning, 55, true),
+        IssueCode::AmbiguousCurrency => (IssueSeverity::Warning, 55, true),
+        IssueCode::UnitAssumed => (IssueSeverity::Info, 40, true),
+        IssueCode::Approximation => (IssueSeverity::Warning, 30, true),
     }
 }

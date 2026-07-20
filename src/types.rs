@@ -179,6 +179,10 @@ pub enum NumberFormat {
     /// Input whose shape settles the question is read one way with no finding:
     /// `1.5` and `1.2345` are decimals, `1.234.567` is 1234567, and
     /// `1.234,56` is 1234.56.
+    ///
+    /// A unit does not settle it either. `1.234 kg` carries the same
+    /// undecidable number, so it reports the same finding and offers 1234 kg as
+    /// the alternative, and a range reports one finding per ambiguous endpoint.
     #[default]
     Auto,
     /// Treats a comma as the decimal separator and a dot as the grouping
@@ -362,11 +366,15 @@ pub struct ParseCtx {
     /// It settles locale-dependent units: `1.5 cups` reads as the US cup by
     /// default and as the imperial cup under [`Locale::EnGb`].
     ///
-    /// It does **not** affect numeric punctuation. `1.234` produces a
-    /// byte-identical [`Parsed`] under `None`, [`Locale::Ja`], [`Locale::En`],
-    /// [`Locale::EnUs`], [`Locale::EnGb`], and any [`Locale::Other`] tag —
-    /// including a comma-decimal one such as `de-DE`. Only
-    /// [`ParseCtx::number_format`] decides that; see [`NumberFormat::Auto`].
+    /// It does **not** affect numeric punctuation. Parsing `1.234` under
+    /// `None`, [`Locale::Ja`], [`Locale::En`], [`Locale::EnUs`],
+    /// [`Locale::EnGb`], and any [`Locale::Other`] tag — including a
+    /// comma-decimal one such as `de-DE` — produces identical
+    /// [`Parsed::best`], [`Parsed::alternatives`], and [`Parsed::findings`].
+    /// The whole [`Parsed`] values are not equal, because [`Parsed::locale`]
+    /// echoes back the locale it was given; only the reading and the findings
+    /// are locale-independent. Only [`ParseCtx::number_format`] decides numeric
+    /// punctuation; see [`NumberFormat::Auto`].
     pub locale: Option<Locale>,
     /// Expected top-level reading kind. This does **not** constrain parsing.
     ///

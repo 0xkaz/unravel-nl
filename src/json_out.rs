@@ -276,17 +276,25 @@ mod tests {
         assert_eq!(negative_zero, "{\"kind\":\"number\",\"value\":0}");
     }
 
-    /// Every character JSON forbids raw inside a string must leave the emitter
-    /// escaped.
+    /// The emitter escapes `"`, `\`, and every Unicode `Cc` character.
+    ///
+    /// That is a superset of what RFC 8259 requires: the grammar forbids raw
+    /// characters inside a string only in `U+0000`–`U+001F` (plus the quote and
+    /// the backslash), so `U+007F` and `U+0080`–`U+009F` would be legal
+    /// unescaped. They are escaped anyway — `char::is_control` is the whole `Cc`
+    /// category — because a `` in the envelope survives every consumer,
+    /// while a raw one is invisible in a log and mangled by anything that
+    /// re-encodes it. This test pins that stricter behavior, not the RFC's
+    /// minimum.
     ///
     /// The quote, newline, carriage return and tab arms have named escapes; the
     /// backslash arm and the generic `\u{XXXX}` control arm are the two that no
-    /// parse in the corpus reached, and dropping either one emits a document
-    /// that no JSON parser accepts — a lone `\` at the end of `"5 kg\"` runs the
-    /// string past its closing quote, and a raw `U+0001` is a control character
-    /// where the grammar allows none.
+    /// parse in the corpus reached, and dropping either one of *those* emits a
+    /// document that no JSON parser accepts — a lone `\` at the end of `"5 kg\"`
+    /// runs the string past its closing quote, and a raw `U+0001` is a control
+    /// character where the grammar allows none.
     #[test]
-    fn escapes_every_character_json_forbids_raw_in_a_string() {
+    fn escapes_the_two_structural_characters_and_every_cc_character() {
         let hostile = "a\\b\"c\u{1}d\ne\tf\u{7f}g\rh";
         let mut json = String::new();
         push_json_string(&mut json, hostile);
@@ -310,6 +318,9 @@ mod tests {
             ('\n', "\"\\n\""),
             ('\t', "\"\\t\""),
             ('\r', "\"\\r\""),
+            // Legal raw under RFC 8259 — above `U+001F` — and escaped anyway,
+            // because they are `Cc`. Pinned so the extra escaping is not
+            // dropped as "not required" without the decision being made again.
             ('\u{7f}', "\"\\u007f\""),
             ('\u{9f}', "\"\\u009f\""),
         ] {

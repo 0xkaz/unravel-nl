@@ -333,6 +333,75 @@ fn recovers_numbers_from_windows_that_guessed_at_a_unit() {
     );
 }
 
+/// Recovering the leading number is not enough: the rest of the abandoned
+/// window has to be scanned again.
+///
+/// The window keeps consuming past a gap because a digit is a numeric body
+/// character, so `"1 and2 kg"` is one window. Recovering its numeric core gave
+/// back the `1`, but the scan resumed at the *window's* end, so the `2 kg` was
+/// never offered to any candidate and was dropped with nothing on any findings
+/// channel to say so. The scan now resumes at the end of the core it settled
+/// for.
+#[test]
+fn rescans_the_text_an_abandoned_window_had_swallowed() {
+    for (input, expected) in [
+        // The unchanged spaced form, as the baseline for the three below it.
+        ("2 apples 3 oranges", vec![("2", 0, 1), ("3", 9, 10)]),
+        ("2 apples3 oranges", vec![("2", 0, 1), ("3", 8, 9)]),
+        ("3 apples4", vec![("3", 0, 1), ("4", 8, 9)]),
+        ("I bought 3 and4 apples", vec![("3", 9, 10), ("4", 14, 15)]),
+    ] {
+        let matches = parse_all(input, None);
+        assert_eq!(
+            texts(&matches),
+            expected
+                .iter()
+                .map(|(text, _, _)| *text)
+                .collect::<Vec<_>>(),
+            "{input:?}"
+        );
+        for (found, (text, start, end)) in matches.iter().zip(&expected) {
+            assert_eq!((found.start, found.end), (*start, *end), "{input:?}");
+            assert_eq!(input.get(found.start..found.end), Some(*text), "{input:?}");
+            assert_eq!(found.text, *text, "{input:?}");
+            assert_eq!(
+                found.parsed.best.as_ref().expect("reading").kind,
+                Kind::Number,
+                "{input:?}"
+            );
+        }
+        assert!(
+            matches.windows(2).all(|pair| pair[0].end <= pair[1].start),
+            "{input:?}: {matches:#?}"
+        );
+    }
+
+    // What the recovered tail reads as is decided by parsing it, not by the
+    // window that gave up on it: here it is a quantity, not a bare number.
+    let with_unit = parse_all("1 and2 kg", None);
+    assert_eq!(texts(&with_unit), vec!["1", "2 kg"]);
+    assert_eq!((with_unit[0].start, with_unit[0].end), (0, 1));
+    assert_eq!((with_unit[1].start, with_unit[1].end), (5, 9));
+    assert_eq!(with_unit[0].parsed.best, parse("1", None).best);
+    assert_quantity(&with_unit[1], 2.0, "kg", Dimension::Mass);
+
+    // The resume point always advances: a run of gap-crossing windows
+    // terminates instead of re-offering the same window forever. Each recovered
+    // `2` then joins the following `1` as one space-grouped number (`"2 1"` is
+    // 21, as it is on its own), so 64 repeats yield `1`, 63 of those, and a
+    // final bare `2`.
+    let repeated = "1 and2 ".repeat(64);
+    let matches = parse_all(&repeated, None);
+    assert_eq!(matches.len(), 65, "{:?}", texts(&matches));
+    assert!(matches.windows(2).all(|pair| pair[0].end <= pair[1].start));
+    for found in &matches {
+        assert_eq!(
+            repeated.get(found.start..found.end),
+            Some(found.text.as_str())
+        );
+    }
+}
+
 /// The recovery must not fire where the window was right, and must not fire at
 /// all where the window never guessed.
 #[test]
@@ -353,11 +422,17 @@ fn keeps_windows_that_read_without_the_numeric_core_fallback() {
         vec!["between 5 and 10 kg"]
     );
 
-    // Windows that never cross a space have no narrower reading to fall back
-    // to, so text the scanner cannot read stays unread rather than decaying
-    // into whichever digits happen to come first.
-    assert!(parse_all("3pm-4pm", None).is_empty());
-    assert!(parse_all("100-120㎡", None).is_empty());
+    // A window with no reading at all still does not decay into whichever
+    // digits happen to come first. Neither of these is a range — `parse` reads
+    // both as nothing — so neither may come back as its digits taken apart.
+    for unreadable in ["1--2", "10-20-30", "version 1-2-3", "tel 03-1234-5678"] {
+        assert!(parse(unreadable, None).best.is_none(), "{unreadable:?}");
+        assert!(
+            parse_all(unreadable, None).is_empty(),
+            "{unreadable:?}: {:?}",
+            texts(&parse_all(unreadable, None))
+        );
+    }
 
     let ja = Some(ParseCtx {
         locale: Some(Locale::Ja),
@@ -379,6 +454,105 @@ fn keeps_windows_that_read_without_the_numeric_core_fallback() {
         )),
         vec!["3m", "4m", "6帖", "3640"]
     );
+}
+
+/// A clause `parse` reads as one range comes back as one match, not as nothing
+/// and not as loose digits.
+///
+/// `parse_all` extracts values with spans and has no findings channel, so a
+/// value it does not extract leaves no trace anywhere. Every input here is
+/// advertised as supported and reads completely through `parse`; through
+/// `parse_all` the first four came back empty and the rest came back as
+/// whichever numbers the token scan happened to reach first, which says
+/// something the text never did.
+#[test]
+fn reads_a_clause_wide_range_as_one_match() {
+    let ja = Some(ParseCtx {
+        locale: Some(Locale::Ja),
+        ..ParseCtx::default()
+    });
+
+    for (input, ctx, span) in [
+        ("100-120㎡", None, (0, 10)),
+        ("5-10kg", None, (0, 6)),
+        ("3pm-4pm", None, (0, 7)),
+        ("10 ± 0.5 mm", None, (0, 12)),
+        ("2〜3日", ja.clone(), (0, 8)),
+    ] {
+        let matches = parse_all(input, ctx.clone());
+        assert_eq!(matches.len(), 1, "{input:?}: {:?}", texts(&matches));
+        let found = &matches[0];
+        assert_eq!((found.start, found.end), span, "{input:?}");
+        assert_eq!(input.get(found.start..found.end), Some(found.text.as_str()));
+        assert_eq!(found.text, input, "{input:?}");
+        // The same reading `parse` gives, endpoints and all.
+        assert_eq!(found.parsed.best, parse(input, ctx).best, "{input:?}");
+        let best = found.parsed.best.as_ref().expect("reading");
+        assert_eq!(best.kind, Kind::Range, "{input:?}");
+    }
+
+    // The endpoints, spelled out for the two the README leads with.
+    let area = &parse_all("100-120㎡", None)[0];
+    let range = area
+        .parsed
+        .best
+        .as_ref()
+        .and_then(|best| best.range.as_ref())
+        .expect("range");
+    assert_eq!(range.from.value, Some(100.0));
+    assert_eq!(range.to.value, Some(120.0));
+    assert_eq!(range.from.unit.as_deref(), Some("m2"));
+    assert_eq!(range.to.unit.as_deref(), Some("m2"));
+    assert_eq!(range.from.dimension, Some(Dimension::Area));
+
+    let clock = &parse_all("3pm-4pm", None)[0];
+    let range = clock
+        .parsed
+        .best
+        .as_ref()
+        .and_then(|best| best.range.as_ref())
+        .expect("range");
+    assert_eq!(range.from.value, Some(54000.0));
+    assert_eq!(range.to.value, Some(57600.0));
+    assert_eq!(range.from.unit.as_deref(), Some("s"));
+
+    // A range inside a longer clause, alongside the other values in it: the
+    // range is one match and does not swallow the height.
+    let mixed = parse_all("area 100-120㎡ and height 3.5m", None);
+    assert_eq!(texts(&mixed), vec!["100-120㎡", "3.5m"], "{mixed:#?}");
+    assert_eq!((mixed[0].start, mixed[0].end), (5, 15));
+    assert_eq!((mixed[1].start, mixed[1].end), (27, 31));
+    assert_quantity(&mixed[1], 3.5, "m", Dimension::Length);
+
+    // Labelled clauses: the label is what stopped the whole-clause read, and
+    // stripping it must not cost the range its own clause boundaries.
+    let labelled = parse_all("工期2〜3日、面積100-120㎡", ja);
+    assert_eq!(
+        texts(&labelled),
+        vec!["2〜3日", "100-120㎡"],
+        "{labelled:#?}"
+    );
+    assert_eq!((labelled[0].start, labelled[0].end), (6, 14));
+    assert_eq!((labelled[1].start, labelled[1].end), (23, 33));
+
+    for (input, matches) in [
+        ("area 100-120㎡ and height 3.5m", &mixed),
+        ("工期2〜3日、面積100-120㎡", &labelled),
+    ] {
+        assert!(matches.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        for found in matches.iter() {
+            assert_eq!(input.get(found.start..found.end), Some(found.text.as_str()));
+        }
+    }
+
+    // A range only wins over readings that stood on their own when its
+    // endpoints carry a unit. Bare numbers either side of a separator are
+    // exactly the guess this must not make: `1 to` is one tonne, and stays it.
+    assert_eq!(texts(&parse_all("add 1 to 2", None)), vec!["1 to", "2"]);
+    assert_eq!(texts(&parse_all("1 in 2", None)), vec!["1 in", "2"]);
+    // With nothing else competing for the span, a bare-number range is still
+    // more than the nothing this used to report.
+    assert_eq!(texts(&parse_all("10-20", None)), vec!["10-20"]);
 }
 
 fn texts(matches: &[unravel_nl::ParsedMatch]) -> Vec<&str> {

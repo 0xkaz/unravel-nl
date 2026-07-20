@@ -346,6 +346,55 @@ pub(crate) fn ambiguous_separator_number(text: &str, separator: char) -> Option<
     })
 }
 
+/// Locates the one grouping-ambiguous number inside a longer reading.
+///
+/// [`parse_ambiguous_number`] answers the question for text that is *nothing
+/// but* a number. A quantity carries the same undecidable number in its numeric
+/// part — `1.234 kg` is `1.234 kg` exactly as much as it is `1234 kg` — so the
+/// numeric token is located here and asked the same question, and the same
+/// `Auto`-only rule applies: a declared [`NumberFormat`] settles it.
+///
+/// Exactly one candidate is required. Two ambiguous numbers in one input means
+/// a range or a compound, and those are reported per endpoint rather than
+/// blended into a single finding that names neither.
+pub(crate) fn ambiguous_number_token<'a>(
+    text: &'a str,
+    ctx: &ParseCtx,
+) -> Option<(usize, &'a str, AmbiguousParse)> {
+    let mut found: Option<(usize, &str, AmbiguousParse)> = None;
+    for (start, token) in numeric_tokens(text) {
+        let Some(ambiguous) = parse_ambiguous_number(token, ctx) else {
+            continue;
+        };
+        if found.is_some() {
+            return None;
+        }
+        found = Some((start, token, ambiguous));
+    }
+    found
+}
+
+/// Splits out the maximal runs of digits and separators, with their offsets.
+fn numeric_tokens(text: &str) -> Vec<(usize, &str)> {
+    let mut tokens = Vec::new();
+    let mut start = None;
+    for (idx, ch) in text.char_indices() {
+        let numeric = ch.is_ascii_digit() || matches!(ch, '.' | ',');
+        match (numeric, start) {
+            (true, None) => start = Some(idx),
+            (false, Some(begin)) => {
+                tokens.push((begin, &text[begin..idx]));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(begin) = start {
+        tokens.push((begin, &text[begin..]));
+    }
+    tokens
+}
+
 pub(crate) fn parse_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     let (left, right) = split_range_text(text)?;
     let right_suffix = unit_suffix(right, ctx);
@@ -384,6 +433,11 @@ pub(crate) fn parse_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
 /// promise is that nothing is dropped *silently* — not that every combination
 /// is enumerated. The finding names the endpoint that is in question and
 /// carries its span, so a caller can ask about exactly that fragment.
+///
+/// A grouping-ambiguous number is reported the same way and for the same
+/// reason: `1.234-2.345 kg` settled two undecidable numbers at a factor of a
+/// thousand each, and said nothing. Each endpoint that carries one gets its own
+/// finding, spanning the number rather than the whole endpoint.
 pub(crate) fn range_endpoint_ambiguities(text: &str, ctx: &ParseCtx) -> Vec<Ambiguity> {
     let Some((left, right)) = split_range_text(text) else {
         return Vec::new();
@@ -392,9 +446,15 @@ pub(crate) fn range_endpoint_ambiguities(text: &str, ctx: &ParseCtx) -> Vec<Ambi
         .into_iter()
         .map(str::trim)
         .filter_map(|endpoint| {
-            let ambiguous = parse_ambiguous_numeric_slash_date(endpoint, ctx)?;
+            if let Some(ambiguous) = parse_ambiguous_numeric_slash_date(endpoint, ctx) {
+                let mut ambiguity = ambiguous.ambiguity;
+                ambiguity.span = span_in(text, endpoint);
+                return Some(ambiguity);
+            }
+            let (offset, token, ambiguous) = ambiguous_number_token(endpoint, ctx)?;
+            let start = span_in(text, endpoint).start + offset;
             let mut ambiguity = ambiguous.ambiguity;
-            ambiguity.span = span_in(text, endpoint);
+            ambiguity.span = span_slice(text, start, start + token.len());
             Some(ambiguity)
         })
         .collect()

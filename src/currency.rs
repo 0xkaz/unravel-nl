@@ -78,6 +78,20 @@ pub(crate) fn parse_conversion_request(text: &str, ctx: &ParseCtx) -> Option<Rea
 
 pub(crate) fn parse_feet_inches(text: &str) -> Option<Reading> {
     let lowered = text.trim().to_ascii_lowercase();
+    let (reading, has_inches) = feet_inches_reading(&lowered)?;
+    // `5 ft2` is the registry's square foot, not 5 ft 2 in — see
+    // `spaced_registry_unit`, and `closed_registry_unit` for the `5ft2` written
+    // closed up. Only the two-part form is guarded: `5 ft` carries no second
+    // number and so no competing reading.
+    if has_inches && (spaced_registry_unit(&lowered) || closed_registry_unit(&lowered)) {
+        return None;
+    }
+    Some(reading)
+}
+
+/// Feet and inches, over text that is already trimmed and lowercased, paired
+/// with whether an inches part was actually written.
+pub(crate) fn feet_inches_reading(lowered: &str) -> Option<(Reading, bool)> {
     let ft_pos = lowered
         .find("ft")
         .or_else(|| lowered.find("feet"))
@@ -88,6 +102,7 @@ pub(crate) fn parse_feet_inches(text: &str) -> Option<Reading> {
         .trim_start_matches("ft")
         .trim_start_matches('\'')
         .trim();
+    let has_inches = !rest.is_empty();
     let inches = if rest.is_empty() {
         0.0
     } else {
@@ -100,13 +115,16 @@ pub(crate) fn parse_feet_inches(text: &str) -> Option<Reading> {
         parse_number(cleaned)?
     };
 
-    Some(Reading::quantity(
-        feet * FOOT_M + inches * INCH_M,
-        "m",
-        Dimension::Length,
-        Provenance::InternationalExact,
-        false,
-        0.97,
+    Some((
+        Reading::quantity(
+            feet * FOOT_M + inches * INCH_M,
+            "m",
+            Dimension::Length,
+            Provenance::InternationalExact,
+            false,
+            0.97,
+        ),
+        has_inches,
     ))
 }
 

@@ -165,10 +165,19 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
 /// `approximate: Some(true)`, yet it humanizes to `1.606061 m` under both no
 /// locale and [`Locale::En`]; `1.5 cups` humanizes to `0.354882 L` and
 /// `about 20kg` to `20 kg` even under [`Locale::Ja`]. Callers that need to know
-/// must read [`Reading::approximate`] (or [`Findings::approximations`]) rather
-/// than inspect this string. The same applies to [`ResourceView::summary`],
-/// which is this function called with no locale and so never carries the
-/// marker at all.
+/// must read [`Reading::approximate`] rather than inspect this string. The same
+/// applies to [`ResourceView::summary`], which is this function called with no
+/// locale and so never carries the marker at all.
+///
+/// [`Reading::approximate`] and [`Findings::approximations`] are **not**
+/// interchangeable, and [`Reading::approximate`] is the authoritative one. The
+/// findings list says why the parser had to approximate, and when the reason is
+/// carried by a different finding it is the only one populated: `1.5 cups`
+/// yields `approximate: Some(true)` with an empty
+/// [`Findings::approximations`], because the reason — the cup is
+/// locale-dependent — is reported as an [`IssueCode::AmbiguousUnit`] entry in
+/// [`Findings::ambiguities`] instead. A reading is approximate whenever
+/// `Reading::approximate` says so, whatever list the explanation landed in.
 ///
 /// A reading that carries no usable value still renders as a word rather than
 /// an empty string, so the output is always displayable: `unknown date`,
@@ -233,14 +242,17 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
         // The endpoints are rendered with the caller's context, not with `None`:
         // a range is still the same reading it would be on its own, so dropping
         // the context here would have silently turned off locale-sensitive
-        // rendering exactly when the reading happens to be a range.
+        // rendering exactly when the reading happens to be a range. The context
+        // is decided once for the pair, so both endpoints land in one unit
+        // system — see `range_endpoint_ctx`.
         (_, Kind::Range, _, _) => value.range.as_ref().map_or_else(
             || "unresolved range".to_owned(),
             |range| {
+                let endpoint_ctx = range_endpoint_ctx(ctx.as_ref(), range);
                 format!(
                     "{} to {}",
-                    humanize(&range.from, ctx.clone()),
-                    humanize(&range.to, ctx.clone())
+                    humanize(&range.from, endpoint_ctx.clone()),
+                    humanize(&range.to, endpoint_ctx)
                 )
             },
         ),
@@ -387,6 +399,49 @@ pub(crate) fn push_resource_field(fields: &mut Vec<ResourceField>, name: &str, v
         name: name.to_owned(),
         value: value.to_owned(),
     });
+}
+
+/// Picks one context for both endpoints of a range, so one range is written in
+/// one unit system.
+///
+/// The Japanese renderings are conditional: [`humanize_japanese_length`] writes
+/// 尺/寸 only when the value lands close enough to a whole 寸, and
+/// [`humanize_japanese_area`] writes 帖/坪 only near a whole one; both otherwise
+/// fall back to metric. Applying that test independently to each endpoint let a
+/// single range come out in two systems at once — `,1〜4m` rendered as
+/// `0.1 m to 13尺2寸 (approx.)` — which reads as a conversion error rather than
+/// as one interval.
+///
+/// The rule: the traditional rendering is used only when *both* endpoints
+/// qualify for it; if either falls back, both are written metrically. The
+/// locale is not dropped otherwise — it is dropped only for the endpoints of a
+/// range that the traditional system cannot express as a pair, which is the
+/// only case where it could have produced the mixed reading.
+fn range_endpoint_ctx(ctx: Option<&HumanizeCtx>, range: &RangeReading) -> Option<HumanizeCtx> {
+    let ctx = ctx?;
+    let from = japanese_traditional_applies(ctx, &range.from);
+    let to = japanese_traditional_applies(ctx, &range.to);
+    if matches!((from, to), (Some(left), Some(right)) if left != right) {
+        return Some(HumanizeCtx { locale: None });
+    }
+    Some(ctx.clone())
+}
+
+/// Whether this endpoint would be written in the traditional Japanese system.
+///
+/// `None` when the question does not arise — any other locale, kind, or unit is
+/// rendered the same way for every value, so two such endpoints can never
+/// disagree.
+fn japanese_traditional_applies(ctx: &HumanizeCtx, reading: &Reading) -> Option<bool> {
+    if ctx.locale != Some(Locale::Ja) || reading.kind != Kind::Quantity {
+        return None;
+    }
+    let value = reading.value?;
+    match reading.unit.as_deref()? {
+        "m" => Some(humanize_japanese_length(value).ends_with("(approx.)")),
+        "m2" => Some(humanize_japanese_area(value).ends_with("(approx.)")),
+        _ => None,
+    }
 }
 
 pub(crate) fn humanize_japanese_length(meters: f64) -> String {
@@ -694,6 +749,50 @@ mod tests {
         );
         // Without a locale the endpoints still render locale-independently.
         assert_eq!(humanize(&range, None), "3.3 m2 to 6.6 m2");
+    }
+
+    /// One range is written in one unit system.
+    ///
+    /// Honouring the locale per endpoint was right, but the Japanese renderings
+    /// are conditional — `humanize_japanese_length` falls back to metres when
+    /// the value is not close to a whole 寸 — so deciding endpoint by endpoint
+    /// split a single interval across two systems: `,1〜4m` came out as
+    /// `0.1 m to 13尺2寸 (approx.)`. Both endpoints now qualify or neither does.
+    #[test]
+    fn renders_both_range_endpoints_in_one_unit_system() {
+        let ja = || {
+            Some(ParseCtx {
+                locale: Some(Locale::Ja),
+                ..ParseCtx::default()
+            })
+        };
+        let ctx = Some(HumanizeCtx {
+            locale: Some(Locale::Ja),
+        });
+
+        // 0.1 m is under one 尺, so it has no traditional reading; 4 m has one.
+        let mixed = parse(",1〜4m", ja()).best.expect("range");
+        assert_eq!(humanize(&mixed, ctx.clone()), "0.1 m to 4 m");
+
+        // The other way round: the traditional endpoint comes first.
+        let mixed_head = parse("8m〜1mi", ja()).best.expect("range");
+        assert_eq!(humanize(&mixed_head, ctx.clone()), "8 m to 1609.344 m");
+
+        // Both endpoints qualify, so the locale is still honoured in full.
+        let traditional = parse("1m〜4m", ja()).best.expect("range");
+        assert_eq!(
+            humanize(&traditional, ctx.clone()),
+            "3尺3寸 (approx.) to 13尺2寸 (approx.)"
+        );
+
+        // The same rule for areas, which have the same conditional fallback.
+        let areas = parse("3.3㎡〜5㎡", ja()).best.expect("range");
+        assert_eq!(humanize(&areas, ctx.clone()), "3.3 m2 to 5 m2");
+
+        // Locale-independent renderings are untouched: neither endpoint of a
+        // currency or a plain range has a conditional system to disagree about.
+        let money = parse("$5〜$10", ja()).best.expect("range");
+        assert_eq!(humanize(&money, ctx), "USD 5 to USD 10");
     }
 
     fn field(view: &ResourceView, name: &str) -> Option<String> {

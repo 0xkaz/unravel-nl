@@ -1,6 +1,28 @@
 use crate::*;
 
+/// True when the whole text is a number and a token the registry resolves to
+/// something that is not a duration.
+///
+/// `5 W` is five watts: `W` is the registry's watt, while the compact grammar
+/// below reads a bare `w` as a week. A declared registry unit outranks that
+/// informal single-letter idiom — the same rule [`spaced_registry_unit`] and
+/// [`closed_registry_unit`] apply — and without it the reading depended on the
+/// entry point, because the fast quantity dispatch runs this grammar before the
+/// registry lookup while `parse` runs the registry first.
+///
+/// Tokens the registry also reads as time are deliberately left alone: `5 h`,
+/// `5 d`, `5 s` and `5 min` mean the same thing either way, so there is nothing
+/// to decide and no reason to move them onto a different grammar.
+fn registry_unit_outranks_duration(text: &str) -> bool {
+    split_number_unit(text.trim()).is_some_and(|(_, unit_text)| {
+        unit_by_alias(unit_text).is_some_and(|unit| unit.dimension != Dimension::Time)
+    })
+}
+
 pub(crate) fn parse_duration(text: &str) -> Option<Reading> {
+    if registry_unit_outranks_duration(text) {
+        return None;
+    }
     let stripped = text.trim().to_ascii_lowercase();
     if stripped == "an hour and a half" || stripped == "one hour and a half" {
         return Some(Reading::quantity(

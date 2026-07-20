@@ -230,6 +230,27 @@ pub(crate) fn parse_registered_quantity(text: &str, ctx: &ParseCtx) -> Option<Re
     Some(reading)
 }
 
+/// Records the approximation a unit definition declares about itself.
+///
+/// A [`CustomUnit`] built with `.approximate(true)`, and a registry unit whose
+/// definition carries `approximate: true` (`month`, `year`), both hand back a
+/// reading with `approximate: Some(true)`. Without this the reading would reach
+/// the caller with empty [`Findings`], which the crate's no-silent-loss
+/// guarantee forbids: an approximate value must be reported, not merely
+/// flagged. Readings that are exact, and readings whose approximation some
+/// other grammar already reported (a fuzzy qualifier, a shakkanhō conversion),
+/// do not reach here.
+pub(crate) fn note_unit_approximation(parsed: &mut Parsed, text: &str, reading: &Reading) {
+    if reading.approximate != Some(true) {
+        return;
+    }
+    parsed.findings.approximations.push(approximation_with_span(
+        text,
+        "Unit definition declares its conversion approximate.",
+        span(text),
+    ));
+}
+
 pub(crate) fn parse_compound_registered_quantity_ctx(
     text: &str,
     ctx: &ParseCtx,
@@ -327,23 +348,109 @@ pub(crate) fn is_number_prefix_char(ch: char) -> bool {
     ch.is_ascii_digit() || is_cjk_number_char(ch)
 }
 
+/// True when the text is a number, a space, and a unit token the registry knows.
+///
+/// This is what separates `5 m3` from `1m80`. The compound-height idiom is
+/// written closed up — `1m80`, `5ft 11`, `180cm` — so the space, when there is
+/// one, sits *after* the unit and never before it. A space before a token the
+/// registry already resolves is therefore not that idiom at all: `m3` is the
+/// volume alias and `ft2` the area one, and reading them as metres-and-
+/// centimetres or feet-and-inches is not a competing reading anyone wrote, it
+/// is the split point guessing.
+///
+/// Deliberately narrow: two whitespace-separated tokens only, so the compound
+/// forms that *do* put a space between their parts (`5 ft 11`, `3 yd 2 ft`,
+/// `2 lb 3 oz`) are untouched.
+pub(crate) fn spaced_registry_unit(text: &str) -> bool {
+    let mut parts = text.split_whitespace();
+    let (Some(number_text), Some(unit_text), None) = (parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    parse_number(number_text).is_some() && unit_by_alias(unit_text).is_some()
+}
+
+/// True when the text is a number written closed up against a unit token the
+/// registry knows: `5m3`, `5ft2`.
+///
+/// `1m80` has exactly the same shape, and the lookup is the only thing that
+/// tells the two apart: `m3` is the registry's cubic metre and `ft2` its square
+/// foot, while `m80` is not a unit at all. The registry entry leads, because a
+/// declared unit outranks a guess at where a compound splits — the same rule
+/// [`spaced_registry_unit`] applies to `5 m3`.
+///
+/// Unlike the spaced form, though, the compound reading here is one someone
+/// could have meant, so it is not dropped: the entry points report it as an
+/// alternative with an [`IssueCode::AmbiguousUnit`] finding — see
+/// [`closed_compound_alternative`] and `report_closed_compound_alternative`.
+pub(crate) fn closed_registry_unit(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.contains(char::is_whitespace) {
+        return false;
+    }
+    split_number_unit(trimmed).is_some_and(|(_, unit_text)| unit_by_alias(unit_text).is_some())
+}
+
+/// The reading a closed-up `<number><alias>` text also has as a compound.
+///
+/// This is the loser of the rule in [`closed_registry_unit`], kept so the entry
+/// points can report it instead of dropping it. `None` when the text is not
+/// that shape, or has no competing compound reading at all.
+pub(crate) fn closed_compound_alternative(text: &str) -> Option<Reading> {
+    if !closed_registry_unit(text) {
+        return None;
+    }
+    let lowered = text.trim().to_ascii_lowercase();
+    metric_compound_reading(&lowered).or_else(|| {
+        feet_inches_reading(&lowered)
+            .and_then(|(reading, has_inches)| has_inches.then_some(reading))
+    })
+}
+
+/// The shape of the metres-and-centimetres idiom: a `m` with something on each
+/// side of it, and no whitespace after it.
+fn metric_compound_shape(stripped: &str) -> bool {
+    stripped
+        .split_once('m')
+        .is_some_and(|(meters, centimeters)| {
+            !meters.is_empty()
+                && !centimeters.is_empty()
+                && !centimeters.contains(char::is_whitespace)
+        })
+}
+
+/// The metres-and-centimetres idiom itself — `1m80` as 1.8 m — over text that
+/// is already trimmed and lowercased.
+pub(crate) fn metric_compound_reading(stripped: &str) -> Option<Reading> {
+    if !metric_compound_shape(stripped) {
+        return None;
+    }
+    let (meters, centimeters) = stripped.split_once('m')?;
+    let meters = parse_number(meters.trim())?;
+    let centimeters = parse_number(centimeters.trim())?;
+    Some(Reading::quantity(
+        meters + centimeters * CM_M,
+        "m",
+        Dimension::Length,
+        Provenance::SiMultiple,
+        false,
+        0.97,
+    ))
+}
+
 pub(crate) fn parse_metric_length(text: &str) -> Option<Reading> {
     let stripped = text.trim().to_ascii_lowercase();
-    if let Some((meters, centimeters)) = stripped.split_once('m')
-        && !meters.is_empty()
-        && !centimeters.is_empty()
-        && !centimeters.contains(char::is_whitespace)
-    {
-        let meters = parse_number(meters.trim())?;
-        let centimeters = parse_number(centimeters.trim())?;
-        return Some(Reading::quantity(
-            meters + centimeters * CM_M,
-            "m",
-            Dimension::Length,
-            Provenance::SiMultiple,
-            false,
-            0.97,
-        ));
+    // `5 m3` is the registry's cubic metre, not 5 m + 3 cm. Without this the
+    // reading depended on which entry point the caller used, because the
+    // fast path runs this parser before the registry lookup.
+    if metric_compound_shape(&stripped) && !spaced_registry_unit(&stripped) {
+        // The idiom claims text of this shape outright: `5mm` splits as `5` and
+        // `m`, whose second half is no number, and falling through to the suffix
+        // table below would read it as a compound that was never written.
+        let reading = metric_compound_reading(&stripped)?;
+        // `5m3` is the registry's cubic metre; the metres-and-centimetres
+        // reading survives as the alternative the entry points report.
+        return (!closed_registry_unit(&stripped)).then_some(reading);
     }
 
     for (suffix, factor) in [

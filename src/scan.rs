@@ -9,7 +9,9 @@ pub(crate) fn push_clause_matches(
 ) {
     match broad_clause_dispatch(&text[start..end]) {
         BroadClauseDispatch::None => {
-            push_numeric_window_matches(matches, text, start, end, ctx);
+            if !push_clause_range_match(matches, text, start, end, ctx, false) {
+                push_numeric_window_matches(matches, text, start, end, ctx);
+            }
             return;
         }
         BroadClauseDispatch::Prefix => {
@@ -21,7 +23,9 @@ pub(crate) fn push_clause_matches(
                 Some(false) => return,
                 None => {}
             }
-            push_numeric_window_matches(matches, text, start, end, ctx);
+            if !push_clause_range_match(matches, text, start, end, ctx, true) {
+                push_numeric_window_matches(matches, text, start, end, ctx);
+            }
             return;
         }
         BroadClauseDispatch::Short => {}
@@ -39,10 +43,12 @@ pub(crate) fn push_clause_matches(
 
     let clause_bounds = trimmed_bounds(text, start, end);
     if numeric_count == 1
-        && let Some(candidate) = first_numeric
-        && Some((candidate.start, candidate.end)) == clause_bounds
+        && first_numeric.map(|candidate| (candidate.start, candidate.end)) == clause_bounds
     {
-        let _ = push_numeric_candidate_match(matches, text, candidate, ctx);
+        // Via the window scan, so that a window abandoned for its numeric core
+        // still gets its tail re-scanned: `"3 apples4"` is one candidate that
+        // covers the whole clause, and the `4` lives past the core.
+        push_numeric_window_matches(matches, text, start, end, ctx);
         return;
     }
 
@@ -54,13 +60,138 @@ pub(crate) fn push_clause_matches(
         _ => {}
     }
 
-    if let Some(candidate) = first_numeric {
-        if numeric_count == 1 {
-            let _ = push_numeric_candidate_match(matches, text, candidate, ctx);
-        } else {
-            push_numeric_window_matches(matches, text, start, end, ctx);
-        }
+    // Both arms used to differ, the single-candidate one pushing `first_numeric`
+    // directly. They agree on the candidate — the same scan produced it — but
+    // only the window scan re-scans the tail of a window that was abandoned for
+    // its numeric core, which is where `"1 and2 kg"` hid its `2 kg`.
+    if first_numeric.is_some() && !push_clause_range_match(matches, text, start, end, ctx, true) {
+        push_numeric_window_matches(matches, text, start, end, ctx);
     }
+}
+
+/// Re-reads a clause as one range before the token scan splits it into digits.
+///
+/// The token scan reads a clause one numeric window at a time, and a range
+/// separator the window grammar does not cross ends the window: `"工期2〜3日"`
+/// offers `2` and `3` as two unrelated candidates, and `"10 ± 0.5 mm"` offers
+/// `10` and `0.5 mm`. Each of those candidates parses, so nothing looks lost —
+/// but [`parse`] reads the same clause as a single interval, and the two halves
+/// it decayed into say something the text never did.
+///
+/// The span retried is the clause with any leading label removed (from the
+/// first numeric candidate to the end of the clause), because the label is what
+/// stops the whole-clause broad read: `parse("面積100-120㎡")` finds nothing,
+/// `parse("100-120㎡")` finds the range. `clause_broad_tried` says the caller
+/// already put the whole clause through the broad grammar, so an unlabelled
+/// clause is not parsed a second time.
+///
+/// Only a range whose endpoints carry a unit is taken, and only a range: this
+/// reading *overrides* narrower readings that parsed on their own, so it has to
+/// be more than a guess about which digits belong together. `"add 1 to 2"` does
+/// read as an interval from 1 to 2, but bare numbers either side of a `to` are
+/// exactly the guess this must not make, and its `1 to` (one tonne) and `2`
+/// stay as they were. Contrast [`push_numeric_candidate_match_resume`], where
+/// the window had no reading at all and any range is strictly more than the
+/// nothing it would otherwise report.
+pub(crate) fn push_clause_range_match(
+    matches: &mut Vec<ParsedMatch>,
+    text: &str,
+    start: usize,
+    end: usize,
+    ctx: &ParseCtx,
+    clause_broad_tried: bool,
+) -> bool {
+    let Some((clause_start, clause_end)) = trimmed_bounds(text, start, end) else {
+        return false;
+    };
+    let mut first_numeric = None;
+    for_numeric_candidate_spans(text, start, end, |candidate| {
+        first_numeric = Some(candidate.start);
+        false
+    });
+    let Some(hull_start) = first_numeric.map(|candidate| candidate.max(clause_start)) else {
+        return false;
+    };
+    if hull_start >= clause_end || (clause_broad_tried && hull_start == clause_start) {
+        return false;
+    }
+    let Some(hull) = text.get(hull_start..clause_end) else {
+        return false;
+    };
+    if !span_may_be_range(hull) {
+        return false;
+    }
+    push_range_reading_match(matches, text, hull_start, clause_end, ctx, true)
+}
+
+/// Whether a span holds a two-endpoint range separator, before parsing it.
+///
+/// A pre-filter for the two retries that reach for the broad grammar, so that
+/// text with no separator in it never pays for a second parse. It is
+/// deliberately narrower than the range grammar — one-sided forms such as
+/// `"under 5kg"` are not listed, since neither retry exists to rescue those —
+/// so a span it rejects is only left to the readings the scan already had.
+pub(crate) fn span_may_be_range(span: &str) -> bool {
+    span.contains(['±', '〜', '～', '-'])
+        || span.contains("..")
+        || find_ascii_case(span, " to ").is_some()
+        || span.contains("+/-")
+}
+
+/// Pushes `start..end` read by the broad grammar, but only if it is a range.
+///
+/// Returns whether it was pushed. `require_dimensioned_endpoints` demands that
+/// both ends carry a unit, a dimension, or a date, which is what separates an
+/// interval the text states from two adjacent numbers.
+pub(crate) fn push_range_reading_match(
+    matches: &mut Vec<ParsedMatch>,
+    source: &str,
+    start: usize,
+    end: usize,
+    ctx: &ParseCtx,
+    require_dimensioned_endpoints: bool,
+) -> bool {
+    if start >= end
+        || matches
+            .last()
+            .is_some_and(|item| item.start == start && item.end == end)
+    {
+        return false;
+    }
+    let Some(text) = source.get(start..end).map(str::trim) else {
+        return false;
+    };
+    if text.is_empty() {
+        return false;
+    }
+    let parsed = parse(text, Some(ctx.clone()));
+    if !parsed_reads_as_range(&parsed, require_dimensioned_endpoints) {
+        return false;
+    }
+    let leading = source[start..end].len() - source[start..end].trim_start().len();
+    let trailing = source[start..end].len() - source[start..end].trim_end().len();
+    matches.push(ParsedMatch {
+        start: start + leading,
+        end: end - trailing,
+        text: text.to_owned(),
+        parsed,
+    });
+    true
+}
+
+pub(crate) fn parsed_reads_as_range(parsed: &Parsed, require_dimensioned_endpoints: bool) -> bool {
+    let Some(range) = parsed
+        .best
+        .as_ref()
+        .filter(|best| best.kind == Kind::Range)
+        .and_then(|best| best.range.as_ref())
+    else {
+        return false;
+    };
+    !require_dimensioned_endpoints
+        || [&range.from, &range.to].into_iter().all(|endpoint| {
+            endpoint.unit.is_some() || endpoint.dimension.is_some() || endpoint.date.is_some()
+        })
 }
 
 pub(crate) fn push_broad_clause_match(
@@ -90,9 +221,14 @@ pub(crate) fn push_numeric_window_matches(
     end: usize,
     ctx: &ParseCtx,
 ) {
-    for_numeric_candidate_spans(text, start, end, |candidate| {
-        let _ = push_numeric_candidate_match(matches, text, candidate, ctx);
-        true
+    for_numeric_candidate_steps(text, start, end, |candidate| {
+        match push_numeric_candidate_match_resume(matches, text, candidate, ctx) {
+            // The window was abandoned for its numeric core, so everything the
+            // speculation absorbed past that core is unread text: scanning
+            // resumes there instead of after the window.
+            Some(core_end) => CandidateStep::ResumeAt(core_end),
+            None => CandidateStep::Continue,
+        }
     });
 }
 
@@ -105,26 +241,52 @@ pub(crate) fn push_numeric_window_matches(
 /// failed window — so the `1` that reads perfectly well on its own was dropped
 /// with nothing on any findings channel to say so.
 ///
-/// The retry is the number the window started from, without the text it
+/// A window the token grammar cannot read is offered to the broad grammar
+/// first, and taken if that reads it as a range. The token grammar is quantity
+/// then number, so a window is all one value to it and an interval inside one
+/// window has no reading: `"100-120㎡"`, `"5-10kg"` and `"3pm-4pm"` are single
+/// windows that [`parse`] reads completely and that used to leave `parse_all`
+/// with nothing at all, on no findings channel. Nothing narrower was competing
+/// — the window had failed outright — so any range it reads is taken, including
+/// one between bare numbers such as `"10-20"`.
+///
+/// The second retry is the number the window started from, without the text it
 /// speculatively absorbed ([`CandidateSpan::numeric_core_end`]). It only exists
-/// when the window actually crossed such a gap, so windows that never
-/// speculated (`"3pm-4pm"`, `"100-120㎡"`) are still all-or-nothing, and a
-/// window that parses (`"1 in"` as one inch, `"5 kg"`) never reaches the retry
-/// at all.
-pub(crate) fn push_numeric_candidate_match(
+/// when the window actually crossed such a gap, so a window that never
+/// speculated and is no range either is still all-or-nothing, and a window that
+/// parses (`"1 in"` as one inch, `"5 kg"`) never reaches either retry at all.
+///
+/// The return value is where scanning has to resume. `Some(core_end)` means the
+/// window was abandoned for its core, so the text the speculation absorbed past
+/// that core was never read by any candidate: resuming after the window would
+/// drop it, which is how `"1 and2 kg"` recovered its `1` and still lost the
+/// whole `2 kg`, with nothing on any findings channel to say so. `None` means
+/// the window was taken as it stands — it parsed, or it had no narrower reading
+/// to fall back to — and scanning continues after it.
+pub(crate) fn push_numeric_candidate_match_resume(
     matches: &mut Vec<ParsedMatch>,
     text: &str,
     candidate: CandidateSpan,
     ctx: &ParseCtx,
-) -> Option<bool> {
-    if let Some(pushed) = push_parsed_match(matches, text, candidate, ctx) {
-        return Some(pushed);
+) -> Option<usize> {
+    if push_parsed_match(matches, text, candidate, ctx).is_some() {
+        return None;
+    }
+    if text
+        .get(candidate.start..candidate.end)
+        .is_some_and(span_may_be_range)
+        && push_range_reading_match(matches, text, candidate.start, candidate.end, ctx, false)
+    {
+        return None;
     }
     let core_end = candidate.numeric_core_end?;
     if core_end >= candidate.end {
         return None;
     }
-    push_parsed_match(
+    // The narrower span is what the scanner settles for, whether or not it
+    // parses: either way the window itself was rejected, so the text past the
+    // core still has to be offered its own candidates.
+    let _ = push_parsed_match(
         matches,
         text,
         CandidateSpan {
@@ -133,7 +295,8 @@ pub(crate) fn push_numeric_candidate_match(
             ..candidate
         },
         ctx,
-    )
+    );
+    Some(core_end)
 }
 
 pub(crate) fn sorted_non_overlapping_matches(mut matches: Vec<ParsedMatch>) -> Vec<ParsedMatch> {
@@ -276,7 +439,7 @@ pub(crate) struct CandidateSpan {
     pub(crate) end: usize,
     /// End of the number the window started from, when the window then crossed
     /// a space to speculatively absorb a possible unit; `None` when it never
-    /// speculated. See [`push_numeric_candidate_match`], which retries this
+    /// speculated. See [`push_numeric_candidate_match_resume`], which retries this
     /// narrower span when the whole window fails to parse.
     pub(crate) numeric_core_end: Option<usize>,
     pub(crate) parser: CandidateParser,
@@ -376,6 +539,32 @@ pub(crate) fn for_numeric_candidate_spans<F>(text: &str, start: usize, end: usiz
 where
     F: FnMut(CandidateSpan) -> bool,
 {
+    for_numeric_candidate_steps(text, start, end, |candidate| {
+        if emit(candidate) {
+            CandidateStep::Continue
+        } else {
+            CandidateStep::Stop
+        }
+    });
+}
+
+/// What the scanner does after a candidate window was offered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CandidateStep {
+    /// Resume after the window, which the consumer took as it stands.
+    Continue,
+    /// Stop scanning; the consumer has what it needs.
+    Stop,
+    /// Resume at this offset, because the consumer only used the window up to
+    /// there and the rest of it is still unread text. Always clamped so the
+    /// cursor advances, so a consumer cannot spin the scan.
+    ResumeAt(usize),
+}
+
+pub(crate) fn for_numeric_candidate_steps<F>(text: &str, start: usize, end: usize, mut emit: F)
+where
+    F: FnMut(CandidateSpan) -> CandidateStep,
+{
     let mut cursor = start;
     while cursor < end {
         let Some((idx, ch)) = text[cursor..end].char_indices().next() else {
@@ -384,18 +573,20 @@ where
         let abs = cursor + idx;
         if is_candidate_start_at(text, abs, ch) {
             let (candidate_end, numeric_core_end) = candidate_window(text, abs, end);
+            let mut next = candidate_end;
             if candidate_end > abs {
-                let should_continue = emit(CandidateSpan {
+                match emit(CandidateSpan {
                     start: abs,
                     end: candidate_end,
                     numeric_core_end,
                     parser: CandidateParser::TokenWindow,
-                });
-                if !should_continue {
-                    return;
+                }) {
+                    CandidateStep::Continue => {}
+                    CandidateStep::Stop => return,
+                    CandidateStep::ResumeAt(resume) => next = resume,
                 }
             }
-            cursor = candidate_end.max(abs + ch.len_utf8());
+            cursor = next.max(abs + ch.len_utf8());
         } else {
             cursor = abs + ch.len_utf8();
         }

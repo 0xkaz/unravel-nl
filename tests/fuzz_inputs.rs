@@ -121,20 +121,27 @@ fn assert_invariants_hold(input: &str) {
     assert_json_envelope_escapes_the_input(input);
 }
 
-/// The envelope echoes the input verbatim, so every character JSON forbids raw
-/// inside a string has to leave the emitter escaped.
+/// The envelope echoes the input verbatim, so no `Cc` character reaches the
+/// document raw.
 ///
-/// A raw control character, or a backslash that swallows the closing quote,
-/// makes the whole document unparseable on the JS side — not one field. The
-/// alphabet above carries `\`, `"`, `U+0001`, newline and tab for exactly this
-/// invariant; `src/json_out.rs` pins the escaping table itself.
+/// A raw `U+0000`–`U+001F`, or a backslash that swallows the closing quote,
+/// makes the whole document unparseable on the JS side — not one field — and
+/// those are the characters RFC 8259 actually forbids raw inside a string.
+/// The sweep below is deliberately stricter: `char::is_control` is the Unicode
+/// `Cc` category, which also covers `U+007F` and `U+0080`–`U+009F`, and those
+/// are legal unescaped. The emitter escapes them too (see
+/// `escapes_the_two_structural_characters_and_every_cc_character` in
+/// `src/json_out.rs`, which pins the escaping table), so asserting the wider
+/// property here is a true statement about this emitter rather than about JSON.
+/// The alphabet above carries `\`, `"`, `U+0001`, newline and tab for exactly
+/// this invariant.
 #[cfg(feature = "wasm")]
 fn assert_json_envelope_escapes_the_input(input: &str) {
     let json = unravel_nl::parse_json(input);
     for (idx, ch) in json.char_indices() {
         assert!(
             !ch.is_control(),
-            "{input:?}: raw control character {ch:?} at {idx} in {json:?}"
+            "{input:?}: raw Cc character {ch:?} at {idx} in {json:?}"
         );
     }
     let echoed = json

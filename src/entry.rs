@@ -283,6 +283,8 @@ pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<Par
 
 pub(crate) fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     parse_normalized_dispatch(trimmed, ctx, parsed);
+    report_ambiguous_quantity_number(trimmed, ctx, parsed, parse_normalized_dispatch);
+    report_closed_compound_alternative(trimmed, parsed);
     finalize_parsed(trimmed, parsed);
 }
 
@@ -490,6 +492,7 @@ pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &
             );
             return;
         }
+        note_unit_approximation(parsed, trimmed, &reading);
         parsed.best = Some(reading);
         return;
     }
@@ -497,6 +500,7 @@ pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &
     if features.maybe_quantity
         && let Some(reading) = parse_registered_quantity(trimmed, ctx)
     {
+        note_unit_approximation(parsed, trimmed, &reading);
         parsed.best = Some(reading);
         return;
     }
@@ -652,6 +656,8 @@ pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &
 
 pub(crate) fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     parse_quantity_fast_dispatch(trimmed, ctx, parsed);
+    report_ambiguous_quantity_number(trimmed, ctx, parsed, parse_quantity_fast_dispatch);
+    report_closed_compound_alternative(trimmed, parsed);
     finalize_parsed(trimmed, parsed);
 }
 
@@ -719,12 +725,14 @@ pub(crate) fn parse_quantity_fast_dispatch(trimmed: &str, ctx: &ParseCtx, parsed
                 "compound quantity readings are disabled by acceptance policy",
             );
         } else {
+            note_unit_approximation(parsed, trimmed, &reading);
             parsed.best = Some(reading);
         }
         return;
     }
 
     if let Some(reading) = parse_registered_quantity(trimmed, ctx) {
+        note_unit_approximation(parsed, trimmed, &reading);
         parsed.best = Some(reading);
         return;
     }
@@ -849,6 +857,141 @@ pub(crate) fn set_plain_number_result(
         ));
     }
     parsed.best = Some(reading);
+}
+
+/// Reports the grouping ambiguity a unit-bearing reading inherits from its number.
+///
+/// A bare `1.234` is undecidable under [`NumberFormat::Auto`] and says so:
+/// 1.234, with 1234 as an alternative and an [`IssueCode::AmbiguousNumber`]
+/// finding. Attaching a unit does not decide anything — `1.234 kg` is the same
+/// number — but the quantity grammars parse their numeric part with
+/// [`parse_number`], which just picks one reading. That made the factor of a
+/// thousand disappear silently, and made strict callers accept a guess they
+/// exist to refuse.
+///
+/// The competing reading is produced by rewriting the number and re-running the
+/// same dispatch under a *declared* format, rather than by scaling the value:
+/// the number is not always a linear factor of the reading (`1.234 F` is an
+/// offset conversion, `1.234 hours` a unit multiple), and re-parsing gets every
+/// grammar's own arithmetic for free. The declared format also means the
+/// re-parse cannot re-enter this question.
+///
+/// An explicitly declared [`NumberFormat`] settles the question for quantities
+/// exactly as it does for bare numbers, and nothing is reported.
+pub(crate) fn report_ambiguous_quantity_number(
+    trimmed: &str,
+    ctx: &ParseCtx,
+    parsed: &mut Parsed,
+    dispatch: fn(&str, &ParseCtx, &mut Parsed),
+) {
+    let Some(best) = parsed.best.as_ref() else {
+        return;
+    };
+    // Ranges carry one number per endpoint and are reported endpoint by
+    // endpoint (`range_endpoint_ambiguities`); a bare number already reported
+    // itself on the way in.
+    if best.unit.is_none() || best.value.is_none() || best.range.is_some() {
+        return;
+    }
+    if parsed
+        .findings
+        .ambiguities
+        .iter()
+        .any(|issue| issue.code == IssueCode::AmbiguousNumber)
+    {
+        return;
+    }
+    let (kind, unit, dimension, value) = (best.kind, best.unit.clone(), best.dimension, best.value);
+
+    let Some((start, token, ambiguous)) = ambiguous_number_token(trimmed, ctx) else {
+        return;
+    };
+    let Some(competing_value) = ambiguous
+        .alternatives
+        .first()
+        .and_then(|reading| reading.value)
+    else {
+        return;
+    };
+
+    let mut rewritten = String::with_capacity(trimmed.len() + 4);
+    rewritten.push_str(&trimmed[..start]);
+    rewritten.push_str(&competing_value.to_string());
+    rewritten.push_str(&trimmed[start + token.len()..]);
+
+    let mut settled = ctx.clone();
+    settled.number_format = NumberFormat::DotDecimal;
+    let mut competing = parsed_shell(&rewritten, &settled);
+    dispatch(&rewritten, &settled, &mut competing);
+
+    let Some(mut competing_best) = competing.best else {
+        return;
+    };
+    // Only the number was rewritten, so anything else moving means the rewrite
+    // reached a different grammar and is not the competing reading of *this*
+    // input.
+    if competing_best.kind != kind
+        || competing_best.unit != unit
+        || competing_best.dimension != dimension
+        || competing_best.value == value
+    {
+        return;
+    }
+    competing_best.confidence = competing_best
+        .confidence
+        .map(|confidence| confidence * AMBIGUOUS_ALTERNATIVE_FACTOR);
+
+    let mut ambiguity = ambiguous.ambiguity;
+    ambiguity.span = span_slice(trimmed, start, start + token.len());
+    parsed.alternatives.push(competing_best);
+    parsed.findings.ambiguities.push(ambiguity);
+}
+
+/// Ranks the competing reading below the one the grammar chose, in the same
+/// proportion the bare-number path uses (0.56 against 0.64).
+pub(crate) const AMBIGUOUS_ALTERNATIVE_FACTOR: f64 = 0.875;
+
+/// Reports the compound reading the registry displaced in a closed-up
+/// `<number><alias>` input.
+///
+/// `5m3` is the registry's cubic metre and `1m80` is metres and centimetres,
+/// and the two are written identically, so reading `5m3` as 5 m + 3 cm is not a
+/// mistake — it is the other plausible reading. [`closed_registry_unit`] decides
+/// which one leads, because a declared registry alias outranks a guess at where
+/// a compound splits; this reports the loser as an alternative with an
+/// [`IssueCode::AmbiguousUnit`] finding, so the choice is visible rather than
+/// silent, as the no-forced-choice guarantee requires.
+///
+/// The spaced form is not ambiguous this way. The compound idiom is never
+/// written with a space before its unit, so `5 m3` has one reading and
+/// `spaced_registry_unit` drops the other without reporting anything.
+///
+/// Runs from both `parse_normalized_into` and [`parse_quantity_fast_into`], so
+/// every entry point — including the `parse_all` scan, which is built on the
+/// latter — reports the same alternative and the same finding.
+pub(crate) fn report_closed_compound_alternative(trimmed: &str, parsed: &mut Parsed) {
+    let Some(best) = parsed.best.as_ref() else {
+        return;
+    };
+    let Some(mut alternative) = closed_compound_alternative(trimmed) else {
+        return;
+    };
+    // The grammars are guarded, so the compound reading should never also be
+    // the winner; if some other path ever makes it one, there is no competition
+    // left to report.
+    if alternative.value == best.value && alternative.unit == best.unit {
+        return;
+    }
+    alternative.confidence = alternative
+        .confidence
+        .map(|confidence| confidence * AMBIGUOUS_ALTERNATIVE_FACTOR);
+    parsed.alternatives.push(alternative);
+    parsed.findings.ambiguities.push(ambiguity(
+        trimmed,
+        "Written closed up, this is both a registry unit and a compound quantity; the registry unit was read.",
+        Some(2),
+        IssueCode::AmbiguousUnit,
+    ));
 }
 
 pub(crate) const NON_FINITE_REASON: &str =
