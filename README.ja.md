@@ -192,4 +192,14 @@ Node.js が必要です。`make web-test` は事前に `web/` で `npm install` 
 
 ## ライセンス
 
-MIT。[LICENSE](LICENSE) を参照してください。
+以下のいずれかを利用者が選択できるデュアルライセンスです。
+
+- Apache License, Version 2.0（[LICENSE-APACHE](LICENSE-APACHE) または
+  <http://www.apache.org/licenses/LICENSE-2.0>）
+- MIT ライセンス（[LICENSE-MIT](LICENSE-MIT) または
+  <http://opensource.org/licenses/MIT>）
+
+### コントリビューション
+
+本プロジェクトへ意図的に提出されたコントリビューションは、Apache-2.0 の定義に従い、
+別途明示のない限り上記デュアルライセンスの下で提供されるものとします。
