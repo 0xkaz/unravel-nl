@@ -5,7 +5,10 @@
 //! (which needs a `wasm-pack` build) or not at all. `UnknownUnit` is documented
 //! as reserved and is never constructed; a sweep guards that claim.
 
-use unravel_nl::{Dimension, IssueCode, Kind, Locale, ParseCtx, Parsed, parse, parse_all};
+use unravel_nl::{
+    Dimension, Findings, IssueCode, IssueSeverity, Kind, Locale, ParseCtx, Parsed, Skipped, Span,
+    parse, parse_all, ranked_findings,
+};
 
 #[test]
 fn reports_empty_for_blank_input() {
@@ -178,4 +181,82 @@ fn unknown_unit_sweep_corpus() -> Vec<String> {
         corpus.push(extra.to_owned());
     }
     corpus
+}
+
+/// The `(severity, rank, recoverable)` classification of every `IssueCode`.
+///
+/// This is a stable contract, not an implementation detail: all three fields
+/// are surfaced through `ranked_findings` — and from there through the JSON
+/// envelope and the web adapters — so a UI branches on them to decide what to
+/// block on, what to sort to the top, and whether a usable reading survives.
+/// Moving a code to a different severity class, a different rank tier, or
+/// flipping its recoverability changes what callers render, so every one of the
+/// thirteen codes is pinned here rather than only the handful a live parse
+/// happens to produce today.
+#[test]
+fn every_issue_code_keeps_its_severity_rank_and_recoverability() {
+    // code, severity, rank, recoverable
+    let table: [(IssueCode, IssueSeverity, u16, bool); 13] = [
+        (IssueCode::Empty, IssueSeverity::Error, 100, false),
+        (IssueCode::NoValue, IssueSeverity::Error, 100, false),
+        (IssueCode::UnknownUnit, IssueSeverity::Error, 80, true),
+        (
+            IssueCode::TimezoneUnsupported,
+            IssueSeverity::Error,
+            90,
+            true,
+        ),
+        (
+            IssueCode::RecurrenceUnsupported,
+            IssueSeverity::Error,
+            90,
+            true,
+        ),
+        (IssueCode::RejectedByPolicy, IssueSeverity::Error, 90, true),
+        (IssueCode::TypoCorrected, IssueSeverity::Warning, 65, true),
+        (IssueCode::AmbiguousNumber, IssueSeverity::Warning, 55, true),
+        (IssueCode::AmbiguousDate, IssueSeverity::Warning, 55, true),
+        (IssueCode::AmbiguousUnit, IssueSeverity::Warning, 55, true),
+        (
+            IssueCode::AmbiguousCurrency,
+            IssueSeverity::Warning,
+            55,
+            true,
+        ),
+        (IssueCode::UnitAssumed, IssueSeverity::Info, 40, true),
+        (IssueCode::Approximation, IssueSeverity::Warning, 30, true),
+    ];
+
+    // Every variant appears exactly once, so a new code cannot be added without
+    // being classified here.
+    let mut codes: Vec<&str> = table.iter().map(|row| row.0.as_str()).collect();
+    codes.sort_unstable();
+    codes.dedup();
+    assert_eq!(codes.len(), table.len());
+
+    for (code, severity, rank, recoverable) in table {
+        // A finding carrying the code is pushed through the real flattening
+        // path, which is where a UI reads these three fields from.
+        let mut parsed = parse("5 kg", None);
+        parsed.findings = Findings::default();
+        parsed.findings.skipped.push(Skipped {
+            code,
+            ref_text: "x".to_owned(),
+            reason: "pinned".to_owned(),
+            span: Span {
+                start: 0,
+                end: 1,
+                text: "5".to_owned(),
+            },
+        });
+
+        let issues = ranked_findings(&parsed);
+        assert_eq!(issues.len(), 1, "{code:?}");
+        assert_eq!(issues[0].code, code, "{code:?}");
+        assert_eq!(issues[0].severity, severity, "{code:?}");
+        assert_eq!(issues[0].rank, rank, "{code:?}");
+        assert_eq!(issues[0].recoverable, recoverable, "{code:?}");
+        // The rank band the doc comment on `RankedIssue::rank` promises.
+        assert!((30..=100).contains(&issues[0].rank), "{code:?}");
+    }
 }

@@ -111,8 +111,12 @@ pub(crate) fn parse_quantity_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed
 /// fraction.
 ///
 /// Under [`NumberFormat::Auto`] the ambiguity is reported only when the input
-/// is genuinely grouping-shaped — a single separator followed by exactly three
-/// digits. `1.234` returns 1.234 with 1234 in [`Parsed::alternatives`] and an
+/// is genuinely grouping-shaped: an optional sign, then **one to three digits**,
+/// then a single separator, then **exactly three digits**, and nothing more.
+/// Both sides matter — a longer left side cannot be a leading group, so
+/// `1234.567` and `12345.678` are plain decimals with no finding, while
+/// `1.234`, `12.345`, `123.456`, `0.123`, and `00.123` are all ambiguous.
+/// `1.234` returns 1.234 with 1234 in [`Parsed::alternatives`] and an
 /// [`IssueCode::AmbiguousNumber`] finding, and `1,234` returns the mirror pair.
 /// Anything the shape already settles returns one reading and no finding:
 /// `1.23`, `1.2345`, and `0.5` are decimals, `1.234.567` is 1234567, and
@@ -950,6 +954,51 @@ pub(crate) fn reject_candidate(parsed: &mut Parsed, text: &str, reading: Reading
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `Auto` grouping ambiguity needs a grouping shape on *both* sides of
+    /// the separator: one to three digits before it and exactly three after.
+    #[test]
+    fn auto_ambiguity_needs_one_to_three_digits_before_the_separator() {
+        let ambiguous = |text: &str| {
+            let parsed = parse_number_fast(text, None);
+            assert!(parsed.best.is_some(), "{text}");
+            parsed
+                .findings
+                .ambiguities
+                .iter()
+                .any(|issue| issue.code == IssueCode::AmbiguousNumber)
+        };
+
+        for text in [
+            "1.234", "12.345", "123.456", "0.123", "00.123", "1,234", "12,345", "123,456",
+        ] {
+            assert!(ambiguous(text), "{text} should be ambiguous");
+            assert_eq!(
+                parse_number_fast(text, None).alternatives.len(),
+                1,
+                "{text}"
+            );
+        }
+
+        // A left side longer than a leading group settles the shape, as does a
+        // right side that is not exactly three digits.
+        for text in [
+            "1234.567",
+            "12345.678",
+            "0000.123",
+            "1234,567",
+            "1.23",
+            "1.2345",
+            "0.5",
+            "1.2340",
+        ] {
+            assert!(!ambiguous(text), "{text} should not be ambiguous");
+            assert!(
+                parse_number_fast(text, None).alternatives.is_empty(),
+                "{text}"
+            );
+        }
+    }
 
     #[test]
     fn rejects_hostile_no_match_corpus() {

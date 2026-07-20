@@ -127,7 +127,14 @@ pub struct Span {
 /// it had to skip, choose, or approximate.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Findings {
-    /// Fragments that produced no reading at all.
+    /// Fragments that contribute no reading to the result.
+    ///
+    /// Covers both fragments nothing could be read from and readings that were
+    /// found and then withdrawn — by a non-finite value, by mismatched range
+    /// endpoints, or by the active [`Strictness`] refusing them. `about 20kg`
+    /// under [`Strictness::Strict`] parses as 20 kg and then lands here as
+    /// [`IssueCode::Approximation`], `approximate qualifier requires
+    /// confirmation in strict mode`.
     pub skipped: Vec<Skipped>,
     /// Fragments that had more than one plausible reading.
     pub ambiguities: Vec<Ambiguity>,
@@ -135,7 +142,10 @@ pub struct Findings {
     pub approximations: Vec<Approximation>,
 }
 
-/// A fragment of the input that produced no reading.
+/// A fragment of the input that contributes no reading to the result.
+///
+/// Either nothing could be read from it, or a reading was produced and then
+/// withdrawn — see [`Findings::skipped`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Skipped {
     /// Why the fragment was skipped, as a stable code.
@@ -177,6 +187,10 @@ pub struct Approximation {
     /// Human-readable explanation, intended for display.
     pub reason: String,
     /// Relative error as a fraction (`0.05` meaning 5%), when it is known.
+    ///
+    /// Reserved: no parsing path sets this field, so every approximation the
+    /// library produces carries `None`. A caller assembling an
+    /// [`Approximation`] itself may fill it in.
     pub relative_error: Option<f64>,
     /// Where the fragment sits in the original input.
     pub span: Span,
@@ -187,7 +201,13 @@ pub struct Approximation {
 pub enum IssueSeverity {
     /// The parser filled in something reasonable; worth showing, not blocking.
     Info,
-    /// The reading is usable but the parser made a choice worth confirming.
+    /// The parser made a choice worth confirming.
+    ///
+    /// Whether a reading survived is a separate question: severity is derived
+    /// from the code alone. Under [`Strictness::Strict`] the Warning-severity
+    /// [`IssueCode::Approximation`] (`about 20kg`) and
+    /// [`IssueCode::TypoCorrected`] (`5 meterz`) are refusals, and
+    /// [`Parsed::best`] is `None`.
     Warning,
     /// No usable reading, or the active policy refused the one that was found.
     Error,
@@ -219,7 +239,14 @@ pub struct RankedIssue {
     pub severity: IssueSeverity,
     /// Display priority, higher first. Ranges from `30` to `100`.
     pub rank: u16,
-    /// Whether a usable reading still exists despite this finding.
+    /// Whether this kind of finding leaves anything to fall back on.
+    ///
+    /// This is a property of [`RankedIssue::code`] alone, not of the parse it
+    /// came from: `true` does **not** promise that [`Parsed::best`] holds a
+    /// reading. `about 20kg` and `5 meterz` under [`Strictness::Strict`], and
+    /// `3pm Europe/Paris`, `every blue moon`, and `3 yd 2 ft` with
+    /// [`AcceptOptions::compounds`] off, all report a recoverable finding with
+    /// `best: None`. Test [`Parsed::best`] to learn whether a reading survived.
     ///
     /// `false` only for [`IssueCode::Empty`] and [`IssueCode::NoValue`], where
     /// there is nothing to fall back on.
@@ -577,6 +604,93 @@ impl TokenKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `recoverable` and `severity` are properties of the code, not of the
+    /// parse: both can say "usable" while `best` is `None`.
+    #[test]
+    fn recoverable_and_warning_do_not_promise_a_reading() {
+        let strict = || ParseCtx {
+            strictness: Strictness::Strict,
+            ..ParseCtx::default()
+        };
+        let no_compounds = || ParseCtx {
+            accept: AcceptOptions {
+                compounds: false,
+                ..AcceptOptions::default()
+            },
+            ..ParseCtx::default()
+        };
+
+        for (text, ctx) in [
+            ("about 20kg", strict()),
+            ("5 meterz", strict()),
+            ("3pm Europe/Paris", ParseCtx::default()),
+            ("every blue moon", ParseCtx::default()),
+            ("3 yd 2 ft", no_compounds()),
+        ] {
+            let parsed = parse(text, Some(ctx));
+            assert!(parsed.best.is_none(), "{text}");
+            let issues = ranked_findings(&parsed);
+            assert!(!issues.is_empty(), "{text}");
+            assert!(issues.iter().all(|issue| issue.recoverable), "{text}");
+        }
+
+        // Warning severity likewise survives a strict refusal.
+        for (text, code) in [
+            ("about 20kg", IssueCode::Approximation),
+            ("5 meterz", IssueCode::TypoCorrected),
+        ] {
+            let parsed = parse(text, Some(strict()));
+            assert!(parsed.best.is_none(), "{text}");
+            let issue = ranked_findings(&parsed)
+                .into_iter()
+                .find(|issue| issue.code == code)
+                .expect("the documented code");
+            assert_eq!(issue.severity, IssueSeverity::Warning, "{text}");
+        }
+    }
+
+    /// A policy refusal reaches `skipped` after a reading was produced, so
+    /// `skipped` is not only "nothing could be read here".
+    #[test]
+    fn strict_refusal_is_reported_as_skipped() {
+        let parsed = parse(
+            "about 20kg",
+            Some(ParseCtx {
+                strictness: Strictness::Strict,
+                ..ParseCtx::default()
+            }),
+        );
+        assert!(parsed.best.is_none());
+        assert_eq!(parsed.findings.skipped.len(), 1);
+        assert_eq!(parsed.findings.skipped[0].code, IssueCode::Approximation);
+        assert_eq!(
+            parsed.findings.skipped[0].reason,
+            "approximate qualifier requires confirmation in strict mode"
+        );
+
+        // The same input parses when the policy allows it.
+        assert!(parse("about 20kg", None).best.is_some());
+    }
+
+    /// `Approximation::relative_error` is documented as reserved: no parse
+    /// fills it in.
+    #[test]
+    fn relative_error_is_never_produced() {
+        for text in [
+            "about 20kg",
+            "5尺3寸",
+            "1.5 cups",
+            "6帖",
+            "roughly 3 miles",
+            "a few hours",
+            "~5 m",
+        ] {
+            for approximation in &parse(text, None).findings.approximations {
+                assert!(approximation.relative_error.is_none(), "{text}");
+            }
+        }
+    }
 
     #[test]
     fn documented_issue_code_examples_are_true() {

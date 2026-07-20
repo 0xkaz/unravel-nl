@@ -28,6 +28,11 @@ fn hostile_unicode_inputs_do_not_panic() {
         // A high digit, so a long run of them overflows f64 rather than merely
         // being large.
         '9',
+        // Characters that have to be escaped before the input can be echoed
+        // back into a JSON envelope. None of them appeared anywhere in the
+        // corpus, so the emitter's backslash and control-character arms were
+        // never reached from a real parse.
+        '\\', '"', '\u{1}', '\n', '\t',
     ];
 
     for len in 0..96 {
@@ -112,6 +117,65 @@ fn assert_invariants_hold(input: &str) {
     }
 
     assert_completion_invariants(input);
+    #[cfg(feature = "wasm")]
+    assert_json_envelope_escapes_the_input(input);
+}
+
+/// The envelope echoes the input verbatim, so every character JSON forbids raw
+/// inside a string has to leave the emitter escaped.
+///
+/// A raw control character, or a backslash that swallows the closing quote,
+/// makes the whole document unparseable on the JS side — not one field. The
+/// alphabet above carries `\`, `"`, `U+0001`, newline and tab for exactly this
+/// invariant; `src/json_out.rs` pins the escaping table itself.
+#[cfg(feature = "wasm")]
+fn assert_json_envelope_escapes_the_input(input: &str) {
+    let json = unravel_nl::parse_json(input);
+    for (idx, ch) in json.char_indices() {
+        assert!(
+            !ch.is_control(),
+            "{input:?}: raw control character {ch:?} at {idx} in {json:?}"
+        );
+    }
+    let echoed = json
+        .split_once("\"input\":")
+        .expect("an input field")
+        .1
+        .to_owned();
+    assert_eq!(
+        decode_json_string_prefix(&echoed).as_deref(),
+        Some(input),
+        "{input:?}: {json:?}"
+    );
+}
+
+/// Decodes the JSON string literal at the start of `text`, ignoring whatever
+/// follows it.
+#[cfg(feature = "wasm")]
+fn decode_json_string_prefix(text: &str) -> Option<String> {
+    let mut chars = text.strip_prefix('"')?.chars();
+    let mut out = String::new();
+    loop {
+        match chars.next()? {
+            '"' => return Some(out),
+            '\\' => match chars.next()? {
+                '"' => out.push('"'),
+                '\\' => out.push('\\'),
+                '/' => out.push('/'),
+                'b' => out.push('\u{8}'),
+                'f' => out.push('\u{c}'),
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                'u' => {
+                    let digits: String = chars.by_ref().take(4).collect();
+                    out.push(char::from_u32(u32::from_str_radix(&digits, 16).ok()?)?);
+                }
+                _ => return None,
+            },
+            ch => out.push(ch),
+        }
+    }
 }
 
 /// `ranked_findings` sorts a mixed set of findings by rank, highest first.

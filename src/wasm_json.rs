@@ -626,38 +626,37 @@ mod wasm_tests {
     /// A range crossing the boundary used to arrive as a bare
     /// `{"kind":"range"}`: both endpoints were dropped while the envelope still
     /// said `ok:true` with an empty `issues` list, so a JS caller had no way to
-    /// see the loss. Every endpoint value and unit must survive.
+    /// see the loss. Every endpoint value and unit must survive, and it must
+    /// survive on the endpoint it belongs to: the whole `range` object is
+    /// compared as one ordered fragment, because checking for the two values
+    /// separately passes just as happily when `from` and `to` are swapped.
     #[test]
     fn parse_json_carries_both_range_endpoints() {
-        // input, from-value, to-value, unit
-        let cases: [(&str, &str, &str, &str); 4] = [
-            ("10 ± 0.5 mm", "0.0095", "0.0105", "m"),
-            ("100-120㎡", "100", "120", "m2"),
-            ("between 5 and 10 kg", "5", "10", "kg"),
-            ("2〜3日", "172800", "259200", "s"),
+        // input, from-value, to-value, unit, dimension
+        let cases: [(&str, &str, &str, &str, &str); 4] = [
+            ("10 ± 0.5 mm", "0.0095", "0.0105", "m", "length"),
+            ("100-120㎡", "100", "120", "m2", "area"),
+            ("between 5 and 10 kg", "5", "10", "kg", "mass"),
+            ("2〜3日", "172800", "259200", "s", "time"),
         ];
-        for (input, from, to, unit) in cases {
+        for (input, from, to, unit, dimension) in cases {
             let json = parse_json(input);
             assert!(is_valid_json(&json), "{input}: {json}");
             assert!(json.contains("\"kind\":\"range\""), "{input}: {json}");
-            assert!(json.contains("\"range\":{\"from\":"), "{input}: {json}");
-            assert!(json.contains(",\"to\":"), "{input}: {json}");
-            assert!(
-                json.contains(&format!("\"value\":{from},")),
-                "{input}: {json}"
+            // The endpoints are full readings, not a bare pair of numbers, and
+            // the lower bound is `from`.
+            let expected = format!(
+                "\"range\":{{\"from\":{{\"kind\":\"quantity\",\"value\":{from},\"unit\":\"{unit}\",\
+                 \"dimension\":\"{dimension}\"}},\"to\":{{\"kind\":\"quantity\",\"value\":{to},\
+                 \"unit\":\"{unit}\",\"dimension\":\"{dimension}\"}}}}"
             );
-            assert!(
-                json.contains(&format!("\"value\":{to},")),
-                "{input}: {json}"
-            );
-            // Both endpoints must carry the unit, not just the container.
+            assert!(json.contains(&expected), "{input}: {json}\nwant {expected}");
+            // Both endpoints carry the unit, not just the container.
             assert_eq!(
                 json.matches(&format!("\"unit\":\"{unit}\"")).count(),
                 2,
                 "{input}: {json}"
             );
-            // The endpoints are full readings, not a bare pair of numbers.
-            assert!(json.contains("\"dimension\":"), "{input}: {json}");
         }
     }
 
@@ -668,9 +667,15 @@ mod wasm_tests {
     fn parse_json_keeps_values_below_the_old_rounding_threshold() {
         let json = parse_json("0.0000001 m");
         assert!(is_valid_json(&json), "{json}");
-        assert!(json.contains("\"value\":0.0000001"), "{json}");
-        assert!(!json.contains("\"value\":0,"), "{json}");
-        assert!(!json.contains("\"value\":0}"), "{json}");
+        // The whole envelope, not a substring of the number: `contains` on a
+        // numeric token matches any *longer* number that starts with the same
+        // digits, so `"value":0.0000001` would also pass against a value of
+        // `0.00000012` — and `"value":0` against every value in this test.
+        assert_eq!(
+            json,
+            "{\"ok\":true,\"input\":\"0.0000001 m\",\"best\":{\"kind\":\"quantity\",\
+             \"value\":0.0000001,\"unit\":\"m\",\"dimension\":\"length\"},\"issues\":[]}"
+        );
         // Plain decimal notation only: `1e-7` still parses in Rust but is the
         // shape a strict JSON consumer is most likely to trip over.
         assert!(!json.contains("e-"), "{json}");
@@ -681,13 +686,24 @@ mod wasm_tests {
     }
 
     /// `2 cups` holds 0.473176473 L; the envelope used to ship 0.473176.
+    ///
+    /// The value assertions are delimiter-terminated for the same reason the
+    /// test above compares the whole envelope: `contains("\"value\":0.473176")`
+    /// is a prefix of the true value and passes against the old rounding.
     #[test]
     fn parse_json_serializes_cups_at_full_precision() {
         let json = parse_json_with_locale("2 cups", "en-US");
         assert!(is_valid_json(&json), "{json}");
-        assert!(json.contains("\"value\":0.473176473"), "{json}");
+        assert!(
+            json.contains("\"value\":0.473176473,\"unit\":\"L\""),
+            "{json}"
+        );
+        assert!(!json.contains("\"value\":0.473176,"), "{json}");
         let best = parse("2 cups", None).best.expect("a reading");
-        assert!(json.contains(&format!("\"value\":{}", best.value.expect("a value"))));
+        assert!(
+            json.contains(&format!("\"value\":{},", best.value.expect("a value"))),
+            "{json}"
+        );
     }
 
     /// Minimal structural JSON check — enough to catch an unescaped string, an

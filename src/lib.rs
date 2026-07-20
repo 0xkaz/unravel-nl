@@ -54,7 +54,7 @@
 //! | Feature | Adds |
 //! | --- | --- |
 //! | `dates-jiff` | Calendar arithmetic: relative dates such as `next friday` or `来週金曜日`, and three-part numeric dates. Without it these are reported as findings rather than resolved. |
-//! | `timezones-jiff` | IANA time zone resolution, e.g. `3pm Europe/Paris`. Implies `dates-jiff`. |
+//! | `timezones-jiff` | IANA time zone resolution, e.g. `3pm Europe/Paris` — but only together with an explicit [`ParseCtx::reference_date`], since a zone offset is undefined without a date. Without one the zone is still reported as [`IssueCode::TimezoneUnsupported`] and `best` is `None`, on this feature as on a default build. Implies `dates-jiff`. |
 //! | `wasm` | `wasm-bindgen` exports for browser and Node adapters. |
 //!
 //! # Getting started

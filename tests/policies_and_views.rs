@@ -50,6 +50,85 @@ fn completion_readings_fan_out_plain_numbers_to_expected_units() {
     }));
 }
 
+/// `complete_readings` feeds the same picker `complete` does, and carries the
+/// same three structural promises — none of which were pinned before.
+///
+/// 1. At most 24 candidates, the cap the doc comment states. It is reachable:
+///    a bare number with enough custom units fans out past it.
+/// 2. Ordered by score, highest first, since the picker shows the list as-is.
+/// 3. The built-in unit fan-out is bounded at 12 candidates, so a bare number
+///    cannot crowd the parse-derived readings out of the capped list.
+#[test]
+fn completion_readings_are_capped_ordered_and_bounded() {
+    // Enough custom units to overflow the cap: 12 built-in fan-out candidates
+    // plus 40 custom ones plus the parsed reading is well past 24.
+    let many_units: Vec<CustomUnit> = (0..40)
+        .map(|index| {
+            CustomUnit::new(
+                &format!("cu{index}"),
+                "m",
+                &[],
+                Dimension::Length,
+                1.0 + f64::from(index),
+            )
+        })
+        .collect();
+    let capped = complete_readings(
+        "10",
+        Some(ParseCtx {
+            custom_units: many_units,
+            ..ParseCtx::default()
+        }),
+    );
+    assert_eq!(
+        capped.len(),
+        24,
+        "the documented cap is both an upper bound and reachable: {capped:?}"
+    );
+
+    for text in [
+        "10",
+        "5 kg",
+        "2 cups",
+        "",
+        "next friday",
+        "between 5 and 10 kg",
+    ] {
+        let completions = complete_readings(text, None);
+        assert!(
+            completions.len() <= 24,
+            "{text:?}: {} candidates exceeds the documented cap of 24",
+            completions.len()
+        );
+        for pair in completions.windows(2) {
+            assert!(
+                pair[0].score >= pair[1].score,
+                "{text:?}: candidates are not ordered by score, {} before {}",
+                pair[0].score,
+                pair[1].score
+            );
+        }
+        assert!(
+            completions
+                .iter()
+                .filter(|item| item.reason == "unit_fanout")
+                .count()
+                <= 12,
+            "{text:?}: the built-in unit fan-out is bounded at 12: {completions:?}"
+        );
+    }
+
+    // The fan-out bound is reached, not merely respected: a bare number with no
+    // expected dimension offers the full 12 built-in units.
+    assert_eq!(
+        complete_readings("10", None)
+            .iter()
+            .filter(|item| item.reason == "unit_fanout")
+            .count(),
+        12,
+    );
+}
+
 #[test]
 fn acceptance_controls_reject_shapes_but_keep_candidates() {
     let parsed = parse(

@@ -276,6 +276,118 @@ mod tests {
         assert_eq!(negative_zero, "{\"kind\":\"number\",\"value\":0}");
     }
 
+    /// Every character JSON forbids raw inside a string must leave the emitter
+    /// escaped.
+    ///
+    /// The quote, newline, carriage return and tab arms have named escapes; the
+    /// backslash arm and the generic `\u{XXXX}` control arm are the two that no
+    /// parse in the corpus reached, and dropping either one emits a document
+    /// that no JSON parser accepts — a lone `\` at the end of `"5 kg\"` runs the
+    /// string past its closing quote, and a raw `U+0001` is a control character
+    /// where the grammar allows none.
+    #[test]
+    fn escapes_every_character_json_forbids_raw_in_a_string() {
+        let hostile = "a\\b\"c\u{1}d\ne\tf\u{7f}g\rh";
+        let mut json = String::new();
+        push_json_string(&mut json, hostile);
+        assert_eq!(
+            json, "\"a\\\\b\\\"c\\u0001d\\ne\\tf\\u007fg\\rh\"",
+            "{json}"
+        );
+        assert!(is_valid_json(&json), "{json}");
+        assert_eq!(
+            json_string_content(&json).as_deref(),
+            Some(hostile),
+            "{json}"
+        );
+
+        // One character at a time, so a single missing arm cannot hide behind
+        // the others in the combined string above.
+        for (raw, escaped) in [
+            ('\\', "\"\\\\\""),
+            ('"', "\"\\\"\""),
+            ('\u{1}', "\"\\u0001\""),
+            ('\n', "\"\\n\""),
+            ('\t', "\"\\t\""),
+            ('\r', "\"\\r\""),
+            ('\u{7f}', "\"\\u007f\""),
+            ('\u{9f}', "\"\\u009f\""),
+        ] {
+            let mut one = String::new();
+            push_json_string(&mut one, &raw.to_string());
+            assert_eq!(one, escaped, "{raw:?}");
+            assert!(is_valid_json(&one), "{raw:?}: {one}");
+            assert_eq!(
+                json_string_content(&one).as_deref(),
+                Some(raw.to_string().as_str()),
+                "{raw:?}: {one}"
+            );
+        }
+    }
+
+    /// The same two arms, reached the way a caller reaches them: a backslash or
+    /// a control character typed into the input is echoed back through `input`
+    /// and through the finding's `ref_text`, so an unescaped one corrupts the
+    /// whole envelope rather than one field.
+    #[test]
+    fn parsed_summary_json_escapes_hostile_input_characters() {
+        for input in [
+            "5 kg\\",
+            "5 kg\u{1}",
+            "5 kg\"",
+            "5 kg\n",
+            "5 kg\t",
+            "5 kg\u{7f}",
+        ] {
+            let json = parsed_summary_json(&parse(input, None));
+            assert!(is_valid_json(&json), "{input:?}: {json}");
+            // The echoed `input` field decodes back to exactly what was typed.
+            let tail = json.split_once("\"input\":").expect("an input field").1;
+            let mut rest = tail;
+            assert!(json_string(&mut rest), "{input:?}: {json}");
+            let literal = &tail[..tail.len() - rest.len()];
+            assert_eq!(
+                json_string_content(literal).as_deref(),
+                Some(input),
+                "{input:?}: {json}"
+            );
+        }
+    }
+
+    /// Decodes a JSON string literal back to its Rust value, so the escaping
+    /// above can be checked to round-trip rather than merely to parse.
+    fn json_string_content(text: &str) -> Option<String> {
+        let body = text.strip_prefix('"')?.strip_suffix('"')?;
+        let mut out = String::new();
+        let mut chars = body.chars();
+        while let Some(ch) = chars.next() {
+            if ch != '\\' {
+                out.push(ch);
+                continue;
+            }
+            match chars.next()? {
+                '"' => out.push('"'),
+                '\\' => out.push('\\'),
+                '/' => out.push('/'),
+                'b' => out.push('\u{8}'),
+                'f' => out.push('\u{c}'),
+                'n' => out.push('\n'),
+                'r' => out.push('\r'),
+                't' => out.push('\t'),
+                'u' => {
+                    let digits: String = chars.by_ref().take(4).collect();
+                    if digits.len() != 4 {
+                        return None;
+                    }
+                    let code = u32::from_str_radix(&digits, 16).ok()?;
+                    out.push(char::from_u32(code)?);
+                }
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
     /// A range used to cross the boundary as a bare `{"kind":"range"}`.
     #[test]
     fn serializes_both_range_endpoints_as_nested_readings() {

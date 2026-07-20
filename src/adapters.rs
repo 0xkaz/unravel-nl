@@ -154,9 +154,21 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
 /// Renders a canonical reading as a human-readable string.
 ///
 /// Output is locale-sensitive: with [`Locale::Ja`] a length in metres is
-/// rendered in shakkanhō units and a temperature as `摂氏20度`. Values that came
-/// from an approximate conversion are marked as approximate rather than
-/// presented as exact.
+/// rendered in shakkanhō units and a temperature as `摂氏20度`.
+///
+/// The rendered string is **not** a reliable indicator of whether a value is
+/// approximate. The ` (approx.)` marker is produced by exactly two renderings —
+/// the [`Locale::Ja`] shakkanhō length (`5尺3寸 (approx.)`) and the
+/// [`Locale::Ja`] tatami or tsubo area (`6帖 (approx.)`) — and by nothing else.
+/// Every other rendering prints the number bare however the reading was
+/// obtained: `parse("5尺3寸", ..)` yields a reading with
+/// `approximate: Some(true)`, yet it humanizes to `1.606061 m` under both no
+/// locale and [`Locale::En`]; `1.5 cups` humanizes to `0.354882 L` and
+/// `about 20kg` to `20 kg` even under [`Locale::Ja`]. Callers that need to know
+/// must read [`Reading::approximate`] (or [`Findings::approximations`]) rather
+/// than inspect this string. The same applies to [`ResourceView::summary`],
+/// which is this function called with no locale and so never carries the
+/// marker at all.
 ///
 /// A reading that carries no usable value still renders as a word rather than
 /// an empty string, so the output is always displayable: `unknown date`,
@@ -493,6 +505,76 @@ mod tests {
             ),
             "5尺3寸 (approx.)"
         );
+    }
+
+    /// The `(approx.)` marker is a property of two Japanese renderings, not of
+    /// the reading: an approximate reading renders bare everywhere else, so a
+    /// caller must read `Reading::approximate` instead of the string.
+    #[test]
+    fn approximate_marker_only_appears_in_japanese_length_and_area() {
+        let ja = |text: &str| {
+            parse(
+                text,
+                Some(ParseCtx {
+                    locale: Some(Locale::Ja),
+                    ..ParseCtx::default()
+                }),
+            )
+            .best
+            .expect("a reading")
+        };
+
+        let shaku = ja("5尺3寸");
+        assert_eq!(shaku.approximate, Some(true));
+        assert_eq!(humanize(&shaku, None), "1.606061 m");
+        assert_eq!(
+            humanize(
+                &shaku,
+                Some(HumanizeCtx {
+                    locale: Some(Locale::En)
+                })
+            ),
+            "1.606061 m"
+        );
+        assert_eq!(describe_reading(&shaku).summary, "1.606061 m");
+
+        // The two renderings that do mark it.
+        assert_eq!(
+            humanize(
+                &shaku,
+                Some(HumanizeCtx {
+                    locale: Some(Locale::Ja)
+                })
+            ),
+            "5尺3寸 (approx.)"
+        );
+        let tatami = ja("6帖");
+        assert_eq!(
+            humanize(
+                &tatami,
+                Some(HumanizeCtx {
+                    locale: Some(Locale::Ja)
+                })
+            ),
+            "6帖 (approx.)"
+        );
+
+        // Approximate readings that are not Japanese length or area render bare
+        // even under `Locale::Ja`.
+        for (text, rendered) in [("1.5 cups", "0.354882 L"), ("about 20kg", "20 kg")] {
+            let reading = parse(text, None).best.expect("a reading");
+            assert_eq!(reading.approximate, Some(true), "{text}");
+            assert_eq!(
+                humanize(
+                    &reading,
+                    Some(HumanizeCtx {
+                        locale: Some(Locale::Ja)
+                    })
+                ),
+                rendered,
+                "{text}"
+            );
+        }
     }
 
     #[test]

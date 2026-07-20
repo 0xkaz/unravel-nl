@@ -357,7 +357,16 @@ impl Date {
 /// Supplies optional hints, policies, and custom registries to parsing operations.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ParseCtx {
-    /// Locale hint used to disambiguate units and number formats.
+    /// Locale hint used to disambiguate units.
+    ///
+    /// It settles locale-dependent units: `1.5 cups` reads as the US cup by
+    /// default and as the imperial cup under [`Locale::EnGb`].
+    ///
+    /// It does **not** affect numeric punctuation. `1.234` produces a
+    /// byte-identical [`Parsed`] under `None`, [`Locale::Ja`], [`Locale::En`],
+    /// [`Locale::EnUs`], [`Locale::EnGb`], and any [`Locale::Other`] tag —
+    /// including a comma-decimal one such as `de-DE`. Only
+    /// [`ParseCtx::number_format`] decides that; see [`NumberFormat::Auto`].
     pub locale: Option<Locale>,
     /// Expected top-level reading kind. This does **not** constrain parsing.
     ///
@@ -808,6 +817,43 @@ pub(crate) struct ParsedReading {
 mod tests {
     use super::*;
     use crate::test_util::assert_close;
+
+    /// `ParseCtx::locale` disambiguates units only. Numeric punctuation is
+    /// decided by `ParseCtx::number_format` alone, so `1.234` parses
+    /// identically under every locale, comma-decimal ones included.
+    #[test]
+    fn locale_disambiguates_units_but_not_number_formats() {
+        let parse_with = |text: &str, locale: Option<Locale>| {
+            parse(
+                text,
+                Some(ParseCtx {
+                    locale,
+                    ..ParseCtx::default()
+                }),
+            )
+        };
+
+        let baseline = parse_with("1.234", None);
+        for locale in [
+            Some(Locale::Ja),
+            Some(Locale::En),
+            Some(Locale::EnUs),
+            Some(Locale::EnGb),
+            Some(Locale::Other("de-DE".to_owned())),
+        ] {
+            let parsed = parse_with("1.234", locale.clone());
+            assert_eq!(parsed.best, baseline.best, "{locale:?}");
+            assert_eq!(parsed.alternatives, baseline.alternatives, "{locale:?}");
+            assert_eq!(parsed.findings, baseline.findings, "{locale:?}");
+        }
+
+        // The unit half of the hint is real.
+        let us = parse_with("1.5 cups", None).best.expect("a reading");
+        let gb = parse_with("1.5 cups", Some(Locale::EnGb))
+            .best
+            .expect("a reading");
+        assert_ne!(us.value, gb.value);
+    }
 
     /// `ParseCtx::purpose` is a hard filter, not a hint: a grammar that does not
     /// read the input refuses it instead of falling back to another grammar.

@@ -110,11 +110,72 @@ fn comma_decimal_treats_every_dot_as_grouping() {
     );
 }
 
+/// A declared format wins over the shape of the input, including when both
+/// separators are present and the input is written the *other* way round.
+///
+/// `1,234.56` is an anglophone number and `1.234,56` a European one, and
+/// `NumberFormat::Auto` reads both by taking the rightmost separator as the
+/// decimal point. A caller who declares a format is not asking for that
+/// inference: under `CommaDecimal` the dot can only group, so `1,234.56` has a
+/// comma where a group separator cannot sit and is refused — reported, not
+/// silently regrouped into 1234.56. The mirror holds for `1.234,56` under
+/// `DotDecimal`. Every other mixed-separator case in this file happens to be
+/// one where the declared format and `Auto` agree, so without these two the
+/// branch could ignore `number_format` entirely and still pass.
+#[test]
+fn a_declared_format_outranks_the_rightmost_separator_inference() {
+    for (input, format) in [
+        ("1,234.56", NumberFormat::CommaDecimal),
+        ("1.234,56", NumberFormat::DotDecimal),
+        ("1'234.56", NumberFormat::CommaDecimal),
+        ("12,34.56", NumberFormat::CommaDecimal),
+    ] {
+        let parsed = with_format(input, format);
+        assert!(
+            parsed.best.is_none(),
+            "{input} under {format:?} was read as {:?}",
+            parsed.best.as_ref().and_then(|best| best.value)
+        );
+        assert!(parsed.alternatives.is_empty(), "{input} under {format:?}");
+        // Refused, not dropped.
+        assert_eq!(parsed.findings.skipped.len(), 1, "{input} under {format:?}");
+        assert_eq!(
+            parsed.findings.skipped[0].code,
+            IssueCode::NoValue,
+            "{input} under {format:?}"
+        );
+    }
+
+    // `Auto` is the reading the declared formats above must *not* fall back to.
+    for input in ["1,234.56", "1.234,56"] {
+        assert_eq!(
+            with_format(input, NumberFormat::Auto)
+                .best
+                .and_then(|best| best.value),
+            Some(1234.56),
+            "{input}"
+        );
+    }
+}
+
 #[test]
 fn auto_reports_the_grouping_ambiguity_with_an_alternative() {
+    // The reason is display prose, so the whole sentence is pinned rather than
+    // its first word: `starts_with("Dot")` passed against any sentence that
+    // merely began with the separator's name.
     for (input, best_value, alternative, reason) in [
-        ("1.234", 1.234, 1234.0, "Dot"),
-        ("1,234", 1234.0, 1.234, "Comma"),
+        (
+            "1.234",
+            1.234,
+            1234.0,
+            "Dot can be read as a thousands separator or a decimal separator.",
+        ),
+        (
+            "1,234",
+            1234.0,
+            1.234,
+            "Comma can be read as a thousands separator or a decimal separator.",
+        ),
     ] {
         let parsed = with_format(input, NumberFormat::Auto);
         assert_eq!(
@@ -130,7 +191,7 @@ fn auto_reports_the_grouping_ambiguity_with_an_alternative() {
         assert_eq!(ambiguity.code, IssueCode::AmbiguousNumber, "{input}");
         assert_eq!(ambiguity.ref_text, input, "{input}");
         assert_eq!(ambiguity.candidate_count, Some(2), "{input}");
-        assert!(ambiguity.reason.starts_with(reason), "{input}");
+        assert_eq!(ambiguity.reason, reason, "{input}");
     }
 
     // Auto is the default, so the bare call reports the same ambiguity.
