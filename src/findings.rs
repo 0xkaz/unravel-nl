@@ -17,6 +17,10 @@ pub enum IssueCode {
     /// The input was empty, or contained nothing but whitespace.
     Empty,
     /// The input was non-empty but no reading could be extracted from it.
+    ///
+    /// Also covers readings that were found and then withdrawn because they
+    /// held nothing usable: a value that overflowed to infinity or collapsed to
+    /// `NaN`, and a range whose endpoints disagreed on dimension or unit.
     NoValue,
     /// A unit-like token was found but is not in the unit registry.
     ///
@@ -27,7 +31,13 @@ pub enum IssueCode {
     TypoCorrected,
     /// No unit was written and one was inferred from context or expectation.
     UnitAssumed,
-    /// The number itself has more than one plausible reading, e.g. `1.234`.
+    /// The number itself has more than one plausible reading, e.g. `1.234`,
+    /// which is `1234` under dot grouping and `1.234` under a dot decimal
+    /// point. `1,234` is ambiguous the same way, and both are reported only
+    /// under [`NumberFormat::Auto`] — an explicit format settles the question.
+    ///
+    /// Also used for a range written in descending order (`from 10kg to 2kg`),
+    /// where it is undecidable whether the bounds were swapped by mistake.
     AmbiguousNumber,
     /// The date has more than one plausible reading, e.g. `05/06/2026`.
     AmbiguousDate,
@@ -559,6 +569,31 @@ impl TokenKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn documented_issue_code_examples_are_true() {
+        // The `AmbiguousNumber` doc example.
+        let dotted = parse("1.234", None);
+        assert_eq!(
+            dotted.findings.ambiguities[0].code,
+            IssueCode::AmbiguousNumber
+        );
+        // The second documented use of the same code.
+        let descending = parse("from 10kg to 2kg", None);
+        assert_eq!(
+            descending.findings.ambiguities[0].code,
+            IssueCode::AmbiguousNumber
+        );
+        // `NoValue` covers a range refused for mismatched units.
+        let mismatched = parse("10 USD to 20 JPY", None);
+        assert!(mismatched.best.is_none());
+        assert_eq!(mismatched.findings.skipped[0].code, IssueCode::NoValue);
+        // The `humanize` fallback the docs now name.
+        assert_eq!(
+            humanize(&Reading::number(f64::INFINITY, 0.9), None),
+            "unrepresentable"
+        );
+    }
 
     #[test]
     fn tokenizes_source_spans_for_findings() {

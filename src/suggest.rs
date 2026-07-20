@@ -18,24 +18,26 @@ pub(crate) fn suggest_unit(token: &str) -> Option<Suggestion> {
     if normalized.len() > 32 {
         return None;
     }
+    let limit = if normalized.len() <= 5 { 1 } else { 2 };
     let mut best: Option<(&'static str, usize)> = None;
-    for unit in UNIT_DEFS {
-        for alias in unit_lookup_aliases(unit) {
-            let alias = alias.trim();
-            if alias.is_empty() || !alias.is_ascii() || alias.contains(char::is_whitespace) {
-                continue;
-            }
-            let limit = if normalized.len() <= 5 { 1 } else { 2 };
-            if normalized.len().abs_diff(alias.len()) > limit {
-                continue;
-            }
-            if !same_ascii_first_char(&normalized, alias) {
-                continue;
-            }
-            let distance = levenshtein_ascii_case_insensitive(&normalized, alias);
-            if distance > 0 && distance <= limit && best.is_none_or(|(_, best)| distance < best) {
-                best = Some((unit.id, distance));
-            }
+    // Walking only the aliases that share a first character skips the ones
+    // `same_ascii_first_char` was going to reject, in registry order, so the
+    // winner is unchanged. The surviving tests then run cheapest first: the
+    // length check is O(1), while `is_ascii` and the whitespace search are
+    // O(alias) and used to run in front of it.
+    for (alias, unit) in first_char_alias_candidates(&normalized) {
+        if normalized.len().abs_diff(alias.len()) > limit {
+            continue;
+        }
+        if !same_ascii_first_char(&normalized, alias) {
+            continue;
+        }
+        if !alias.is_ascii() || alias.contains(char::is_whitespace) {
+            continue;
+        }
+        let distance = levenshtein_ascii_case_insensitive(&normalized, alias);
+        if distance > 0 && distance <= limit && best.is_none_or(|(_, best)| distance < best) {
+            best = Some((unit.id, distance));
         }
     }
     best.map(|(to, distance)| {
@@ -182,6 +184,110 @@ pub(crate) fn levenshtein(left: &str, right: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The full registry walk the first-character bucket replaced, with the
+    /// prefilters in their original order.
+    fn suggest_unit_reference(token: &str) -> Option<Suggestion> {
+        let normalized = normalize_alias(token);
+        if normalized.len() > 32 {
+            return None;
+        }
+        let mut best: Option<(&'static str, usize)> = None;
+        for unit in UNIT_DEFS {
+            for alias in unit_lookup_aliases(unit) {
+                let alias = alias.trim();
+                if alias.is_empty() || !alias.is_ascii() || alias.contains(char::is_whitespace) {
+                    continue;
+                }
+                let limit = if normalized.len() <= 5 { 1 } else { 2 };
+                if normalized.len().abs_diff(alias.len()) > limit {
+                    continue;
+                }
+                if !same_ascii_first_char(&normalized, alias) {
+                    continue;
+                }
+                let distance = levenshtein_ascii_case_insensitive(&normalized, alias);
+                if distance > 0 && distance <= limit && best.is_none_or(|(_, best)| distance < best)
+                {
+                    best = Some((unit.id, distance));
+                }
+            }
+        }
+        best.map(|(to, distance)| {
+            let max_len = normalized.len().max(to.len()) as f64;
+            Suggestion {
+                from: token.to_owned(),
+                to: to.to_owned(),
+                score: Some(1.0 - distance as f64 / max_len),
+            }
+        })
+        .or_else(|| suggest_non_ascii_unit(token))
+    }
+
+    fn suggestion_corpus() -> Vec<String> {
+        let mut corpus = vec![
+            String::new(),
+            String::from("meterz"),
+            String::from("kgx"),
+            String::from("lbz"),
+            String::from("secx"),
+            String::from("xqzw"),
+            String::from("tsbo"),
+            String::from("MeterZ"),
+            String::from("米x"),
+            String::from("坪x"),
+        ];
+        // One-edit neighbours of every registry alias exercise the tie-breaks
+        // that decide which unit a typo resolves to.
+        for unit in UNIT_DEFS {
+            for alias in unit_lookup_aliases(unit) {
+                corpus.push(alias.to_owned());
+                corpus.push(format!("{alias}z"));
+                corpus.push(format!("z{alias}"));
+                if !alias.is_empty() {
+                    let mut chars: Vec<char> = alias.chars().collect();
+                    chars.pop();
+                    corpus.push(chars.into_iter().collect());
+                }
+            }
+        }
+        corpus
+    }
+
+    #[test]
+    fn bucketed_suggest_unit_picks_the_same_unit() {
+        for token in suggestion_corpus() {
+            let actual = suggest_unit(&token);
+            let expected = suggest_unit_reference(&token);
+            assert_eq!(
+                actual
+                    .as_ref()
+                    .map(|item| (&item.from, &item.to, item.score)),
+                expected
+                    .as_ref()
+                    .map(|item| (&item.from, &item.to, item.score)),
+                "{token:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn known_typos_keep_their_suggestions() {
+        for (token, expected) in [("meterz", "m"), ("kgx", "kg"), ("secx", "s")] {
+            let suggestion = suggest_unit(token).unwrap_or_else(|| panic!("{token}"));
+            assert_eq!(suggestion.from, token);
+            assert_eq!(suggestion.to, expected);
+        }
+        assert_eq!(suggest_unit("xqzw"), None);
+
+        let parsed = parse("meterz kgx lbz secx", None);
+        let suggested: Vec<(&str, &str)> = parsed
+            .suggestions
+            .iter()
+            .map(|item| (item.from.as_str(), item.to.as_str()))
+            .collect();
+        assert!(suggested.contains(&("meterz", "m")), "{suggested:?}");
+    }
 
     #[test]
     fn suggests_did_you_mean() {

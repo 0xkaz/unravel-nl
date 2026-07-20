@@ -17,10 +17,35 @@ pub(crate) fn parse_ambiguous_slash_date_or_fraction(
     let fraction = Reading::number(numerator / denominator, 0.55);
     let mut alternatives = Vec::new();
     if let Some(reference_date) = ctx.reference_date {
-        let month = numerator as u8;
-        let day = denominator as u8;
-        if let Some(date) = Date::new(reference_date.year, month, day) {
-            alternatives.push(Reading::date(date, 0.51));
+        let first = date_component(numerator);
+        let second = date_component(denominator);
+        // `en-GB` writes the day first; every other locale writes the month
+        // first. Both orders stay on the table, because a two-part slash date
+        // carries nothing that settles the question — the competing order is
+        // offered as its own alternative rather than dropped.
+        let orders = if ctx.locale == Some(Locale::EnGb) {
+            [(second, first), (first, second)]
+        } else {
+            [(first, second), (second, first)]
+        };
+        let mut confidence = 0.51;
+        for (month, day) in orders {
+            let (Some(month), Some(day)) = (month, day) else {
+                continue;
+            };
+            // A day the calendar does not have is not a reading of the input.
+            let Some(date) = checked_date(reference_date.year, month, day) else {
+                continue;
+            };
+            let iso = date.iso();
+            if alternatives
+                .iter()
+                .any(|reading: &Reading| reading.date.as_deref() == Some(iso.as_str()))
+            {
+                continue;
+            }
+            alternatives.push(Reading::date(date, confidence));
+            confidence -= 0.02;
         }
     }
 
@@ -28,16 +53,64 @@ pub(crate) fn parse_ambiguous_slash_date_or_fraction(
         return None;
     }
 
+    let reason = if alternatives.len() > 1 {
+        "Slash expression can be read as a fraction or a date, and the date can be read day-first or month-first."
+    } else {
+        "Slash expression can be read as a fraction or a calendar date."
+    };
+
+    let candidate_count = alternatives.len() + 1;
     Some(AmbiguousParse {
         best: Some(fraction),
         alternatives,
         ambiguity: ambiguity(
             text,
-            "Slash expression can be read as a fraction or a month/day date.",
-            Some(2),
+            reason,
+            Some(candidate_count),
             IssueCode::AmbiguousDate,
         ),
     })
+}
+
+/// Reads one side of a slash expression as a calendar day or month number.
+///
+/// Only whole numbers in `1..=31` can name a month or a day, so anything else
+/// (a fraction, a zero, an out-of-range count) is not a date component.
+pub(crate) fn date_component(value: f64) -> Option<u8> {
+    if value.fract() != 0.0 || !(1.0..=31.0).contains(&value) {
+        return None;
+    }
+    Some(value as u8)
+}
+
+/// Builds a [`Date`] only when the calendar actually has that day.
+///
+/// [`Date::new`] range-checks month and day independently, so it accepts
+/// `2026-02-31`. Handing such a date back as a reading would be inventing a
+/// value the input cannot denote, so construction sites that build a date from
+/// loose numbers go through this instead. Deliberately dependency-free: the
+/// `dates-jiff` feature is off by default and this check must hold regardless.
+pub(crate) fn checked_date(year: i32, month: u8, day: u8) -> Option<Date> {
+    if day < 1 || day > days_in_month(year, month)? {
+        return None;
+    }
+    Date::new(year, month, day)
+}
+
+/// Returns the number of days in `month`, or `None` when `month` is not 1..=12.
+pub(crate) fn days_in_month(year: i32, month: u8) -> Option<u8> {
+    Some(match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => return None,
+    })
+}
+
+/// Proleptic Gregorian leap-year rule, matching the calendar `jiff` uses.
+pub(crate) fn is_leap_year(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 #[cfg(feature = "dates-jiff")]
@@ -315,6 +388,95 @@ mod tests {
         assert_close(parsed.best.as_ref().unwrap().value.unwrap(), 5.0 / 6.0);
         assert_eq!(parsed.alternatives[0].kind, Kind::Date);
         assert_eq!(parsed.alternatives[0].date.as_deref(), Some("2026-05-06"));
+        // Three readings now compete: the fraction, the month-first date, and
+        // the day-first date that used to be dropped.
+        assert_eq!(parsed.alternatives[1].date.as_deref(), Some("2026-06-05"));
+        assert_eq!(parsed.findings.ambiguities[0].candidate_count, Some(3));
+    }
+
+    #[test]
+    fn never_emits_a_date_the_calendar_does_not_have() {
+        for input in ["2/31", "2/30", "4/31", "11/31", "6/31", "9/31"] {
+            let parsed = parse(
+                input,
+                Some(ParseCtx {
+                    reference_date: Date::new(2026, 7, 19),
+                    ..ParseCtx::default()
+                }),
+            );
+            for reading in parsed.best.iter().chain(parsed.alternatives.iter()) {
+                assert_eq!(reading.date, None, "{input}: {reading:?}");
+            }
+            // The input is still accounted for rather than dropped in silence.
+            assert!(
+                parsed.best.is_some()
+                    || !parsed.findings.skipped.is_empty()
+                    || !parsed.findings.ambiguities.is_empty(),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn leap_day_is_accepted_only_in_a_leap_year() {
+        let leap = parse(
+            "2/29",
+            Some(ParseCtx {
+                reference_date: Date::new(2024, 7, 19),
+                ..ParseCtx::default()
+            }),
+        );
+        assert_eq!(leap.alternatives[0].date.as_deref(), Some("2024-02-29"));
+
+        let common = parse(
+            "2/29",
+            Some(ParseCtx {
+                reference_date: Date::new(2026, 7, 19),
+                ..ParseCtx::default()
+            }),
+        );
+        for reading in common.best.iter().chain(common.alternatives.iter()) {
+            assert_eq!(reading.date, None, "{reading:?}");
+        }
+
+        assert_eq!(days_in_month(2000, 2), Some(29));
+        assert_eq!(days_in_month(1900, 2), Some(28));
+        assert_eq!(days_in_month(2026, 13), None);
+        assert_eq!(checked_date(2026, 2, 31), None);
+    }
+
+    #[test]
+    fn two_part_slash_dates_honour_en_gb_day_first_order() {
+        let ctx = Some(ParseCtx {
+            locale: Some(Locale::EnGb),
+            reference_date: Date::new(2026, 7, 19),
+            ..ParseCtx::default()
+        });
+
+        let parsed = parse("5/6", ctx);
+        // Day-first, matching what `5/6/2026` already yields for en-GB.
+        assert_eq!(parsed.alternatives[0].date.as_deref(), Some("2026-06-05"));
+        // The competing month-first reading is offered, not silently dropped.
+        assert_eq!(parsed.alternatives[1].date.as_deref(), Some("2026-05-06"));
+        assert_eq!(
+            parsed.findings.ambiguities[0].code,
+            IssueCode::AmbiguousDate
+        );
+        assert_eq!(parsed.findings.ambiguities[0].candidate_count, Some(3));
+    }
+
+    #[test]
+    fn unambiguous_day_number_yields_one_date_reading() {
+        // 25 cannot be a month, so only one date order is plausible.
+        let parsed = parse(
+            "5/25",
+            Some(ParseCtx {
+                reference_date: Date::new(2026, 7, 19),
+                ..ParseCtx::default()
+            }),
+        );
+        assert_eq!(parsed.alternatives.len(), 1);
+        assert_eq!(parsed.alternatives[0].date.as_deref(), Some("2026-05-25"));
         assert_eq!(parsed.findings.ambiguities[0].candidate_count, Some(2));
     }
 

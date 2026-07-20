@@ -121,6 +121,13 @@ pub(crate) fn normalize_decimal_grouped_number(
     if fraction.is_empty() || !fraction.chars().all(|ch| ch.is_ascii_digit()) {
         return None;
     }
+    // Grouping in the whole part must actually be grouping. Without this,
+    // `1.2.3,45` was read as `123.45`: separators were stripped without ever
+    // checking that they sat on group boundaries, unlike the decimal-free
+    // paths, which reject `1.23.4` outright.
+    if whole.contains(grouping) && !valid_grouping_widths(whole, grouping) {
+        return None;
+    }
     let whole_without_groups = whole.replace(grouping, "");
     if whole_without_groups.is_empty()
         || !whole_without_groups
@@ -131,6 +138,19 @@ pub(crate) fn normalize_decimal_grouped_number(
         return None;
     }
     Some(format!("{whole_without_groups}.{fraction}"))
+}
+
+/// Checks the whole part of a decimal number for well-formed digit grouping.
+///
+/// Defers to the same validators the decimal-free paths use, so the two agree:
+/// western three-digit groups either way, plus Indian two-digit grouping when
+/// the separator is a comma (`12,34,567.89`).
+pub(crate) fn valid_grouping_widths(whole: &str, grouping: char) -> bool {
+    if grouping == ',' {
+        valid_grouped_number(whole) || valid_indian_grouped_number(whole)
+    } else {
+        valid_dot_grouped_number(whole)
+    }
 }
 
 pub(crate) fn parse_japanese_large_number(text: &str) -> Option<f64> {
@@ -417,6 +437,76 @@ mod tests {
         );
         assert_eq!(parsed.findings.ambiguities[0].span.start, 0);
         assert_eq!(parsed.findings.ambiguities[0].span.end, 5);
+    }
+
+    #[test]
+    fn surfaces_ambiguous_dot_number_symmetrically_with_comma() {
+        let parsed = parse("1.234", None);
+        let best = parsed.best.expect("best reading");
+        assert_close(best.value.unwrap(), 1.234);
+        assert_eq!(parsed.alternatives.len(), 1);
+        assert_close(parsed.alternatives[0].value.unwrap(), 1234.0);
+        assert_eq!(
+            parsed.findings.ambiguities[0].code,
+            IssueCode::AmbiguousNumber
+        );
+        assert_eq!(parsed.findings.ambiguities[0].ref_text, "1.234");
+        assert_eq!(parsed.findings.ambiguities[0].candidate_count, Some(2));
+
+        // An explicit format is the caller resolving the ambiguity, so no
+        // alternative and no finding — the comma path already behaves this way.
+        for number_format in [NumberFormat::DotDecimal, NumberFormat::CommaDecimal] {
+            for input in ["1.234", "1,234"] {
+                let parsed = parse(
+                    input,
+                    Some(ParseCtx {
+                        number_format,
+                        ..ParseCtx::default()
+                    }),
+                );
+                assert!(parsed.alternatives.is_empty(), "{input} {number_format:?}");
+                assert!(
+                    parsed.findings.ambiguities.is_empty(),
+                    "{input} {number_format:?}"
+                );
+            }
+        }
+
+        // Only a genuine grouping shape is ambiguous.
+        for unambiguous in ["1.23", "3.5", "0.5", "1234.567"] {
+            let parsed = parse(unambiguous, None);
+            assert!(
+                parsed.findings.ambiguities.is_empty(),
+                "{unambiguous}: {:?}",
+                parsed.findings.ambiguities
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_grouping_in_decimal_numbers() {
+        // `1.2.3` is not valid dot grouping, so `1.2.3,45` is not a number —
+        // it used to be silently read as 123.45.
+        for input in ["1.2.3,45", "1.23.4,5", "1,2,3.45"] {
+            let parsed = parse(input, None);
+            assert!(parsed.best.is_none(), "{input}: {:?}", parsed.best);
+            assert!(!parsed.findings.skipped.is_empty(), "{input}");
+        }
+
+        assert_eq!(normalize_decimal_grouped_number("1.2.3,45", ',', '.'), None);
+        // Well-formed grouping still normalizes, western and Indian alike.
+        assert_eq!(
+            normalize_decimal_grouped_number("1.234.567,89", ',', '.').as_deref(),
+            Some("1234567.89")
+        );
+        assert_eq!(
+            normalize_decimal_grouped_number("12,34,567.89", '.', ',').as_deref(),
+            Some("1234567.89")
+        );
+        assert_eq!(
+            normalize_decimal_grouped_number("1234,56", ',', '.').as_deref(),
+            Some("1234.56")
+        );
     }
 
     #[test]

@@ -438,18 +438,57 @@ pub(crate) fn reading_is_dimension_quantity(
     }
 }
 
+/// Non-whitespace characters of context every label test can possibly read.
+///
+/// The widest label is `"wall thickness"` — 13 non-whitespace characters — and
+/// [`ascii_label_suffix_matches`] also looks at the one character in front of
+/// the match. 16 leaves margin over that 14, and every other test in
+/// [`editor_label_matches`] reads strictly less. Because every test is a suffix
+/// test, a window holding this much context answers exactly what the whole
+/// clause prefix would; see `editor_label_window`.
+pub(crate) const EDITOR_LABEL_CONTEXT_CHARS: usize = 16;
+
+pub(crate) fn is_editor_label_separator(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, ':' | '：' | '=' | '＝' | '-' | 'ー' | '―' | '–' | '—')
+}
+
+/// Returns the tail of the clause prefix that the label tests can see.
+///
+/// Every test in [`editor_label_matches`] is a suffix test on this string (or
+/// on its whitespace-stripped form), so only the last
+/// [`EDITOR_LABEL_CONTEXT_CHARS`] non-whitespace characters can affect the
+/// answer. Slicing the whole prefix instead — and lowercasing it — made
+/// [`crate::parse_dimensions_for_editor`] quadratic in clause length, because
+/// each of the clause's candidates re-read everything in front of it.
+pub(crate) fn editor_label_window(
+    source: &str,
+    clause_start: usize,
+    candidate_start: usize,
+) -> Option<&str> {
+    let trimmed = source
+        .get(clause_start..candidate_start)?
+        .trim_end_matches(is_editor_label_separator);
+
+    let mut window_start = trimmed.len();
+    let mut seen = 0usize;
+    for (idx, ch) in trimmed.char_indices().rev() {
+        window_start = idx;
+        if !ch.is_whitespace() {
+            seen += 1;
+            if seen == EDITOR_LABEL_CONTEXT_CHARS {
+                break;
+            }
+        }
+    }
+    trimmed.get(window_start..)
+}
+
 pub(crate) fn editor_dimension_hint(
     source: &str,
     clause_start: usize,
     candidate_start: usize,
 ) -> Option<Dimension> {
-    let before = source.get(clause_start..candidate_start)?.trim_end();
-    let before = before
-        .trim_end_matches(|ch: char| {
-            ch.is_whitespace()
-                || matches!(ch, ':' | '：' | '=' | '＝' | '-' | 'ー' | '―' | '–' | '—')
-        })
-        .trim_end();
+    let before = editor_label_window(source, clause_start, candidate_start)?;
     let lower = ascii_lower_cow(before);
     let mut compact = None;
 
@@ -542,6 +581,14 @@ pub(crate) fn candidate_end(text: &str, start: usize, limit: usize) -> usize {
     let mut saw_number = false;
     let mut previous_was_digit = false;
     let mut after_number_gap = false;
+    // Memoizes the first non-space character at or after `resolved_at`. Every
+    // space in one whitespace run resolves to the same character, so the run is
+    // scanned once instead of once per space (which made this loop O(w^2)).
+    // `resolved_at = 0` is never reachable as a real answer — the loop only
+    // consults this past a space, so the offset asked about is always above
+    // zero — which makes it a free "nothing memoized yet".
+    let mut resolved_at = 0usize;
+    let mut resolved_char = None;
 
     for (idx, ch) in text[start..limit].char_indices() {
         let abs = start + idx;
@@ -560,13 +607,23 @@ pub(crate) fn candidate_end(text: &str, start: usize, limit: usize) -> usize {
             continue;
         }
         if is_candidate_space(ch) {
-            if previous_was_digit && next_nonspace_is_digit(text, abs + ch.len_utf8(), limit) {
-                end = abs + ch.len_utf8();
+            let after = abs + ch.len_utf8();
+            // Everything in `[after, resolved_at)` is a space when the memo
+            // still applies, so a later space in the same run resolves to the
+            // character the run's first space already found. Neither test below
+            // consults it unless one of these two flags holds, and the original
+            // short-circuited the same way, so a space that ends the candidate
+            // still costs nothing.
+            if (previous_was_digit || (saw_number && !saw_unit)) && after > resolved_at {
+                (resolved_at, resolved_char) = first_nonspace_from(text, after, limit);
+            }
+            if previous_was_digit && resolved_char.is_some_and(is_digit_like) {
+                end = after;
                 continue;
             }
-            if saw_number && !saw_unit && next_nonspace_is_unit(text, abs + ch.len_utf8(), limit) {
+            if saw_number && !saw_unit && resolved_char.is_some_and(is_candidate_unit_char) {
                 after_number_gap = true;
-                end = abs + ch.len_utf8();
+                end = after;
                 continue;
             }
             break;
@@ -588,17 +645,9 @@ pub(crate) fn candidate_end(text: &str, start: usize, limit: usize) -> usize {
         break;
     }
 
-    while end > start
-        && text[start..end]
-            .chars()
-            .last()
-            .is_some_and(char::is_whitespace)
-    {
-        let Some((idx, _)) = text[start..end].char_indices().last() else {
-            break;
-        };
-        end = start + idx;
-    }
+    // Same result as popping trailing whitespace characters one at a time, in
+    // one pass instead of one pass per character removed.
+    end = start + text[start..end].trim_end_matches(char::is_whitespace).len();
 
     if !saw_number {
         return start;
@@ -622,32 +671,27 @@ pub(crate) fn is_candidate_space(ch: char) -> bool {
     ch.is_whitespace() || matches!(ch, '\u{00A0}' | '\u{202F}' | '\u{2009}' | '\u{2007}')
 }
 
-pub(crate) fn next_nonspace_is_digit(text: &str, mut cursor: usize, limit: usize) -> bool {
+/// Finds the first non-space character at or after `cursor`, before `limit`.
+///
+/// Returns the offset it was found at (or `limit`) and the character itself.
+/// Callers memoize the result across one whitespace run: every space in a run
+/// resolves to the same character, so the run only has to be walked once.
+pub(crate) fn first_nonspace_from(
+    text: &str,
+    mut cursor: usize,
+    limit: usize,
+) -> (usize, Option<char>) {
     while cursor < limit {
         let Some(ch) = text[cursor..limit].chars().next() else {
-            return false;
+            return (limit, None);
         };
         if is_candidate_space(ch) {
             cursor += ch.len_utf8();
             continue;
         }
-        return is_digit_like(ch);
+        return (cursor, Some(ch));
     }
-    false
-}
-
-pub(crate) fn next_nonspace_is_unit(text: &str, mut cursor: usize, limit: usize) -> bool {
-    while cursor < limit {
-        let Some(ch) = text[cursor..limit].chars().next() else {
-            return false;
-        };
-        if is_candidate_space(ch) {
-            cursor += ch.len_utf8();
-            continue;
-        }
-        return is_candidate_unit_char(ch);
-    }
-    false
+    (limit, None)
 }
 
 pub(crate) fn is_candidate_unit_char(ch: char) -> bool {
@@ -823,4 +867,273 @@ pub(crate) fn is_editor_plain_number_candidate(text: &str) -> bool {
         return false;
     }
     saw_number
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The scanner as it read before the whitespace run was resolved in one
+    /// pass: a fresh forward walk over the rest of the run for every space.
+    /// Kept as an oracle so "faster" stays provably "same answer".
+    fn candidate_end_reference(text: &str, start: usize, limit: usize) -> usize {
+        fn next_nonspace_is(
+            text: &str,
+            mut cursor: usize,
+            limit: usize,
+            accept: fn(char) -> bool,
+        ) -> bool {
+            while cursor < limit {
+                let Some(ch) = text[cursor..limit].chars().next() else {
+                    return false;
+                };
+                if is_candidate_space(ch) {
+                    cursor += ch.len_utf8();
+                    continue;
+                }
+                return accept(ch);
+            }
+            false
+        }
+
+        let mut end = start;
+        let mut saw_unit = false;
+        let mut saw_number = false;
+        let mut previous_was_digit = false;
+        let mut after_number_gap = false;
+
+        for (idx, ch) in text[start..limit].char_indices() {
+            let abs = start + idx;
+            if idx > 0 && is_candidate_boundary(text, abs, ch) {
+                break;
+            }
+            if idx == 0 && ch == '約' {
+                end = abs + ch.len_utf8();
+                continue;
+            }
+            if is_numeric_body_char(ch) {
+                saw_number = true;
+                previous_was_digit = is_digit_like(ch);
+                after_number_gap = false;
+                end = abs + ch.len_utf8();
+                continue;
+            }
+            if is_candidate_space(ch) {
+                if previous_was_digit
+                    && next_nonspace_is(text, abs + ch.len_utf8(), limit, is_digit_like)
+                {
+                    end = abs + ch.len_utf8();
+                    continue;
+                }
+                if saw_number
+                    && !saw_unit
+                    && next_nonspace_is(text, abs + ch.len_utf8(), limit, is_candidate_unit_char)
+                {
+                    after_number_gap = true;
+                    end = abs + ch.len_utf8();
+                    continue;
+                }
+                break;
+            }
+            if saw_number && is_candidate_unit_char(ch) {
+                saw_unit = true;
+                previous_was_digit = false;
+                after_number_gap = false;
+                end = abs + ch.len_utf8();
+                continue;
+            }
+            if after_number_gap {
+                break;
+            }
+            if idx == 0 && matches!(ch, '$' | '€' | '£' | '¥' | '￥') {
+                end = abs + ch.len_utf8();
+                continue;
+            }
+            break;
+        }
+
+        while end > start
+            && text[start..end]
+                .chars()
+                .last()
+                .is_some_and(char::is_whitespace)
+        {
+            let Some((idx, _)) = text[start..end].char_indices().last() else {
+                break;
+            };
+            end = start + idx;
+        }
+
+        if !saw_number {
+            return start;
+        }
+        end
+    }
+
+    #[test]
+    fn candidate_end_matches_the_per_space_walk() {
+        let mut inputs = vec![
+            String::from("5 m"),
+            String::from("5  m"),
+            String::from("5\u{00A0}\u{202F} m"),
+            String::from("1 234 567"),
+            String::from("5 \t m"),
+            String::from("5 \n m"),
+            String::from("5 "),
+            String::from("5   "),
+            String::from("約 5 m"),
+            String::from("$ 5"),
+            String::from("5 m 3 kg"),
+            String::from("3 × 4 m"),
+            String::from("5   ×   4"),
+            String::from("5 、m"),
+            String::from("１２ ｍ"),
+            String::from("5   3   m"),
+        ];
+        for width in [0usize, 1, 2, 3, 7, 64, 300] {
+            let spaces = " ".repeat(width);
+            for tail in ["m", "", "3", "kg", "\tm", "、", "×4", "-"] {
+                inputs.push(format!("5{spaces}{tail}"));
+                inputs.push(format!("5.5{spaces}{tail}"));
+                inputs.push(format!("約5{spaces}{tail}"));
+            }
+        }
+
+        for text in &inputs {
+            for start in 0..text.len() {
+                if !text.is_char_boundary(start) {
+                    continue;
+                }
+                assert_eq!(
+                    candidate_end(text, start, text.len()),
+                    candidate_end_reference(text, start, text.len()),
+                    "{text:?} at {start}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn long_whitespace_run_reads_as_the_short_one() {
+        let short = parse_all("5 m", None);
+        for width in [1usize, 2, 500, 4000, 16000] {
+            let text = format!("5{}m", " ".repeat(width));
+            let long = parse_all(&text, None);
+            assert_eq!(long.len(), short.len(), "width {width}");
+            assert_eq!(long[0].text, text, "width {width}");
+            let reading = long[0].parsed.best.as_ref().expect("reading");
+            let expected = short[0].parsed.best.as_ref().expect("reading");
+            assert_eq!(reading.kind, expected.kind, "width {width}");
+            assert_eq!(reading.unit, expected.unit, "width {width}");
+            assert_eq!(reading.dimension, expected.dimension, "width {width}");
+            assert_eq!(reading.value, expected.value, "width {width}");
+            // The whole run belongs to the match, exactly as one space does.
+            assert_eq!(long[0].start, 0, "width {width}");
+            assert_eq!(long[0].end, text.len(), "width {width}");
+        }
+    }
+
+    /// The hint as it read before the inspected window was bounded: the whole
+    /// clause prefix, sliced and lowercased for every candidate.
+    fn editor_dimension_hint_reference(
+        source: &str,
+        clause_start: usize,
+        candidate_start: usize,
+    ) -> Option<Dimension> {
+        let before = source.get(clause_start..candidate_start)?.trim_end();
+        let before = before
+            .trim_end_matches(|ch: char| {
+                ch.is_whitespace()
+                    || matches!(ch, ':' | '：' | '=' | '＝' | '-' | 'ー' | '―' | '–' | '—')
+            })
+            .trim_end();
+        let lower = ascii_lower_cow(before);
+        let mut compact = None;
+
+        for (label, dimension) in EDITOR_DIMENSION_LABELS {
+            if editor_label_matches(before, lower.as_ref(), &mut compact, label) {
+                return Some(*dimension);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn editor_label_window_never_changes_which_label_wins() {
+        let mut prefixes: Vec<String> = Vec::new();
+        for label in EDITOR_DIMENSION_LABELS {
+            let label = label.0;
+            let spaced = compound_editor_label(label).unwrap_or(label);
+            for lead in ["", "x", "0", "床", "Total ", "3m ", "note:", "の"] {
+                for tail in ["", ":", "：", " = ", "  ", "ー", " -- ", "—"] {
+                    prefixes.push(format!("{lead}{label}{tail}"));
+                    prefixes.push(format!("{lead}{spaced}{tail}"));
+                    prefixes.push(format!("{lead}{}{tail}", label.to_uppercase()));
+                    // Padding in front must not reach the answer.
+                    prefixes.push(format!("{}{lead}{label}{tail}", "3m ".repeat(40)));
+                    prefixes.push(format!("{}{lead}{spaced}{tail}", "a".repeat(40)));
+                }
+            }
+        }
+        prefixes.push(String::new());
+        prefixes.push(String::from("   "));
+        prefixes.push(String::from("wall   thickness "));
+        prefixes.push(String::from("floor    area:"));
+        prefixes.push(String::from("swidth "));
+        prefixes.push(String::from("3width "));
+        prefixes.push(String::from("aw "));
+        prefixes.push(String::from("1w "));
+
+        for prefix in &prefixes {
+            let source = format!("{prefix}3m");
+            let candidate_start = prefix.len();
+            assert_eq!(
+                editor_dimension_hint(&source, 0, candidate_start),
+                editor_dimension_hint_reference(&source, 0, candidate_start),
+                "{prefix:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn many_editor_candidates_read_like_a_few() {
+        let small = parse_dimensions_for_editor(&"3m ".repeat(4), None);
+        assert_eq!(small.len(), 4);
+
+        for count in [8usize, 256, 2048] {
+            let matches = parse_dimensions_for_editor(&"3m ".repeat(count), None);
+            assert_eq!(matches.len(), count, "count {count}");
+            for (index, item) in matches.iter().enumerate() {
+                assert_eq!(item.start, index * 3, "count {count} index {index}");
+                assert_eq!(item.end, index * 3 + 2, "count {count} index {index}");
+                assert_eq!(item.text, small[0].text, "count {count} index {index}");
+                let reading = item.parsed.best.as_ref().expect("reading");
+                let expected = small[0].parsed.best.as_ref().expect("reading");
+                assert_eq!(reading.unit, expected.unit, "count {count} index {index}");
+                assert_eq!(reading.value, expected.value, "count {count} index {index}");
+                assert_eq!(
+                    reading.dimension, expected.dimension,
+                    "count {count} index {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn labelled_editor_clause_keeps_its_hint_at_any_offset() {
+        // The label sits at the very start; later candidates are far past the
+        // bounded window and must still be read against it or against nothing,
+        // exactly as the full-prefix scan decided.
+        let source = format!("幅：{}", "3m ".repeat(64));
+        let matches = parse_dimensions_for_editor(&source, None);
+        let reference: Vec<Option<Dimension>> = matches
+            .iter()
+            .map(|item| editor_dimension_hint_reference(&source, 0, item.start))
+            .collect();
+        let actual: Vec<Option<Dimension>> = matches
+            .iter()
+            .map(|item| editor_dimension_hint(&source, 0, item.start))
+            .collect();
+        assert_eq!(actual, reference);
+    }
 }

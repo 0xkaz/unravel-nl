@@ -194,14 +194,22 @@ pub(crate) fn parse_clock_time(text: &str) -> Option<Reading> {
     ))
 }
 
-pub(crate) fn parse_timezone_clock_time(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+/// Reads a wall-clock time with a timezone suffix, normalized to UTC.
+///
+/// Returns the reading together with the civil day shift the conversion
+/// implied: `-1` when the UTC instant falls on the previous day, `1` when it
+/// falls on the next. The reading carries only a seconds-of-day value, so the
+/// caller has to surface that shift as a finding rather than let it vanish.
+pub(crate) fn parse_timezone_clock_time(text: &str, ctx: &ParseCtx) -> Option<(Reading, i64)> {
     let trimmed = text.trim();
     let zone = trimmed.split_whitespace().last()?;
     let head = trimmed.strip_suffix(zone)?.trim_end();
     let seconds = parse_clock_seconds(head)?;
     let offset = timezone_offset_seconds(zone)
         .or_else(|| iana_timezone_offset_seconds(zone, seconds, ctx.reference_date))?;
-    let utc_seconds = modulo_day(seconds - f64::from(offset));
+    let shifted = seconds - f64::from(offset);
+    let day_shift = (shifted / 86_400.0).floor() as i64;
+    let utc_seconds = modulo_day(shifted);
     let mut reading = Reading::quantity(
         utc_seconds,
         "s",
@@ -211,7 +219,7 @@ pub(crate) fn parse_timezone_clock_time(text: &str, ctx: &ParseCtx) -> Option<Re
         0.9,
     );
     reading.timezone = Some("UTC".to_owned());
-    Some(reading)
+    Some((reading, day_shift))
 }
 
 pub(crate) fn unsupported_timezone_suffix(text: &str) -> Option<&str> {
@@ -616,5 +624,49 @@ mod tests {
         assert_eq!(parsed.findings.skipped[0].ref_text, "Europe/Paris");
         assert_eq!(parsed.findings.skipped[0].span.start, 4);
         assert_eq!(parsed.findings.skipped[0].span.end, 16);
+    }
+
+    #[test]
+    fn reports_the_civil_day_shift_a_timezone_conversion_implies() {
+        // 1:00 JST is 16:00 UTC on the PREVIOUS civil day. The reading carries
+        // only a seconds-of-day value, so the day shift has to be surfaced.
+        let parsed = parse("1:00 JST", None);
+        let best = parsed.best.as_ref().expect("a reading");
+
+        assert_eq!(best.value, Some(57_600.0));
+        assert_eq!(best.timezone.as_deref(), Some("UTC"));
+        assert_eq!(parsed.findings.approximations.len(), 1);
+        assert_eq!(
+            parsed.findings.approximations[0].code,
+            IssueCode::Approximation
+        );
+        assert!(
+            parsed.findings.approximations[0]
+                .reason
+                .contains("previous civil day")
+        );
+    }
+
+    #[test]
+    fn does_not_flag_a_conversion_that_stays_on_the_same_day() {
+        let parsed = parse("9:30 UTC", None);
+
+        assert_eq!(parsed.best.as_ref().and_then(|r| r.value), Some(34_200.0));
+        assert!(parsed.findings.approximations.is_empty());
+    }
+
+    #[test]
+    fn reports_a_forward_day_shift_too() {
+        // 23:00 in a negative-offset zone lands on the NEXT UTC civil day.
+        let parsed = parse("23:00 EST", None);
+        let best = parsed.best.as_ref().expect("a reading");
+
+        assert_eq!(best.value, Some(14_400.0));
+        assert_eq!(parsed.findings.approximations.len(), 1);
+        assert!(
+            parsed.findings.approximations[0]
+                .reason
+                .contains("next civil day")
+        );
     }
 }

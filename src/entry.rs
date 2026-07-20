@@ -496,8 +496,18 @@ pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &
     }
 
     if features.maybe_timezone_clock
-        && let Some(reading) = parse_timezone_clock_time(trimmed, ctx)
+        && let Some((reading, day_shift)) = parse_timezone_clock_time(trimmed, ctx)
     {
+        if day_shift != 0 {
+            let direction = if day_shift < 0 { "previous" } else { "next" };
+            parsed.findings.approximations.push(approximation_with_span(
+                trimmed,
+                &format!(
+                    "time of day only; converting to UTC moves it to the {direction} civil day"
+                ),
+                span(trimmed),
+            ));
+        }
         parsed.best = Some(reading);
         return;
     }

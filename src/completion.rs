@@ -354,6 +354,9 @@ pub(crate) fn push_owned_completion(
     if !completion_allowed(kind, dimension, ctx) {
         return;
     }
+    if !completion_prefix_can_match(value, normalized_prefix) {
+        return;
+    }
     let normalized_value = normalize_alias(value);
     if !normalized_value.starts_with(normalized_prefix) {
         return;
@@ -373,6 +376,27 @@ pub(crate) fn push_owned_completion(
         dimension,
         score,
     });
+}
+
+/// Decides, without allocating, whether `value` can still match the prefix.
+///
+/// [`normalize_alias`] allocates twice, and the overwhelming majority of the
+/// ~340 candidates offered per keystroke are rejected by the `starts_with` test
+/// straight afterwards. Every character [`push_normalized_char`] rewrites is
+/// non-ASCII, so for an ASCII `value` normalization is exactly
+/// `value.trim().to_ascii_lowercase()` and the prefix test can be answered on
+/// the borrowed bytes. A non-ASCII `value` is passed through for the full test
+/// rather than guessed at.
+pub(crate) fn completion_prefix_can_match(value: &str, normalized_prefix: &str) -> bool {
+    if !value.is_ascii() {
+        return true;
+    }
+    let value = value.trim();
+    // A non-ASCII prefix byte can never equal a byte of an ASCII value, so
+    // `eq_ignore_ascii_case` answers the mixed case correctly too.
+    value.len() >= normalized_prefix.len()
+        && value.as_bytes()[..normalized_prefix.len()]
+            .eq_ignore_ascii_case(normalized_prefix.as_bytes())
 }
 
 pub(crate) fn completion_allowed(
@@ -409,6 +433,43 @@ pub(crate) fn completion_score(prefix: &str, value: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cheap_prefilter_never_rejects_a_real_completion() {
+        let mut values: Vec<&str> = Vec::new();
+        for unit in UNIT_DEFS {
+            values.extend(unit.aliases.iter().copied());
+            values.push(unit.id);
+        }
+        values.extend(LEGACY_UNIT_COMPLETIONS.iter().map(|item| item.0));
+        values.extend(DATE_COMPLETIONS.iter().copied());
+        values.extend(TIME_COMPLETIONS.iter().copied());
+        values.extend(CURRENCY_COMPLETIONS.iter().map(|item| item.0));
+
+        let mut prefixes: Vec<String> = vec![String::new()];
+        for value in &values {
+            let normalized = normalize_alias(value);
+            for take in 0..=normalized.chars().count() {
+                prefixes.push(normalized.chars().take(take).collect());
+            }
+            prefixes.push(format!("{normalized}z"));
+        }
+        prefixes.sort();
+        prefixes.dedup();
+
+        for value in &values {
+            let normalized_value = normalize_alias(value);
+            for prefix in &prefixes {
+                // The prefilter may only reject what the real test rejects.
+                if normalized_value.starts_with(prefix.as_str()) {
+                    assert!(
+                        completion_prefix_can_match(value, prefix),
+                        "{value:?} / {prefix:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn completes_units_dates_and_custom_units() {

@@ -158,6 +158,12 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
 /// from an approximate conversion are marked as approximate rather than
 /// presented as exact.
 ///
+/// A reading that carries no usable value still renders as a word rather than
+/// an empty string, so the output is always displayable: `unknown date`,
+/// `unknown recurrence`, `unresolved range`, `unresolved`, and — for a value
+/// that is infinite or `NaN`, which [`parse`] never produces but a hand-built
+/// [`Reading`] can hold — the literal `unrepresentable`.
+///
 /// ```
 /// use unravel_nl::{humanize, parse, HumanizeCtx, Locale, ParseCtx};
 ///

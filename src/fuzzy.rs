@@ -290,24 +290,59 @@ pub(crate) fn strip_prefix_ascii_case<'a>(text: &'a str, prefix: &str) -> Option
         .then(|| &text[prefix.len()..])
 }
 
+/// Surfaces a single separator that could be grouping or a decimal point.
+///
+/// Only under [`NumberFormat::Auto`]: an explicit `DotDecimal` or
+/// `CommaDecimal` is the caller resolving the ambiguity, and there is nothing
+/// left to report. The dot and the comma are treated the same way, because
+/// under `Auto` they are equally undecidable — `1.234` is a thousands-grouped
+/// `1234` exactly as much as `1,234` is, and dot grouping is accepted
+/// elsewhere (`1.234.567`).
 pub(crate) fn parse_ambiguous_number(text: &str, ctx: &ParseCtx) -> Option<AmbiguousParse> {
     if ctx.number_format != NumberFormat::Auto {
         return None;
     }
-    if text.matches(',').count() != 1 || text.contains('.') || !valid_grouped_number(text) {
+    if text.contains(',') {
+        return ambiguous_separator_number(text, ',');
+    }
+    if text.contains('.') {
+        return ambiguous_separator_number(text, '.');
+    }
+    None
+}
+
+pub(crate) fn ambiguous_separator_number(text: &str, separator: char) -> Option<AmbiguousParse> {
+    if text.matches(separator).count() != 1 {
         return None;
     }
+    let grouped_is_valid = if separator == ',' {
+        valid_grouped_number(text)
+    } else {
+        valid_dot_grouped_number(text)
+    };
+    if !grouped_is_valid {
+        return None;
+    }
+
     let best = parse_number(text)?;
-    let decimal = text.replace(',', ".").parse::<f64>().ok()?;
+    let grouped = text.replace(separator, "").parse::<f64>().ok()?;
+    let decimal = text
+        .replace(separator, ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|value| *value != grouped)?;
+    // `parse_number` already picked a reading; the other one becomes the
+    // alternative so neither is silently discarded.
+    let alternative = if best == grouped { decimal } else { grouped };
+    let reason = if separator == ',' {
+        "Comma can be read as a thousands separator or a decimal separator."
+    } else {
+        "Dot can be read as a thousands separator or a decimal separator."
+    };
     Some(AmbiguousParse {
         best: Some(Reading::number(best, 0.64)),
-        alternatives: vec![Reading::number(decimal, 0.56)],
-        ambiguity: ambiguity(
-            text,
-            "Comma can be read as a thousands separator or a decimal separator.",
-            Some(2),
-            IssueCode::AmbiguousNumber,
-        ),
+        alternatives: vec![Reading::number(alternative, 0.56)],
+        ambiguity: ambiguity(text, reason, Some(2), IssueCode::AmbiguousNumber),
     })
 }
 

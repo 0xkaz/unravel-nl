@@ -1,4 +1,5 @@
 use crate::*;
+use std::sync::OnceLock;
 
 pub(crate) const SHAKU_M: f64 = 10.0 / 33.0;
 pub(crate) const SUN_M: f64 = 1.0 / 33.0;
@@ -74,11 +75,108 @@ pub(crate) enum AliasMatchMode {
     AsciiCase,
 }
 
-pub(crate) fn fast_unit_by_alias(alias: &str, mode: AliasMatchMode) -> Option<&'static UnitDef> {
-    FAST_UNIT_ALIASES
+/// One registry alias, exactly as [`alias_matches`] used to see it (the
+/// fallback registry trims, the fast table does not), paired with the unit it
+/// resolves to.
+///
+/// The resolution is stored rather than re-derived: `fast_unit_by_alias` used
+/// to look up a unit *id* and then rescan all of [`UNIT_DEFS`] to turn it back
+/// into a definition. `unit` is `None` exactly when that rescan would have
+/// failed, so a fast alias naming an unknown id still yields `None` instead of
+/// falling through to a later alias.
+struct AliasEntry {
+    alias: &'static str,
+    unit: Option<&'static UnitDef>,
+}
+
+/// Registry aliases bucketed by the first byte of the alias, ASCII-folded.
+///
+/// [`alias_matches`] can only return `true` when the two strings share a first
+/// byte up to ASCII case — exact equality forces it, and the `AsciiCase` arm
+/// tests it explicitly — so an alias in another bucket is a guaranteed
+/// non-match and skipping it cannot change an answer. Each bucket keeps
+/// registry order, which is what makes "first match wins" mean the same thing
+/// as it did over the flat table.
+struct AliasIndex {
+    entries: Vec<AliasEntry>,
+    /// Start offset of each bucket in `entries`; `buckets[256]` is the end.
+    buckets: [u32; 257],
+}
+
+impl AliasIndex {
+    fn build(aliases: impl Iterator<Item = (&'static str, Option<&'static UnitDef>)>) -> Self {
+        let mut per_bucket: Vec<Vec<AliasEntry>> = (0..256).map(|_| Vec::new()).collect();
+        for (alias, unit) in aliases {
+            // An empty candidate never matches, so it never needs visiting.
+            let Some(first) = alias.as_bytes().first() else {
+                continue;
+            };
+            per_bucket[usize::from(first.to_ascii_lowercase())].push(AliasEntry { alias, unit });
+        }
+
+        let mut entries = Vec::new();
+        let mut buckets = [0u32; 257];
+        for (index, bucket) in per_bucket.into_iter().enumerate() {
+            buckets[index] = entries.len() as u32;
+            entries.extend(bucket);
+        }
+        buckets[256] = entries.len() as u32;
+        Self { entries, buckets }
+    }
+
+    /// Returns the aliases that could match `alias`, in registry order.
+    fn candidates(&self, alias: &str) -> &[AliasEntry] {
+        let Some(first) = alias.as_bytes().first() else {
+            return &[];
+        };
+        let bucket = usize::from(first.to_ascii_lowercase());
+        &self.entries[self.buckets[bucket] as usize..self.buckets[bucket + 1] as usize]
+    }
+}
+
+fn fast_alias_index() -> &'static AliasIndex {
+    static INDEX: OnceLock<AliasIndex> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        AliasIndex::build(
+            FAST_UNIT_ALIASES
+                .iter()
+                .map(|(alias, unit_id)| (*alias, unit_by_id(unit_id))),
+        )
+    })
+}
+
+fn fallback_alias_index() -> &'static AliasIndex {
+    static INDEX: OnceLock<AliasIndex> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        AliasIndex::build(UNIT_DEFS.iter().flat_map(|unit| {
+            unit_lookup_aliases(unit).map(move |alias| (alias.trim(), Some(unit)))
+        }))
+    })
+}
+
+/// Registry aliases sharing `token`'s first character up to ASCII case, in
+/// registry order, each with the unit it belongs to.
+///
+/// This is exactly the set [`same_ascii_first_char`] accepts — the bucket key
+/// is the first byte ASCII-folded, and that predicate compares the same two
+/// bytes with `eq_ignore_ascii_case` — so a caller that already applies that
+/// test sees the same aliases in the same order, minus ones it would have
+/// rejected anyway. Aliases arrive trimmed and non-empty.
+pub(crate) fn first_char_alias_candidates(
+    token: &str,
+) -> impl Iterator<Item = (&'static str, &'static UnitDef)> {
+    fallback_alias_index()
+        .candidates(token)
         .iter()
-        .find_map(|(candidate, unit_id)| alias_matches(candidate, alias, mode).then_some(*unit_id))
-        .and_then(unit_by_id)
+        .filter_map(|entry| entry.unit.map(|unit| (entry.alias, unit)))
+}
+
+pub(crate) fn fast_unit_by_alias(alias: &str, mode: AliasMatchMode) -> Option<&'static UnitDef> {
+    fast_alias_index()
+        .candidates(alias)
+        .iter()
+        .find(|entry| alias_matches(entry.alias, alias, mode))
+        .and_then(|entry| entry.unit)
 }
 
 pub(crate) fn unit_by_id(id: &str) -> Option<&'static UnitDef> {
@@ -89,9 +187,11 @@ pub(crate) fn fallback_unit_by_alias(
     alias: &str,
     mode: AliasMatchMode,
 ) -> Option<&'static UnitDef> {
-    UNIT_DEFS.iter().find(|unit| {
-        unit_lookup_aliases(unit).any(|candidate| alias_matches(candidate.trim(), alias, mode))
-    })
+    fallback_alias_index()
+        .candidates(alias)
+        .iter()
+        .find(|entry| alias_matches(entry.alias, alias, mode))
+        .and_then(|entry| entry.unit)
 }
 
 pub(crate) fn alias_matches(candidate: &str, alias: &str, mode: AliasMatchMode) -> bool {
@@ -189,6 +289,90 @@ pub(crate) fn normalize_alias(alias: &str) -> String {
 mod tests {
     use super::*;
     use crate::test_util::assert_close;
+
+    /// The flat scans the first-byte buckets replaced.
+    fn fast_unit_by_alias_reference(alias: &str, mode: AliasMatchMode) -> Option<&'static UnitDef> {
+        FAST_UNIT_ALIASES
+            .iter()
+            .find_map(|(candidate, unit_id)| {
+                alias_matches(candidate, alias, mode).then_some(*unit_id)
+            })
+            .and_then(unit_by_id)
+    }
+
+    fn fallback_unit_by_alias_reference(
+        alias: &str,
+        mode: AliasMatchMode,
+    ) -> Option<&'static UnitDef> {
+        UNIT_DEFS.iter().find(|unit| {
+            unit_lookup_aliases(unit).any(|candidate| alias_matches(candidate.trim(), alias, mode))
+        })
+    }
+
+    fn alias_lookup_corpus() -> Vec<String> {
+        let mut corpus = Vec::new();
+        for unit in UNIT_DEFS {
+            for alias in unit_lookup_aliases(unit) {
+                corpus.push(alias.to_owned());
+                corpus.push(alias.to_uppercase());
+                corpus.push(alias.to_lowercase());
+                corpus.push(format!(" {alias} "));
+                corpus.push(format!("{alias}x"));
+            }
+        }
+        for (alias, unit_id) in FAST_UNIT_ALIASES {
+            corpus.push((*alias).to_owned());
+            corpus.push(alias.to_uppercase());
+            corpus.push((*unit_id).to_owned());
+        }
+        for extra in [
+            "",
+            " ",
+            "x",
+            "xqzw",
+            "meterz",
+            "KG",
+            "Kg",
+            "kG",
+            "M",
+            "㎏",
+            "坪",
+            "米",
+            "\u{00A0}m",
+            "M/S",
+            "MB/S",
+        ] {
+            corpus.push(extra.to_owned());
+        }
+        corpus
+    }
+
+    #[test]
+    fn alias_buckets_resolve_exactly_like_the_flat_scans() {
+        for alias in alias_lookup_corpus() {
+            for mode in [AliasMatchMode::Exact, AliasMatchMode::AsciiCase] {
+                assert_eq!(
+                    fast_unit_by_alias(&alias, mode).map(|unit| unit.id),
+                    fast_unit_by_alias_reference(&alias, mode).map(|unit| unit.id),
+                    "fast {alias:?}"
+                );
+                assert_eq!(
+                    fallback_unit_by_alias(&alias, mode).map(|unit| unit.id),
+                    fallback_unit_by_alias_reference(&alias, mode).map(|unit| unit.id),
+                    "fallback {alias:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_registry_alias_still_resolves_to_its_own_unit() {
+        for unit in UNIT_DEFS {
+            for alias in unit_lookup_aliases(unit) {
+                assert!(unit_by_alias(alias).is_some(), "{alias:?}");
+            }
+        }
+    }
 
     #[test]
     fn exposes_unit_registry_by_dimension() {
