@@ -8,6 +8,8 @@
 //!
 //! - **Deterministic.** The same input and context always produce the same
 //!   result. No randomness, no models, no host clock, no locale environment.
+//! - **No panic.** The public API is written never to panic; input it cannot
+//!   read comes back as a finding, not as an unwind.
 //! - **No silent loss.** Anything skipped, ambiguous, or approximate is
 //!   reported in [`Findings`] instead of being quietly dropped.
 //! - **No forced choice.** When a fragment has several plausible readings, the
@@ -57,7 +59,6 @@
 //!
 //! # Getting started
 //!
-
 //! ```
 //! use unravel_nl::{humanize, parse, HumanizeCtx, Locale, ParseCtx};
 //!
@@ -119,8 +120,6 @@ mod unit_defs;
 mod units;
 mod wasm_json;
 
-#[cfg(any(feature = "wasm", test))]
-pub(crate) use adapters::format_number;
 pub use adapters::{
     CanonicalizeRequest, CanonicalizedValue, canonicalize_values, describe_parsed,
     describe_reading, humanize, repair_tool_call_message,

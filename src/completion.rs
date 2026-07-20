@@ -126,7 +126,8 @@ pub fn complete(prefix: &str, ctx: Option<ParseCtx>) -> Vec<Completion> {
 /// The best reading and its alternatives are returned with their parse
 /// confidence as the score and a `reason` naming where each came from. When the
 /// text is a bare number, candidate units are fanned out so the user can pick
-/// the unit they meant instead of the parser assuming one.
+/// the unit they meant instead of the parser assuming one. At most 24
+/// candidates are returned, the same cap [`complete`] applies.
 pub fn complete_readings(text: &str, ctx: Option<ParseCtx>) -> Vec<CompletionReading> {
     let ctx = ctx.unwrap_or_default();
     let parsed = parse(text, Some(ctx.clone()));

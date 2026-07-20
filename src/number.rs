@@ -78,7 +78,14 @@ pub(crate) fn normalize_locale_number(text: &str, number_format: NumberFormat) -
             return Some(compact.replace(',', "."));
         }
         if number_format == NumberFormat::DotDecimal {
-            return normalize_grouped_decimal_free_number(&compact, ',');
+            // The comma can only group digits in this format, so it has to be
+            // grouped the way a group separator is: 3-digit groups, or the
+            // Indian 2-2-3 shape. Anything else is not a number in the format
+            // the caller declared, and is refused rather than regrouped.
+            if valid_grouped_number(&compact) || valid_indian_grouped_number(&compact) {
+                return normalize_grouped_decimal_free_number(&compact, ',');
+            }
+            return None;
         }
         if valid_grouped_number(&compact) || valid_indian_grouped_number(&compact) {
             return Some(compact.replace(',', ""));
@@ -91,11 +98,14 @@ pub(crate) fn normalize_locale_number(text: &str, number_format: NumberFormat) -
 
     if compact.contains('.') && number_format == NumberFormat::CommaDecimal {
         // This format declares ',' as the decimal separator, so a dot can only
-        // group digits — including when it appears exactly once. Without this,
-        // `1.234` read as 1.234 while `1.234.567` and `1.234,56` read the dot
-        // as grouping, so the same declared format answered inconsistently.
-        // Mirrors the `DotDecimal` handling of a lone comma above.
-        return normalize_grouped_decimal_free_number(&compact, '.');
+        // group digits — including when it appears exactly once. It must then
+        // be grouped like a group separator; `1.5` and `1.2.3` are not numbers
+        // in this format and are refused rather than silently regrouped into
+        // 15 and 123. Mirrors the `DotDecimal` handling of a comma above.
+        if valid_dot_grouped_number(&compact) {
+            return normalize_grouped_decimal_free_number(&compact, '.');
+        }
+        return None;
     }
 
     if compact.matches('.').count() > 1 {

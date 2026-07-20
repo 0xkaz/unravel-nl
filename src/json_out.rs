@@ -96,7 +96,7 @@ pub(crate) fn push_reading_json(json: &mut String, reading: &Reading) {
         // declares `value` as ["number", "null"], so a non-finite value is
         // emitted as null rather than as a token that breaks `JSON.parse`.
         if value.is_finite() {
-            json.push_str(&format_number(value));
+            push_json_number(json, value);
         } else {
             json.push_str("null");
         }
@@ -121,7 +121,39 @@ pub(crate) fn push_reading_json(json: &mut String, reading: &Reading) {
         json.push_str(",\"timezone\":");
         push_json_string(json, timezone);
     }
+    // A range reading carries its payload entirely in the endpoints: without
+    // them the envelope is a bare `{"kind":"range"}`, which reports `ok:true`
+    // with no finding while both bounds are gone. The endpoints are emitted as
+    // nested readings through this same function so an endpoint carries exactly
+    // the fields a top-level reading does.
+    if let Some(range) = &reading.range {
+        json.push_str(",\"range\":{\"from\":");
+        push_reading_json(json, &range.from);
+        json.push_str(",\"to\":");
+        push_reading_json(json, &range.to);
+        json.push('}');
+    }
     json.push('}');
+}
+
+/// Writes a finite `f64` as a JSON number without display rounding.
+///
+/// The envelope is a machine transport: `format_number` rounds to six decimals
+/// for humans, which silently collapses `0.0000001 m` to `0` and truncates
+/// `2 cups` from `0.473176473` to `0.473176`. `f64`'s `Display` writes the
+/// shortest decimal that round-trips back to the same `f64`, and — unlike
+/// `Debug` — never uses exponent notation, so the output is always a plain
+/// JSON number for every finite value, including subnormals and magnitudes
+/// near `f64::MAX`.
+#[cfg(any(feature = "wasm", test))]
+pub(crate) fn push_json_number(json: &mut String, value: f64) {
+    debug_assert!(value.is_finite());
+    if value == 0.0 {
+        // Normalizes -0.0, which would otherwise render as "-0".
+        json.push('0');
+        return;
+    }
+    json.push_str(&value.to_string());
 }
 
 pub(crate) fn kind_str(kind: Kind) -> &'static str {
@@ -213,6 +245,57 @@ mod tests {
         let large = parsed_summary_json(&parse("100000000000000000000", None));
         assert!(large.contains("\"value\":100000000000000000000"), "{large}");
         assert!(is_valid_json(&large), "{large}");
+    }
+
+    /// The JSON emitter is a machine transport, so it must not round: the old
+    /// six-decimal `format_number` collapsed anything below 5e-7 to `0`. Every
+    /// finite magnitude must still come out as a plain JSON number that
+    /// round-trips back to the same `f64`.
+    #[test]
+    fn emits_full_precision_numbers_without_exponents() {
+        for value in [
+            0.0000001_f64,
+            0.473176473,
+            f64::MIN_POSITIVE,
+            5e-324,
+            f64::MAX,
+            -f64::MAX,
+            1e20,
+            -0.0,
+            0.0,
+        ] {
+            let mut json = String::new();
+            push_reading_json(&mut json, &Reading::number(value, 0.9));
+            assert!(is_valid_json(&json), "{value}: {json}");
+            let text = json
+                .trim_start_matches("{\"kind\":\"number\",\"value\":")
+                .trim_end_matches('}');
+            assert!(
+                !text.contains('e') && !text.contains('E'),
+                "{value}: {json}"
+            );
+            assert_eq!(text.parse::<f64>().expect(text), value, "{json}");
+        }
+
+        // -0.0 is normalized so the envelope never carries a "-0" token.
+        let mut negative_zero = String::new();
+        push_reading_json(&mut negative_zero, &Reading::number(-0.0, 0.9));
+        assert_eq!(negative_zero, "{\"kind\":\"number\",\"value\":0}");
+    }
+
+    /// A range used to cross the boundary as a bare `{"kind":"range"}`.
+    #[test]
+    fn serializes_both_range_endpoints_as_nested_readings() {
+        let parsed = parse("10 ± 0.5 mm", None);
+        let json = parsed_summary_json(&parsed);
+        assert!(is_valid_json(&json), "{json}");
+        assert!(
+            json.contains(
+                "\"range\":{\"from\":{\"kind\":\"quantity\",\"value\":0.0095,\"unit\":\"m\",\"dimension\":\"length\"},\
+\"to\":{\"kind\":\"quantity\",\"value\":0.0105,\"unit\":\"m\",\"dimension\":\"length\"}}"
+            ),
+            "{json}"
+        );
     }
 
     /// Minimal structural JSON validator, enough to catch a bare `inf`/`NaN`

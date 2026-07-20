@@ -2,9 +2,10 @@
 //!
 //! Everything that referenced this entry point before asserted only that it
 //! agrees with `parse(purpose = Number)`, which passes just as well when both
-//! are wrong. Its documented contract — "grouping and decimal separators are
-//! read according to [`ParseCtx::number_format`] and [`ParseCtx::locale`]" —
-//! had no test with any locale or any explicit `NumberFormat`.
+//! are wrong. The tests here pin the separator contract itself: what each
+//! explicit `NumberFormat` reads and refuses, when `Auto` reports an ambiguity,
+//! that `ParseCtx::locale` does not enter into it, and that no reading this
+//! entry point returns ever carries a unit.
 
 use unravel_nl::{IssueCode, Kind, Locale, NumberFormat, ParseCtx, parse_number_fast};
 
@@ -54,7 +55,6 @@ fn comma_decimal_treats_every_dot_as_grouping() {
     for (input, expected) in [
         ("1.234", 1_234.0),
         ("1.234.567", 1_234_567.0),
-        ("1.23", 123.0),
         ("1.234,56", 1234.56),
     ] {
         assert_eq!(
@@ -66,11 +66,21 @@ fn comma_decimal_treats_every_dot_as_grouping() {
         );
     }
 
-    // The mirror image: DotDecimal treats every comma as grouping.
+    // Grouping the dot badly is not a number in this format, so it is refused
+    // and reported rather than regrouped: `1.5` must not become 15, and
+    // `1.2.3` must not become 123.
+    for input in ["1.5", "1.23", "1.2.3", "1.0.0", ".5", "12.34.567"] {
+        let parsed = with_format(input, NumberFormat::CommaDecimal);
+        assert!(parsed.best.is_none(), "{input}: {:?}", parsed.best);
+        assert!(!parsed.findings.skipped.is_empty(), "{input} lost silently");
+    }
+
+    // The mirror image: DotDecimal treats every comma as grouping, and applies
+    // the same validation, including the Indian 2-2-3 shape.
     for (input, expected) in [
         ("1,234", 1_234.0),
         ("1,234,567", 1_234_567.0),
-        ("1,23", 123.0),
+        ("12,34,567", 1_234_567.0),
         ("1,234.56", 1234.56),
     ] {
         assert_eq!(
@@ -80,6 +90,12 @@ fn comma_decimal_treats_every_dot_as_grouping() {
             Some(expected),
             "{input}"
         );
+    }
+
+    for input in ["1,5", "1,23", "1,2,3"] {
+        let parsed = with_format(input, NumberFormat::DotDecimal);
+        assert!(parsed.best.is_none(), "{input}: {:?}", parsed.best);
+        assert!(!parsed.findings.skipped.is_empty(), "{input} lost silently");
     }
 
     // What each format settles: its own decimal separator stays a decimal point.
@@ -121,13 +137,13 @@ fn auto_reports_the_grouping_ambiguity_with_an_alternative() {
     assert_eq!(parse_number_fast("1.234", None).alternatives.len(), 1);
 }
 
-/// **Documented but not implemented.**
+/// The separator reading comes from `ParseCtx::number_format` alone.
 ///
-/// `parse_number_fast`'s doc comment says separators are read according to
-/// `ParseCtx::number_format` *and* `ParseCtx::locale`, but the number path only
-/// ever consults `number_format`: every locale below — including a
-/// comma-decimal one — produces the identical reading. Pinned so that either
-/// the doc or the behaviour has to change deliberately.
+/// `ParseCtx::locale` is not consulted by the number path: every locale below —
+/// including a comma-decimal one — produces the identical reading and the
+/// identical alternative for `1.234`. This is what `parse_number_fast` and
+/// `NumberFormat::Auto` now document, and it is pinned here so that a change
+/// to either the docs or the behaviour has to be deliberate.
 #[test]
 fn locale_alone_does_not_change_the_separator_reading() {
     for locale in [
@@ -173,16 +189,23 @@ fn never_attaches_a_unit() {
         assert_eq!(parsed.findings.skipped[0].ref_text, input, "{input}");
     }
 
-    // A number it does read never carries a unit or a dimension either.
-    for input in ["5", "-3.5", "1,234", "½"] {
-        for reading in parse_number_fast(input, None)
+    // A number it does read never carries a unit or a dimension either. The
+    // expected reading count is spelled out so that an input which stopped
+    // parsing fails here instead of vacuously satisfying an empty loop —
+    // `1,234` is the grouping-ambiguous one, so it has an alternative.
+    for (input, expected_readings) in [("5", 1), ("-3.5", 1), ("1,234", 2), ("½", 1)] {
+        let parsed = parse_number_fast(input, None);
+        let readings: Vec<_> = parsed
             .best
             .iter()
-            .chain(parse_number_fast(input, None).alternatives.iter())
-        {
+            .chain(parsed.alternatives.iter())
+            .collect();
+        assert_eq!(readings.len(), expected_readings, "{input}: {readings:?}");
+        for reading in readings {
             assert_eq!(reading.kind, Kind::Number, "{input}");
             assert_eq!(reading.unit, None, "{input}");
             assert_eq!(reading.dimension, None, "{input}");
+            assert!(reading.value.is_some(), "{input}");
         }
     }
 }

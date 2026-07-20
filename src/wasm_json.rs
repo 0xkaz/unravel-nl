@@ -57,10 +57,16 @@ pub fn mcp_tool_schema_json() -> &'static str {
 /// is what a UI boundary usually wants. Do not validate it against that schema;
 /// use the Rust [`Parsed`] value when you need the full contract.
 ///
-/// Numbers in the envelope are rounded to six decimal places for display, so
-/// `2 cups` is emitted as `0.473176` where the Rust reading holds
-/// `0.473176473`. Treat the envelope as a presentation format: do arithmetic on
-/// the Rust value, not on the JSON.
+/// Numbers in the envelope carry the full `f64` value, not a display rounding:
+/// `2 cups` is emitted as `0.473176473`, and a value below the old six-decimal
+/// rounding — `0.0000001 m` — survives instead of collapsing to `0`. Values are
+/// written in plain decimal notation (never exponent form), so `JSON.parse`
+/// accepts every finite magnitude.
+///
+/// A `range` reading also carries a `range` object with `from` and `to`, each
+/// a nested reading with the same fields a top-level reading has — without it
+/// the envelope would report `ok:true` with no finding while both endpoints
+/// were gone.
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -444,15 +450,30 @@ mod wasm_tests {
         assert!(json.contains("\"dimension\":\"length\""), "{json}");
 
         // The locale reaches the parser: the imperial cup wins under en-GB and
-        // the US cup under en-US, and the envelope shows which. The values are
-        // the six-decimal renderings of 0.473176473 L and 0.56826125 L —
-        // `format_number` rounds at this boundary, so the envelope is not a
-        // full-precision transport. The unrounded winners are pinned in
-        // `tests/issue_codes.rs`.
+        // the US cup under en-US, and the envelope shows which. The envelope is
+        // a machine transport, so it carries the full `f64` — 0.473176473 L and
+        // 0.56826125 L — rather than a six-decimal display rounding. The same
+        // winners are pinned in `tests/issue_codes.rs`.
+        //
+        // The whole envelope is compared rather than a substring of the number:
+        // `contains("\"value\":0.473176")` is a *prefix* of the true value and
+        // would pass just as happily against a six-decimal rounding.
         let us = parse_json_with_locale("2 cups", "en-US");
         let gb = parse_json_with_locale("2 cups", "en-GB");
-        assert!(us.contains("\"value\":0.473176"), "{us}");
-        assert!(gb.contains("\"value\":0.568261"), "{gb}");
+        assert_eq!(
+            us,
+            "{\"ok\":true,\"input\":\"2 cups\",\"best\":{\"kind\":\"quantity\",\
+             \"value\":0.473176473,\"unit\":\"L\",\"dimension\":\"volume\"},\
+             \"issues\":[{\"code\":\"AMBIGUOUS_UNIT\",\"severity\":\"warning\",\
+             \"rank\":55,\"ref_text\":\"cups\"}]}"
+        );
+        assert_eq!(
+            gb,
+            "{\"ok\":true,\"input\":\"2 cups\",\"best\":{\"kind\":\"quantity\",\
+             \"value\":0.56826125,\"unit\":\"L\",\"dimension\":\"volume\"},\
+             \"issues\":[{\"code\":\"AMBIGUOUS_UNIT\",\"severity\":\"warning\",\
+             \"rank\":55,\"ref_text\":\"cups\"}]}"
+        );
     }
 
     #[test]
@@ -511,11 +532,33 @@ mod wasm_tests {
         );
     }
 
+    /// The tags must reach the parser, not merely be accepted. Asserting the
+    /// envelope is well-formed and carries `charStart` would pass with the tags
+    /// thrown away, so the assertion is the *difference* the tags make: with an
+    /// expected dimension the bare millimetre numbers gain `UNIT_ASSUMED`, and
+    /// without one they do not.
     #[test]
     fn parse_all_json_with_context_applies_the_tags() {
-        let json = parse_all_json_with_context("幅3640 高さ2400", "ja", "length", "forgiving");
-        assert!(is_valid_json(&json), "{json}");
-        assert!(json.contains("\"charStart\":"), "{json}");
+        let tagged = parse_all_json_with_context("幅3640 高さ2400", "ja", "length", "forgiving");
+        let untagged = parse_all_json("幅3640 高さ2400");
+        assert!(is_valid_json(&tagged), "{tagged}");
+        assert!(is_valid_json(&untagged), "{untagged}");
+        assert!(tagged.contains("\"charStart\":"), "{tagged}");
+
+        assert_eq!(
+            tagged.matches("\"code\":\"UNIT_ASSUMED\"").count(),
+            2,
+            "{tagged}"
+        );
+        assert!(!untagged.contains("UNIT_ASSUMED"), "{untagged}");
+        assert_ne!(tagged, untagged);
+
+        // A misspelled dimension tag is absorbed silently and behaves exactly
+        // like no tag at all.
+        assert_eq!(
+            parse_all_json_with_context("幅3640 高さ2400", "ja", "lenght", "forgiving"),
+            untagged
+        );
     }
 
     #[test]
@@ -529,12 +572,122 @@ mod wasm_tests {
         assert_eq!(parse_dimensions_for_editor_json("3640"), "[]");
     }
 
+    /// Labelled, unambiguous, exactly-typed lengths are the case where the tags
+    /// have nothing left to change: for `幅3m 奥行4m` the tagged output is
+    /// byte-identical to the untagged one. That is worth pinning — a tag must
+    /// not perturb input it has no business perturbing — but it is *not*
+    /// evidence that the tags are read at all; see
+    /// `parse_dimensions_for_editor_json_with_context_applies_the_tags` for
+    /// that.
     #[test]
-    fn parse_dimensions_for_editor_json_with_context_applies_the_tags() {
+    fn parse_dimensions_for_editor_json_with_context_leaves_exact_matches_alone() {
         let json =
             parse_dimensions_for_editor_json_with_context("幅3m 奥行4m", "ja", "length", "strict");
         assert!(is_valid_json(&json), "{json}");
         assert!(json.contains("\"dimension\":\"length\""), "{json}");
+        assert_eq!(json, parse_dimensions_for_editor_json("幅3m 奥行4m"));
+    }
+
+    /// Inputs where each tag demonstrably changes the output.
+    #[test]
+    fn parse_dimensions_for_editor_json_with_context_applies_the_tags() {
+        // The dimension tag is a filter here, unlike in `parse`: a width label
+        // survives `length` and is dropped entirely under `mass`.
+        let as_length =
+            parse_dimensions_for_editor_json_with_context("幅3640", "ja", "length", "forgiving");
+        assert!(is_valid_json(&as_length), "{as_length}");
+        assert!(
+            as_length.contains("\"code\":\"UNIT_ASSUMED\""),
+            "{as_length}"
+        );
+        assert_eq!(
+            parse_dimensions_for_editor_json_with_context("幅3640", "ja", "mass", "forgiving"),
+            "[]"
+        );
+
+        // The strictness tag is read too: an approximate quantity is kept under
+        // `forgiving` and refused under `strict`.
+        let forgiving =
+            parse_dimensions_for_editor_json_with_context("幅約3m", "ja", "length", "forgiving");
+        assert!(is_valid_json(&forgiving), "{forgiving}");
+        assert!(
+            forgiving.contains("\"code\":\"APPROXIMATION\""),
+            "{forgiving}"
+        );
+        assert_eq!(
+            parse_dimensions_for_editor_json_with_context("幅約3m", "ja", "length", "strict"),
+            "[]"
+        );
+        // And the untagged call is the forgiving one, so `strict` really is the
+        // tag doing the work.
+        assert_eq!(parse_dimensions_for_editor_json("幅約3m"), forgiving);
+    }
+
+    /// A range crossing the boundary used to arrive as a bare
+    /// `{"kind":"range"}`: both endpoints were dropped while the envelope still
+    /// said `ok:true` with an empty `issues` list, so a JS caller had no way to
+    /// see the loss. Every endpoint value and unit must survive.
+    #[test]
+    fn parse_json_carries_both_range_endpoints() {
+        // input, from-value, to-value, unit
+        let cases: [(&str, &str, &str, &str); 4] = [
+            ("10 ± 0.5 mm", "0.0095", "0.0105", "m"),
+            ("100-120㎡", "100", "120", "m2"),
+            ("between 5 and 10 kg", "5", "10", "kg"),
+            ("2〜3日", "172800", "259200", "s"),
+        ];
+        for (input, from, to, unit) in cases {
+            let json = parse_json(input);
+            assert!(is_valid_json(&json), "{input}: {json}");
+            assert!(json.contains("\"kind\":\"range\""), "{input}: {json}");
+            assert!(json.contains("\"range\":{\"from\":"), "{input}: {json}");
+            assert!(json.contains(",\"to\":"), "{input}: {json}");
+            assert!(
+                json.contains(&format!("\"value\":{from},")),
+                "{input}: {json}"
+            );
+            assert!(
+                json.contains(&format!("\"value\":{to},")),
+                "{input}: {json}"
+            );
+            // Both endpoints must carry the unit, not just the container.
+            assert_eq!(
+                json.matches(&format!("\"unit\":\"{unit}\"")).count(),
+                2,
+                "{input}: {json}"
+            );
+            // The endpoints are full readings, not a bare pair of numbers.
+            assert!(json.contains("\"dimension\":"), "{input}: {json}");
+        }
+    }
+
+    /// The envelope used to run every value through `format_number`, which
+    /// rounds to six decimals — a real quantity below that threshold became
+    /// exactly `0` with no finding at all.
+    #[test]
+    fn parse_json_keeps_values_below_the_old_rounding_threshold() {
+        let json = parse_json("0.0000001 m");
+        assert!(is_valid_json(&json), "{json}");
+        assert!(json.contains("\"value\":0.0000001"), "{json}");
+        assert!(!json.contains("\"value\":0,"), "{json}");
+        assert!(!json.contains("\"value\":0}"), "{json}");
+        // Plain decimal notation only: `1e-7` still parses in Rust but is the
+        // shape a strict JSON consumer is most likely to trip over.
+        assert!(!json.contains("e-"), "{json}");
+        assert_eq!(
+            parse("0.0000001 m", None).best.and_then(|best| best.value),
+            Some(0.0000001)
+        );
+    }
+
+    /// `2 cups` holds 0.473176473 L; the envelope used to ship 0.473176.
+    #[test]
+    fn parse_json_serializes_cups_at_full_precision() {
+        let json = parse_json_with_locale("2 cups", "en-US");
+        assert!(is_valid_json(&json), "{json}");
+        assert!(json.contains("\"value\":0.473176473"), "{json}");
+        let best = parse("2 cups", None).best.expect("a reading");
+        assert!(json.contains(&format!("\"value\":{}", best.value.expect("a value"))));
     }
 
     /// Minimal structural JSON check — enough to catch an unescaped string, an

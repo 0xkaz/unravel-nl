@@ -108,9 +108,15 @@ pub(crate) fn parse_quantity_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed
 /// [`ParseCtx::number_format`]. [`ParseCtx::locale`] does **not** affect this
 /// entry point: `1.234` reads the same under every locale, and only an explicit
 /// [`NumberFormat`] settles whether the dot groups digits or introduces a
-/// fraction. Under [`NumberFormat::Auto`] both readings are returned, with the
-/// competing one in [`Parsed::alternatives`] and an
-/// [`IssueCode::AmbiguousNumber`] finding.
+/// fraction.
+///
+/// Under [`NumberFormat::Auto`] the ambiguity is reported only when the input
+/// is genuinely grouping-shaped — a single separator followed by exactly three
+/// digits. `1.234` returns 1.234 with 1234 in [`Parsed::alternatives`] and an
+/// [`IssueCode::AmbiguousNumber`] finding, and `1,234` returns the mirror pair.
+/// Anything the shape already settles returns one reading and no finding:
+/// `1.23`, `1.2345`, and `0.5` are decimals, `1.234.567` is 1234567, and
+/// `1.234,56` is 1234.56.
 pub fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     parse_number_fast_with_ctx(text, &ctx)

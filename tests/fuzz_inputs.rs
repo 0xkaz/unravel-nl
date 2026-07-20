@@ -1,5 +1,5 @@
 use unravel_nl::{
-    Locale, ParseCtx, Parsed, ParsedMatch, Reading, complete, parse, parse_all,
+    IssueCode, Locale, ParseCtx, Parsed, ParsedMatch, Reading, complete, parse, parse_all,
     parse_dimensions_for_editor, ranked_findings,
 };
 
@@ -95,7 +95,7 @@ fn assert_invariants_hold(input: &str) {
     let parsed = parse(input, ctx.clone());
     assert_spans_address_input(&parsed, input);
     assert_reading_invariants(&parsed, input);
-    let _issues = ranked_findings(&parsed);
+    assert_ranked_findings_invariants(&parsed, input);
 
     let matches = parse_all(input, ctx.clone());
     assert_matches_are_ordered_and_disjoint(&matches, input);
@@ -111,7 +111,153 @@ fn assert_invariants_hold(input: &str) {
         assert_reading_invariants(&found.parsed, input);
     }
 
-    let _completions = complete(input, None);
+    assert_completion_invariants(input);
+}
+
+/// `ranked_findings` sorts a mixed set of findings by rank, highest first.
+///
+/// A real parse reports at most one finding today, so the ordering contract is
+/// unfalsifiable against parser output alone. The lists are therefore assembled
+/// from four separate parses into one `Parsed`, with the two ambiguities pushed
+/// in *ascending* rank — `UNIT_ASSUMED` (40) before `AMBIGUOUS_UNIT` (55) — so
+/// that an implementation which merely concatenated the three lists in order
+/// would return them the wrong way round and fail here.
+#[test]
+fn ranked_findings_orders_a_mixed_finding_set_by_rank() {
+    let approximation = parse("about 20kg", None);
+    let ambiguous_unit = parse("2 cups", None);
+    let unit_assumed = parse(
+        "3640",
+        Some(ParseCtx {
+            expected_dimension: Some(unravel_nl::Dimension::Length),
+            ..ParseCtx::default()
+        }),
+    );
+    let skipped = parse("3pm Europe/Paris", None);
+
+    let mut mixed = approximation.clone();
+    mixed.findings.skipped = skipped.findings.skipped.clone();
+    mixed.findings.ambiguities = unit_assumed
+        .findings
+        .ambiguities
+        .iter()
+        .chain(ambiguous_unit.findings.ambiguities.iter())
+        .cloned()
+        .collect();
+    assert_eq!(mixed.findings.approximations.len(), 1);
+    assert_eq!(mixed.findings.skipped.len(), 1);
+    assert_eq!(
+        mixed
+            .findings
+            .ambiguities
+            .iter()
+            .map(|issue| issue.code)
+            .collect::<Vec<_>>(),
+        vec![IssueCode::UnitAssumed, IssueCode::AmbiguousUnit]
+    );
+
+    let issues = ranked_findings(&mixed);
+    assert_eq!(
+        issues
+            .iter()
+            .map(|issue| (issue.code, issue.rank))
+            .collect::<Vec<_>>(),
+        vec![
+            (IssueCode::TimezoneUnsupported, 90),
+            (IssueCode::AmbiguousUnit, 55),
+            (IssueCode::UnitAssumed, 40),
+            (IssueCode::Approximation, 30),
+        ]
+    );
+}
+
+/// `ranked_findings` is the flat view a UI renders, so it must lose nothing and
+/// arrive in the order it claims.
+///
+/// Every skipped, ambiguous, and approximate finding gets exactly one entry —
+/// a dropped one is silent loss at the presentation layer — and the entries are
+/// ordered by rank, highest first, so the most serious issue is at the top.
+fn assert_ranked_findings_invariants(parsed: &Parsed, label: &str) {
+    let issues = ranked_findings(parsed);
+    let findings = &parsed.findings;
+    assert_eq!(
+        issues.len(),
+        findings.skipped.len() + findings.ambiguities.len() + findings.approximations.len(),
+        "{label:?}: ranked findings do not cover every finding"
+    );
+
+    // Ordering is checked here too, but no input in this corpus makes a single
+    // `parse` report two findings at once, so this loop is a guard rather than
+    // the proof; `ranked_findings_orders_a_mixed_finding_set_by_rank` below
+    // builds the multi-finding case that actually exercises the sort.
+    for pair in issues.windows(2) {
+        assert!(
+            pair[0].rank >= pair[1].rank,
+            "{label:?}: ranked findings are not ordered by rank, {} before {}",
+            pair[0].rank,
+            pair[1].rank
+        );
+    }
+
+    // The three finding lists have distinct types, so they are compared as
+    // `(code, ref_text)` multisets: every finding must show up in the flat view
+    // with the text it was reported against.
+    let mut reported: Vec<_> = findings
+        .skipped
+        .iter()
+        .map(|issue| (issue.code, issue.ref_text.clone()))
+        .chain(
+            findings
+                .ambiguities
+                .iter()
+                .map(|issue| (issue.code, issue.ref_text.clone())),
+        )
+        .chain(
+            findings
+                .approximations
+                .iter()
+                .map(|issue| (issue.code, issue.ref_text.clone())),
+        )
+        .collect();
+    let mut ranked: Vec<_> = issues
+        .iter()
+        .map(|issue| (issue.code, issue.ref_text.clone()))
+        .collect();
+    reported.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.as_str().cmp(b.0.as_str())));
+    ranked.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.as_str().cmp(b.0.as_str())));
+    assert_eq!(
+        ranked, reported,
+        "{label:?}: ranked_findings does not match the reported findings"
+    );
+}
+
+/// `complete` is documented to return at most 24 candidates, scored `1.0` for
+/// an exact match and otherwise between `0.6` and `1.0`, highest first. A
+/// candidate outside that band or out of order breaks the picker that consumes
+/// it, and an oversized list breaks the cap the doc promises.
+fn assert_completion_invariants(input: &str) {
+    let completions = complete(input, None);
+    assert!(
+        completions.len() <= 24,
+        "{input:?}: {} completions exceeds the documented cap of 24",
+        completions.len()
+    );
+    for candidate in &completions {
+        assert!(
+            (0.6..=1.0).contains(&candidate.score),
+            "{input:?}: completion {:?} scored {} outside 0.6..=1.0",
+            candidate.value,
+            candidate.score
+        );
+    }
+    for pair in completions.windows(2) {
+        assert!(
+            pair[0].score >= pair[1].score,
+            "{input:?}: completions are not ordered by score, {} before {}",
+            pair[0].score,
+            pair[1].score
+        );
+    }
 }
 
 /// No reading ever escapes carrying a non-finite value, and no range ever

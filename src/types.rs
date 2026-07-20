@@ -168,12 +168,47 @@ pub enum Strictness {
 /// Selects how decimal and grouping punctuation is interpreted.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NumberFormat {
-    /// Infers punctuation from the input and parsing context.
+    /// Infers punctuation from the input alone.
+    ///
+    /// [`ParseCtx::locale`] is **not** consulted: `1.234` reads the same under
+    /// every locale, including a comma-decimal one. Only the string decides.
+    ///
+    /// Input whose shape leaves both readings open is reported as ambiguous
+    /// rather than settled — `1.234` yields 1.234 with 1234 in
+    /// [`Parsed::alternatives`] and an [`IssueCode::AmbiguousNumber`] finding.
+    /// Input whose shape settles the question is read one way with no finding:
+    /// `1.5` and `1.2345` are decimals, `1.234.567` is 1234567, and
+    /// `1.234,56` is 1234.56.
     #[default]
     Auto,
-    /// Treats a comma as the decimal separator.
+    /// Treats a comma as the decimal separator and a dot as the grouping
+    /// separator.
+    ///
+    /// The grouping is validated rather than guessed: a bare number whose dots
+    /// do not delimit well-formed digit groups is refused with an
+    /// [`IssueCode::NoValue`] finding instead of being silently regrouped into a
+    /// different number.
+    ///
+    /// - Decimal comma: `1,5` is 1.5, `1,23` is 1.23, and `1.234,56` is 1234.56.
+    /// - Grouping dot: `1.234` is 1234 and `1.234.567` is 1234567.
+    /// - Refused: `1.5`, `1.23`, `1.2.3`, and `.5` — under this format those
+    ///   dots would have to be grouping, and none of them groups three digits,
+    ///   so reading them as decimals would contradict the declared format.
+    ///
+    /// The validation belongs to the bare-number grammar. A quantity still
+    /// reads its number by the general rules, so `1.5 kg` parses as 1.5 kg
+    /// under this format even though `1.5` alone is refused.
     CommaDecimal,
-    /// Treats a dot as the decimal separator.
+    /// Treats a dot as the decimal separator and a comma as the grouping
+    /// separator.
+    ///
+    /// The mirror image of [`NumberFormat::CommaDecimal`], with the same
+    /// grouping validation and the same [`IssueCode::NoValue`] refusal.
+    ///
+    /// - Decimal dot: `1.5` is 1.5 and `1,234.56` is 1234.56.
+    /// - Grouping comma: `1,234` is 1234, `1,234,567` is 1234567, and the
+    ///   Indian `12,34,567` shape is 1234567.
+    /// - Refused: `1,5`, `1,23`, and `1,2,3`.
     DotDecimal,
 }
 
@@ -297,6 +332,14 @@ impl Date {
     }
 
     /// Formats this date as `YYYY-MM-DD`.
+    ///
+    /// The year is zero-padded to four characters, not to four digits, and
+    /// [`Date::new`] does not bound it. Outside `0..=9999` the result is
+    /// therefore not ISO 8601 `YYYY-MM-DD`: a negative year spends part of the
+    /// width on its sign (`Date::new(-1, 1, 1)` formats as `-001-01-01`) and a
+    /// year past 9999 simply grows (`Date::new(12345, 1, 1)` formats as
+    /// `12345-01-01`). Callers that need a strict `YYYY-MM-DD` must keep the
+    /// year in `0..=9999` themselves.
     pub fn iso(self) -> String {
         format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
     }

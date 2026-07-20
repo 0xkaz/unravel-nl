@@ -13,8 +13,8 @@
   unwind ではなく `findings` として返ります。
 - **黙って捨てない (No-Silent-Loss)**: 読めなかった断片・曖昧な解釈・近似は
   `findings` として必ず表面化します。
-- **勝手に決めない**: 複数の読みが成り立つときは、一つに確定せず順位付きの
-  `alternatives` と did-you-mean 提案を返します。
+- **勝手に決めない**: 複数の読みが成り立つときは、競合する読みを捨てずに
+  `alternatives` として返します。
 - **no-I/O・ゼロ実行時依存**: 既定の計算経路はファイル・ネットワーク・システム時計を読みません。
 
 対応する入力の例:
@@ -174,16 +174,20 @@ make test           # cargo test --all-features
 make test-default   # cargo test          （多くの利用者が使うビルド）
 make test-dates     # cargo test --features dates-jiff
 make test-timezones # cargo test --features timezones-jiff
+make test-wasm-lib  # cargo test --features wasm （WASM 版が実際に使う feature 構成）
 make test-wasm      # wasm-pack ビルド + Node / ブラウザアダプタのスモークテスト
 make web-test       # TypeScript 型定義の型チェック
-make check          # lint + 上記の全 feature 構成
+make check          # lint test test-default test-dates test-timezones test-wasm-lib
 ```
 
 `make check` は `--all-features` だけに頼らず各 feature 構成を個別に実行します。
-片方の構成でしか到達しないコードで実際にバグが出たことがあるためです。
+片方の構成でしか到達しないコードで実際にバグが出たことがあるためです。実行される
+のは `lint` と上記 5 つの cargo テストレーンだけで、`make test-wasm` と
+`make web-test` は含まれません。
 
 `make test-wasm` には [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) と
 Node.js が必要です。`make web-test` は事前に `web/` で `npm install` が必要です。
+どちらも `make check` とは別に自分で実行してください。
 
 ## 帰属
 
