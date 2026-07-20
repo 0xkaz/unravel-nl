@@ -1,6 +1,6 @@
 use unravel_nl::{
-    Locale, ParseCtx, Parsed, complete, parse, parse_all, parse_dimensions_for_editor,
-    ranked_findings,
+    Locale, ParseCtx, Parsed, ParsedMatch, Reading, complete, parse, parse_all,
+    parse_dimensions_for_editor, ranked_findings,
 };
 
 #[test]
@@ -18,6 +18,16 @@ fn hostile_unicode_inputs_do_not_panic() {
         '×', '％', '約',
         // A combining mark, which normalization must leave exactly as written.
         '\u{0301}',
+        // Range separators, so range readings — and therefore the endpoint
+        // invariants below — are actually reached.
+        '~', '〜', '–', '±', 't', 'o',
+        // Cup spelling, the locale-dependent unit with three candidates.
+        'c', 'u', 'p', 's',
+        // More currency symbols, which parse through a grammar of their own.
+        '$', '£', '.',
+        // A high digit, so a long run of them overflows f64 rather than merely
+        // being large.
+        '9',
     ];
 
     for len in 0..96 {
@@ -26,22 +36,170 @@ fn hostile_unicode_inputs_do_not_panic() {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
             input.push(alphabet[(seed as usize) % alphabet.len()]);
         }
+        assert_invariants_hold(&input);
+    }
 
-        let ctx = Some(ParseCtx {
-            locale: Some(Locale::Ja),
-            reference_date: unravel_nl::Date::new(2026, 7, 19),
-            ..ParseCtx::default()
-        });
-        let parsed = parse(&input, ctx.clone());
-        assert_spans_address_input(&parsed, &input);
-        let _issues = ranked_findings(&parsed);
-        for found in parse_all(&input, ctx.clone()) {
-            assert_spans_address_input(&found.parsed, &input);
+    // Word-shaped fragments the character alphabet is unlikely to assemble by
+    // chance, plus digit runs long enough to overflow to infinity (an f64
+    // needs more than 308 digits before a bare integer stops being finite).
+    let tokens = [
+        "5",
+        "3",
+        "2 cups",
+        " to ",
+        "-",
+        "~",
+        "kg",
+        "m",
+        "$",
+        "¥1,234",
+        "about ",
+        " and ",
+        "9",
+        &"9".repeat(400),
+        "1.234",
+        "5尺3寸",
+        "20°C",
+        "every tuesday",
+    ];
+    for len in 0..48 {
+        let mut input = String::new();
+        for _ in 0..len {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            input.push_str(tokens[(seed as usize) % tokens.len()]);
         }
-        for found in parse_dimensions_for_editor(&input, ctx) {
-            assert_spans_address_input(&found.parsed, &input);
+        assert_invariants_hold(&input);
+    }
+
+    // Hand-written shapes that exercise each invariant directly.
+    for input in [
+        "5 to 3 kg",
+        "2 cups",
+        "2-3 kg",
+        "5kg to 3m",
+        "3m and 20kg and ¥1,234",
+        &"9".repeat(400),
+        &format!("{} to {}", "9".repeat(400), "9".repeat(400)),
+        "",
+    ] {
+        assert_invariants_hold(input);
+    }
+}
+
+fn assert_invariants_hold(input: &str) {
+    let ctx = Some(ParseCtx {
+        locale: Some(Locale::Ja),
+        reference_date: unravel_nl::Date::new(2026, 7, 19),
+        ..ParseCtx::default()
+    });
+    let parsed = parse(input, ctx.clone());
+    assert_spans_address_input(&parsed, input);
+    assert_reading_invariants(&parsed, input);
+    let _issues = ranked_findings(&parsed);
+
+    let matches = parse_all(input, ctx.clone());
+    assert_matches_are_ordered_and_disjoint(&matches, input);
+    for found in &matches {
+        assert_spans_address_input(&found.parsed, input);
+        assert_reading_invariants(&found.parsed, input);
+    }
+
+    let editor = parse_dimensions_for_editor(input, ctx);
+    assert_matches_are_ordered_and_disjoint(&editor, input);
+    for found in &editor {
+        assert_spans_address_input(&found.parsed, input);
+        assert_reading_invariants(&found.parsed, input);
+    }
+
+    let _completions = complete(input, None);
+}
+
+/// No reading ever escapes carrying a non-finite value, and no range ever
+/// escapes with endpoints that disagree.
+///
+/// A value that overflowed to infinity or collapsed to `NaN`, and a range whose
+/// endpoints landed on different dimensions or units, are both documented as
+/// withdrawn and reported as `IssueCode::NoValue` rather than returned — so if
+/// one shows up here the withdrawal missed a path, and a consumer doing
+/// arithmetic on `best.value` inherits the poison.
+fn assert_reading_invariants(parsed: &Parsed, label: &str) {
+    for reading in parsed.best.iter().chain(parsed.alternatives.iter()) {
+        assert_reading_is_usable(reading, label);
+    }
+
+    // `candidate_count` counts the readings the parser weighed, which is at
+    // least the ones it returned. It is deliberately *not* equal to
+    // `alternatives.len()`: a descending range such as `5 to 3 kg` reports two
+    // candidates with one reading and no alternatives, because the second
+    // candidate is the swapped reading the parser refused to invent.
+    let returned = usize::from(parsed.best.is_some()) + parsed.alternatives.len();
+    for ambiguity in &parsed.findings.ambiguities {
+        if let Some(count) = ambiguity.candidate_count {
+            assert!(
+                count >= returned,
+                "{label:?}: candidate_count {count} < {returned} returned readings"
+            );
         }
-        let _completions = complete(&input, None);
+    }
+}
+
+fn assert_reading_is_usable(reading: &Reading, label: &str) {
+    if let Some(value) = reading.value {
+        assert!(value.is_finite(), "{label:?}: non-finite value {value}");
+    }
+    let Some(range) = &reading.range else {
+        return;
+    };
+    for endpoint in [&range.from, &range.to] {
+        if let Some(value) = endpoint.value {
+            assert!(
+                value.is_finite(),
+                "{label:?}: non-finite range endpoint {value}"
+            );
+        }
+        assert!(endpoint.range.is_none(), "{label:?}: nested range");
+    }
+    assert_eq!(
+        range.from.dimension, range.to.dimension,
+        "{label:?}: range endpoints disagree on dimension"
+    );
+    assert_eq!(
+        range.from.unit, range.to.unit,
+        "{label:?}: range endpoints disagree on unit"
+    );
+}
+
+/// Matches are advertised as spans into the caller's string, so an editor lays
+/// them out in order. Overlapping or reordered matches would double-highlight.
+fn assert_matches_are_ordered_and_disjoint(matches: &[ParsedMatch], label: &str) {
+    let mut previous_end = 0usize;
+    for found in matches {
+        assert!(
+            found.start <= found.end,
+            "{label:?}: match {}..{} runs backwards",
+            found.start,
+            found.end
+        );
+        assert!(
+            found.start >= previous_end,
+            "{label:?}: match {}..{} overlaps a match ending at {previous_end}",
+            found.start,
+            found.end
+        );
+        assert!(
+            found.end <= label.len(),
+            "{label:?}: match {}..{} runs past the input",
+            found.start,
+            found.end
+        );
+        assert_eq!(
+            label.get(found.start..found.end),
+            Some(found.text.as_str()),
+            "{label:?}: match {}..{} does not slice the input",
+            found.start,
+            found.end
+        );
+        previous_end = found.end;
     }
 }
 

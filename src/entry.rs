@@ -104,8 +104,13 @@ pub(crate) fn parse_quantity_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed
 
 /// Parses `text` as a bare number, without attaching a unit.
 ///
-/// Locale number formats still apply, so grouping and decimal separators are
-/// read according to [`ParseCtx::number_format`] and [`ParseCtx::locale`].
+/// Grouping and decimal separators are read according to
+/// [`ParseCtx::number_format`]. [`ParseCtx::locale`] does **not** affect this
+/// entry point: `1.234` reads the same under every locale, and only an explicit
+/// [`NumberFormat`] settles whether the dot groups digits or introduces a
+/// fraction. Under [`NumberFormat::Auto`] both readings are returned, with the
+/// competing one in [`Parsed::alternatives`] and an
+/// [`IssueCode::AmbiguousNumber`] finding.
 pub fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     parse_number_fast_with_ctx(text, &ctx)

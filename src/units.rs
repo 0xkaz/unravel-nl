@@ -31,6 +31,12 @@ pub fn unit_definitions() -> &'static [UnitDef] {
 }
 
 /// Iterates over built-in unit definitions for the given dimension.
+///
+/// Two dimensions the parser reports are **not** backed by registry entries and
+/// yield an empty iterator here: [`Dimension::Currency`] and
+/// [`Dimension::Temperature`] are handled by separate grammars, so `parse`
+/// reports them while `units_of` offers nothing for them. A caller building a
+/// unit picker from a reported dimension has to special-case those two.
 pub fn units_of(dimension: Dimension) -> impl Iterator<Item = &'static UnitDef> {
     UNIT_DEFS
         .iter()
@@ -372,6 +378,65 @@ mod tests {
                 assert!(unit_by_alias(alias).is_some(), "{alias:?}");
             }
         }
+    }
+
+    /// The registry itself is public API — [`unit_definitions`] is what a
+    /// consumer builds a unit picker or a validator from — so its internal
+    /// consistency is pinned here rather than left to the parsing tests.
+    #[test]
+    fn unit_definitions_expose_a_consistent_registry() {
+        let defs = unit_definitions();
+        // A lower bound rather than today's exact 100: the registry is meant to
+        // grow, and pinning the exact count would fail on every unit added.
+        // What must never happen silently is the registry shrinking to a stub.
+        assert!(defs.len() >= 90, "registry shrank to {}", defs.len());
+
+        let mut ids: Vec<&str> = defs.iter().map(|unit| unit.id).collect();
+        ids.sort_unstable();
+        let mut unique = ids.clone();
+        unique.dedup();
+        assert_eq!(ids.len(), unique.len(), "duplicate unit id in the registry");
+
+        for unit in defs {
+            // Every unit is findable under its own dimension, so a picker built
+            // from a reported dimension can offer the unit that produced it.
+            assert!(
+                units_of(unit.dimension).any(|candidate| candidate.id == unit.id),
+                "{} is missing from units_of({:?})",
+                unit.id,
+                unit.dimension
+            );
+            // The id and every alias resolve back to this same unit, not merely
+            // to some unit: an alias shadowed by an earlier registry entry would
+            // silently convert with the wrong factor.
+            for alias in unit_lookup_aliases(unit) {
+                assert_eq!(
+                    unit_by_alias(alias).map(|resolved| resolved.id),
+                    Some(unit.id),
+                    "alias {alias:?} of {} resolves elsewhere",
+                    unit.id
+                );
+            }
+        }
+    }
+
+    /// `units_of` is empty for the two dimensions the parser reports from a
+    /// separate grammar, which a consumer wiring a picker to a reported
+    /// dimension has to know. See the note on [`units_of`].
+    #[test]
+    fn units_of_is_empty_for_the_separately_parsed_dimensions() {
+        assert_eq!(units_of(Dimension::Currency).count(), 0);
+        assert_eq!(units_of(Dimension::Temperature).count(), 0);
+
+        // ...even though both dimensions really are reported by `parse`.
+        assert_eq!(
+            parse("¥1,234", None).best.and_then(|best| best.dimension),
+            Some(Dimension::Currency)
+        );
+        assert_eq!(
+            parse("20°C", None).best.and_then(|best| best.dimension),
+            Some(Dimension::Temperature)
+        );
     }
 
     #[test]

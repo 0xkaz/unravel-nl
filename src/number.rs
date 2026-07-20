@@ -89,6 +89,15 @@ pub(crate) fn normalize_locale_number(text: &str, number_format: NumberFormat) -
         return None;
     }
 
+    if compact.contains('.') && number_format == NumberFormat::CommaDecimal {
+        // This format declares ',' as the decimal separator, so a dot can only
+        // group digits — including when it appears exactly once. Without this,
+        // `1.234` read as 1.234 while `1.234.567` and `1.234,56` read the dot
+        // as grouping, so the same declared format answered inconsistently.
+        // Mirrors the `DotDecimal` handling of a lone comma above.
+        return normalize_grouped_decimal_free_number(&compact, '.');
+    }
+
     if compact.matches('.').count() > 1 {
         if valid_dot_grouped_number(&compact) {
             return Some(compact.replace('.', ""));

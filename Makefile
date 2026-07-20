@@ -1,4 +1,4 @@
-.PHONY: all fmt lint test test-default test-dates test-timezones test-wasm build-wasm web-test check package clean
+.PHONY: all fmt lint test test-default test-dates test-timezones test-wasm-lib test-wasm build-wasm web-test check package clean
 
 all: check
 
@@ -23,6 +23,12 @@ test-dates:
 test-timezones:
 	cargo test --features timezones-jiff
 
+# The exact feature set `build-wasm` ships. Runs the Rust tests for the
+# `#[wasm_bindgen]` surface and its tag parsers, which no other configuration
+# compiles, and which `test-wasm` below can only reach through wasm-pack.
+test-wasm-lib:
+	cargo test --features wasm
+
 build-wasm:
 	wasm-pack build --target web --out-dir pkg -- --features wasm
 	wasm-pack build --target nodejs --out-dir pkg-node -- --features wasm
@@ -38,7 +44,7 @@ web-test:
 package:
 	cargo publish --dry-run
 
-check: lint test test-default test-dates test-timezones
+check: lint test test-default test-dates test-timezones test-wasm-lib
 
 clean:
 	cargo clean
