@@ -25,6 +25,7 @@ pub fn mcp_tool_schema_json() -> &'static str {
 
 /// Parses one reading and returns a JSON string at the WASM/FFI boundary around [`parse`].
 #[cfg(feature = "wasm")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_json(text: &str) -> String {
     parsed_summary_json(&parse(text, None))
@@ -32,6 +33,7 @@ pub fn parse_json(text: &str) -> String {
 
 /// Parses one reading with a locale hint and returns a JSON string at the WASM/FFI boundary around [`parse`].
 #[cfg(feature = "wasm")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_json_with_locale(text: &str, locale: &str) -> String {
     parsed_summary_json(&parse(
@@ -45,6 +47,7 @@ pub fn parse_json_with_locale(text: &str, locale: &str) -> String {
 
 /// Parses one reading with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse`].
 #[cfg(feature = "wasm")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_json_with_context(
     text: &str,
@@ -60,6 +63,7 @@ pub fn parse_json_with_context(
 
 /// Parses all readings and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
 #[cfg(feature = "wasm")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_all_json(text: &str) -> String {
     parsed_matches_summary_json(text, &parse_all(text, None))
@@ -67,6 +71,7 @@ pub fn parse_all_json(text: &str) -> String {
 
 /// Parses all readings with a locale hint and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
 #[cfg(feature = "wasm")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_all_json_with_locale(text: &str, locale: &str) -> String {
     parsed_matches_summary_json(
@@ -83,6 +88,7 @@ pub fn parse_all_json_with_locale(text: &str, locale: &str) -> String {
 
 /// Parses all readings with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
 #[cfg(feature = "wasm")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_all_json_with_context(
     text: &str,
@@ -101,6 +107,7 @@ pub fn parse_all_json_with_context(
 
 /// Parses editor dimension readings and returns a JSON string at the WASM/FFI boundary around [`parse_dimensions_for_editor`].
 #[cfg(feature = "wasm")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_dimensions_for_editor_json(text: &str) -> String {
     parsed_matches_summary_json(text, &parse_dimensions_for_editor(text, None))
@@ -108,6 +115,7 @@ pub fn parse_dimensions_for_editor_json(text: &str) -> String {
 
 /// Parses editor dimensions with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse_dimensions_for_editor`].
 #[cfg(feature = "wasm")]
+#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_dimensions_for_editor_json_with_context(
     text: &str,

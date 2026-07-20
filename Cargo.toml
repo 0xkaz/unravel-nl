@@ -12,6 +12,7 @@ categories = ["parser-implementations", "value-formatting"]
 
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
 crate-type = ["rlib", "cdylib"]
