@@ -536,6 +536,32 @@ pub(crate) fn span_in(source: &str, fragment: &str) -> Span {
     }
 }
 
+/// [`span_in`], but ignoring everything before `from`.
+///
+/// A range can write both of its endpoints the same way — `1.234-1.234` — and
+/// locating each by its first occurrence puts every finding on the left one,
+/// leaving the right endpoint unaddressed. Searching only the tail past the
+/// endpoint already located keeps each finding on the endpoint it names.
+///
+/// Falls back to a search from the start when `from` is past the end of the
+/// text or does not sit on a character boundary, and to [`span`] when the
+/// fragment is nowhere in the text at all — the same last resort as
+/// [`span_in`], because a finding with an approximate span is still better
+/// than no finding.
+pub(crate) fn span_in_from(source: &str, fragment: &str, from: usize) -> Span {
+    let Some(tail) = source.get(from..) else {
+        return span_in(source, fragment);
+    };
+    match tail.find(fragment) {
+        Some(offset) => Span {
+            start: from + offset,
+            end: from + offset + fragment.len(),
+            text: fragment.to_owned(),
+        },
+        None => span_in(source, fragment),
+    }
+}
+
 pub(crate) fn span_token_in(source: &str, fragment: &str) -> Span {
     token_spans(source)
         .into_iter()

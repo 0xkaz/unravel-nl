@@ -238,3 +238,108 @@ fn documented_compounds_are_untouched() {
         assert_eq!(parsed.findings.skipped[0].code, IssueCode::NoValue);
     }
 }
+
+/// A case-sensitive alias keeps its own meaning: `mM` is millimolar, not `mm`.
+///
+/// The guards that hand text to the registry used to run their lookup on an
+/// ASCII-lowercased copy, so they could only ever protect aliases that are
+/// already lowercase. `5 mM` lowercased to `5 mm`, matched the metres-and-
+/// centimetres shape, and came back from the fast dispatch as five millimetres
+/// while `parse` read millimolar.
+#[test]
+fn case_sensitive_aliases_keep_their_own_reading() {
+    for (input, value, unit, dimension, alternatives) in [
+        ("5 mM", 5.0, "mol/m3", Dimension::Concentration, 0),
+        ("5mM", 5.0, "mol/m3", Dimension::Concentration, 0),
+        ("5 mA", 0.005, "A", Dimension::Current, 0),
+        // Written closed up, `5mA` has the shape of the compound idiom, and
+        // `a` reads as one: the 5.01 m reading is reported as the alternative
+        // both entry points already agreed on, not dropped.
+        ("5mA", 0.005, "A", Dimension::Current, 1),
+        // The lowercase neighbours these collide with are unchanged.
+        ("5 mm", 0.005, "m", Dimension::Length, 0),
+        ("5mm", 0.005, "m", Dimension::Length, 0),
+    ] {
+        let parsed = assert_entry_points_agree(input);
+        let best = parsed.best.as_ref().expect("a reading");
+        assert_close(best.value.expect("a value"), value);
+        assert_eq!(best.unit.as_deref(), Some(unit), "{input:?}");
+        assert_eq!(best.dimension, Some(dimension), "{input:?}");
+        assert_eq!(parsed.alternatives.len(), alternatives, "{input:?}");
+        assert_eq!(parsed.findings.ambiguities.len(), alternatives, "{input:?}");
+        assert!(parsed.findings.skipped.is_empty(), "{input:?}");
+
+        let scanned = parse_all(input, None);
+        assert_eq!(scanned.len(), 1, "{input:?}");
+        let scanned = scanned[0].parsed.best.as_ref().expect("a reading");
+        assert_eq!(scanned.unit.as_deref(), Some(unit), "{input:?}");
+        assert_eq!(scanned.dimension, Some(dimension), "{input:?}");
+        assert_close(scanned.value.expect("a value"), value);
+    }
+}
+
+/// The whole registry, every alias in four cases and both shapes: `parse` and
+/// `parse_quantity_fast` name the same value, unit, and dimension.
+///
+/// A single alias read differently by two entry points is a bug the sweep
+/// catches wherever it appears, rather than only where someone thought to look.
+/// Confidence and provenance are deliberately not compared — the two dispatches
+/// reach the same reading through different grammars and rank it differently,
+/// which is a known and separate matter.
+///
+/// Two inputs are knowingly excluded, both of which disagreed the same way
+/// before any of the guards existed:
+///
+/// * `5 ''` and `5''` — `parse` reads the registry's inch, the fast dispatch
+///   reads five feet, because the feet-and-inches grammar treats the doubled
+///   quote as an empty inches part and so never reaches the registry guard.
+/// * `5 w` and `5w` — the fast dispatch reads five weeks and `parse` reads
+///   nothing at all, because `InputFeatures::maybe_duration` does not list a
+///   bare `w`. The registry has no lowercase `w`, so this is a gate gap and not
+///   an alias collision.
+#[test]
+fn every_registry_alias_reads_the_same_through_both_entry_points() {
+    const KNOWN_DISAGREEMENTS: [&str; 4] = ["5 ''", "5''", "5 w", "5w"];
+
+    let mut checked = 0_usize;
+    let mut disagreements = Vec::new();
+    for unit in unravel_nl::unit_definitions() {
+        for alias in unit.aliases {
+            let capitalized = {
+                let mut chars = alias.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => {
+                        first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                    }
+                }
+            };
+            for variant in [
+                (*alias).to_owned(),
+                alias.to_uppercase(),
+                alias.to_lowercase(),
+                capitalized,
+            ] {
+                for input in [format!("5 {variant}"), format!("5{variant}")] {
+                    if KNOWN_DISAGREEMENTS.contains(&input.as_str()) {
+                        continue;
+                    }
+                    checked += 1;
+                    let broad = reading_of(&parse(&input, None));
+                    let fast = reading_of(&parse_quantity_fast(&input, None));
+                    if broad != fast {
+                        disagreements.push(format!("{input:?}: parse {broad:?}, fast {fast:?}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        disagreements.is_empty(),
+        "{} of {checked} inputs disagree:\n{}",
+        disagreements.len(),
+        disagreements.join("\n")
+    );
+    // The registry is not empty and the sweep really ran over it.
+    assert!(checked > 2_000, "only {checked} inputs swept");
+}

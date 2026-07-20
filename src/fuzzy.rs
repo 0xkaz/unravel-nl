@@ -442,22 +442,31 @@ pub(crate) fn range_endpoint_ambiguities(text: &str, ctx: &ParseCtx) -> Vec<Ambi
     let Some((left, right)) = split_range_text(text) else {
         return Vec::new();
     };
-    [left, right]
-        .into_iter()
-        .map(str::trim)
-        .filter_map(|endpoint| {
-            if let Some(ambiguous) = parse_ambiguous_numeric_slash_date(endpoint, ctx) {
-                let mut ambiguity = ambiguous.ambiguity;
-                ambiguity.span = span_in(text, endpoint);
-                return Some(ambiguity);
-            }
-            let (offset, token, ambiguous) = ambiguous_number_token(endpoint, ctx)?;
-            let start = span_in(text, endpoint).start + offset;
+    let mut ambiguities = Vec::new();
+    // Each endpoint is located in the tail past the one before it. Both ends can
+    // be written identically — `1.234-1.234` — and a search from the start would
+    // put the right endpoint's finding on the left endpoint's text, reporting
+    // the same fragment twice and never naming the one that is still in
+    // question.
+    let mut searched_to = 0;
+    for endpoint in [left, right].into_iter().map(str::trim) {
+        let endpoint_span = span_in_from(text, endpoint, searched_to);
+        searched_to = endpoint_span.end;
+        if let Some(ambiguous) = parse_ambiguous_numeric_slash_date(endpoint, ctx) {
             let mut ambiguity = ambiguous.ambiguity;
-            ambiguity.span = span_slice(text, start, start + token.len());
-            Some(ambiguity)
-        })
-        .collect()
+            ambiguity.span = endpoint_span;
+            ambiguities.push(ambiguity);
+            continue;
+        }
+        let Some((offset, token, ambiguous)) = ambiguous_number_token(endpoint, ctx) else {
+            continue;
+        };
+        let start = endpoint_span.start + offset;
+        let mut ambiguity = ambiguous.ambiguity;
+        ambiguity.span = span_slice(text, start, start + token.len());
+        ambiguities.push(ambiguity);
+    }
+    ambiguities
 }
 
 pub(crate) fn split_range_text(text: &str) -> Option<(&str, &str)> {

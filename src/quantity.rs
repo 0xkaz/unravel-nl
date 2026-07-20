@@ -439,18 +439,33 @@ pub(crate) fn metric_compound_reading(stripped: &str) -> Option<Reading> {
 }
 
 pub(crate) fn parse_metric_length(text: &str) -> Option<Reading> {
-    let stripped = text.trim().to_ascii_lowercase();
+    let trimmed = text.trim();
+    let stripped = trimmed.to_ascii_lowercase();
     // `5 m3` is the registry's cubic metre, not 5 m + 3 cm. Without this the
     // reading depended on which entry point the caller used, because the
     // fast path runs this parser before the registry lookup.
-    if metric_compound_shape(&stripped) && !spaced_registry_unit(&stripped) {
+    //
+    // The shape test reads the lowercased text — the idiom is case-blind — but
+    // the registry lookups must see the text as written, because some aliases
+    // are case-sensitive: `mM` is the registry's millimolar, and asking about
+    // the lowercased `mm` instead answers for the millimetre, leaving the
+    // concentration unprotected.
+    if metric_compound_shape(&stripped) {
+        // A token the registry knows takes the text off this grammar entirely.
+        // Falling through to the suffix table instead would read the *lowercased*
+        // text there, which is how `5 mM` — millimolar — came back as five
+        // millimetres: the registry's answer is the one both entry points give.
+        //
+        // `5m3` is the registry's cubic metre; the metres-and-centimetres
+        // reading survives as the alternative the entry points report through
+        // [`closed_compound_alternative`].
+        if spaced_registry_unit(trimmed) || closed_registry_unit(trimmed) {
+            return None;
+        }
         // The idiom claims text of this shape outright: `5mm` splits as `5` and
         // `m`, whose second half is no number, and falling through to the suffix
         // table below would read it as a compound that was never written.
-        let reading = metric_compound_reading(&stripped)?;
-        // `5m3` is the registry's cubic metre; the metres-and-centimetres
-        // reading survives as the alternative the entry points report.
-        return (!closed_registry_unit(&stripped)).then_some(reading);
+        return metric_compound_reading(&stripped);
     }
 
     for (suffix, factor) in [

@@ -207,6 +207,44 @@ fn range_endpoints_report_their_own_ambiguous_numbers() {
         );
     }
 
+    // Endpoints written identically get one finding each, and each finding
+    // spans the endpoint it names. Locating an endpoint by the first occurrence
+    // of its text put both findings on the left one and left the right end
+    // unaddressed.
+    let expectations = [
+        ("1.234-1.234", vec![("1.234", 0, 5), ("1.234", 6, 11)]),
+        ("1.234-1.234 kg", vec![("1.234", 0, 5), ("1.234", 6, 11)]),
+        ("1.234 to 1.234", vec![("1.234", 0, 5), ("1.234", 9, 14)]),
+        (
+            "between 1.234 and 1.234",
+            vec![("1.234", 8, 13), ("1.234", 18, 23)],
+        ),
+        (
+            "from 1.234 to 1.234",
+            vec![("1.234", 5, 10), ("1.234", 14, 19)],
+        ),
+        ("1.234〜1.234", vec![("1.234", 0, 5), ("1.234", 8, 13)]),
+        ("1.234..1.234", vec![("1.234", 0, 5), ("1.234", 7, 12)]),
+    ];
+    for (input, expected) in expectations {
+        let parsed = parse(input, None);
+        let range = parsed
+            .best
+            .as_ref()
+            .and_then(|best| best.range.clone())
+            .unwrap_or_else(|| panic!("{input}: no range"));
+        assert_close(range.from.value.unwrap(), 1.234, input);
+        assert_close(range.to.value.unwrap(), 1.234, input);
+        let findings = ambiguous_number_findings(&parsed);
+        assert_eq!(findings, expected, "{input}");
+        // Every span really covers the text it claims, and no two findings
+        // point at the same fragment.
+        for (text, start, end) in &findings {
+            assert_eq!(&&input[*start..*end], text, "{input}");
+        }
+        assert_ne!(findings[0].1, findings[1].1, "{input}");
+    }
+
     // Endpoints the shape settles report nothing.
     let settled = parse("1.5-2.5 kg", None);
     assert!(settled.best.is_some(), "{settled:#?}");

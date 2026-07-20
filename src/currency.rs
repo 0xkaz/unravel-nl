@@ -77,13 +77,18 @@ pub(crate) fn parse_conversion_request(text: &str, ctx: &ParseCtx) -> Option<Rea
 }
 
 pub(crate) fn parse_feet_inches(text: &str) -> Option<Reading> {
-    let lowered = text.trim().to_ascii_lowercase();
+    let trimmed = text.trim();
+    let lowered = trimmed.to_ascii_lowercase();
     let (reading, has_inches) = feet_inches_reading(&lowered)?;
     // `5 ft2` is the registry's square foot, not 5 ft 2 in — see
     // `spaced_registry_unit`, and `closed_registry_unit` for the `5ft2` written
     // closed up. Only the two-part form is guarded: `5 ft` carries no second
     // number and so no competing reading.
-    if has_inches && (spaced_registry_unit(&lowered) || closed_registry_unit(&lowered)) {
+    //
+    // The lookups read the text as written: a registry alias may be
+    // case-sensitive, and asking about the lowercased text answers for a
+    // different unit than the one the writer named.
+    if has_inches && (spaced_registry_unit(trimmed) || closed_registry_unit(trimmed)) {
         return None;
     }
     Some(reading)
