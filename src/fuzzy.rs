@@ -74,9 +74,7 @@ pub(crate) fn parse_fuzzy_reading(text: &str, ctx: &ParseCtx) -> Option<ParsedRe
 pub(crate) fn parse_custom_fuzzy_profile(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
     let normalized = normalize_alias(text);
     for profile in &ctx.fuzzy_profiles {
-        if let Some(expected_dimension) = ctx.expected_dimension
-            && expected_dimension != profile.dimension
-        {
+        if !ctx.expected_dimensions.allows(profile.dimension) {
             continue;
         }
         let Some(target_unit) = unit_by_alias(&profile.unit) else {
@@ -123,7 +121,9 @@ pub(crate) fn parse_custom_fuzzy_profile(text: &str, ctx: &ParseCtx) -> Option<P
 }
 
 pub(crate) fn parse_fuzzy_temperature(text: &str, ctx: &ParseCtx) -> Option<ParsedReading> {
-    if ctx.expected_dimension != Some(Dimension::Temperature) {
+    // Opt-in: a bare "hot" is a temperature only where the caller said the
+    // field holds one, so this stays off until Temperature is declared.
+    if !ctx.expected_dimensions.contains(Dimension::Temperature) {
         return None;
     }
 
@@ -836,7 +836,7 @@ mod tests {
         let hot = parse(
             "it's hot",
             Some(ParseCtx {
-                expected_dimension: Some(Dimension::Temperature),
+                expected_dimensions: DimensionSet::from(Dimension::Temperature),
                 ..ParseCtx::default()
             }),
         );
@@ -848,7 +848,7 @@ mod tests {
         let japanese_hot = parse(
             "今日は暑い",
             Some(ParseCtx {
-                expected_dimension: Some(Dimension::Temperature),
+                expected_dimensions: DimensionSet::from(Dimension::Temperature),
                 ..ParseCtx::default()
             }),
         );

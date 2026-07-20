@@ -33,7 +33,13 @@ export type IssueSeverity = "error" | "warning" | "info";
 export interface ParseContext {
   locale?: LocaleTag | null;
   expect?: ReadingKind | null;
-  expected_dimension?: Dimension | null;
+  /**
+   * Measurement domains the field accepts. A hard filter: a reading from any
+   * other domain is refused with REJECTED_BY_POLICY rather than returned.
+   * Readings with no dimension at all are not refused. Several domains are
+   * written as a comma-separated list, e.g. "length,area".
+   */
+  expected_dimension?: Dimension | `${Dimension},${string}` | null;
   number_format?: "auto" | "comma_decimal" | "dot_decimal";
   purpose?: "general" | "quantity" | "number" | "date" | "recurrence" | "dimension_editor";
   strictness?: "forgiving" | "confirm" | "strict";

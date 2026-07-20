@@ -6,8 +6,8 @@
 //! as reserved and is never constructed; a sweep guards that claim.
 
 use unravel_nl::{
-    Dimension, Findings, IssueCode, IssueSeverity, Kind, Locale, ParseCtx, Parsed, Skipped, Span,
-    parse, parse_all, ranked_findings,
+    Dimension, DimensionSet, Findings, IssueCode, IssueSeverity, Kind, Locale, ParseCtx, Parsed,
+    Skipped, Span, parse, parse_all, ranked_findings,
 };
 
 #[test]
@@ -36,7 +36,7 @@ fn reports_empty_for_blank_input() {
 fn reports_unit_assumed_when_a_dimension_is_expected() {
     for ctx in [
         ParseCtx {
-            expected_dimension: Some(Dimension::Length),
+            expected_dimensions: DimensionSet::from(Dimension::Length),
             ..ParseCtx::default()
         },
         ParseCtx {
@@ -128,7 +128,7 @@ fn unknown_unit_is_never_emitted() {
                 ..ParseCtx::default()
             }),
             Some(ParseCtx {
-                expected_dimension: Some(Dimension::Length),
+                expected_dimensions: DimensionSet::from(Dimension::Length),
                 ..ParseCtx::default()
             }),
         ] {

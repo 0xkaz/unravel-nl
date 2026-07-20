@@ -1,6 +1,6 @@
 use unravel_nl::{
-    Dimension, IssueCode, Kind, Locale, ParseCtx, ParsePurpose, Strictness, parse, parse_all,
-    parse_dimensions_for_editor,
+    Dimension, DimensionSet, IssueCode, Kind, Locale, ParseCtx, ParsePurpose, Strictness, parse,
+    parse_all, parse_dimensions_for_editor,
 };
 
 #[test]
@@ -95,7 +95,7 @@ fn extracts_full_width_and_cjk_number_values() {
 fn extracts_editor_dimension_windows() {
     let ctx = Some(ParseCtx {
         locale: Some(Locale::Ja),
-        expected_dimension: Some(Dimension::Length),
+        expected_dimensions: DimensionSet::from(Dimension::Length),
         ..ParseCtx::default()
     });
 
@@ -123,7 +123,7 @@ fn extracts_editor_dimension_windows() {
         "寸法１ ２００",
         Some(ParseCtx {
             locale: Some(Locale::Ja),
-            expected_dimension: Some(Dimension::Length),
+            expected_dimensions: DimensionSet::from(Dimension::Length),
             ..ParseCtx::default()
         }),
     );

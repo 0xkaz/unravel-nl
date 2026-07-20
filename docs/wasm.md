@@ -15,6 +15,14 @@ The web target emits `parse_json(text)`, `parse_json_with_locale(text, locale)`,
 It also emits `parse_dimensions_for_editor_json(text)` and
 `parse_dimensions_for_editor_json_with_context(text, locale, expected_dimension,
 strictness)` for building-dimension-only editor scans.
+
+The `expected_dimension` argument is a hard filter, not a hint: a reading from
+any other measurement domain is refused with `REJECTED_BY_POLICY` instead of
+being returned. Readings that carry no dimension at all — a bare number, a
+date, a recurrence — are not refused by it. Several domains are written as a
+comma-separated list (`"length,area"`); an empty string accepts every domain,
+and an unrecognized name is dropped without taking the rest of the list with
+it.
 Single-value exports return a compact JSON summary object with exactly the keys
 `ok`, `input`, `best`, and ranked `issues` — `input` is always present, echoing
 the string that was parsed. When `best` is a range reading it also carries a

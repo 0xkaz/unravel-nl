@@ -200,7 +200,7 @@ fn ranked_findings_orders_a_mixed_finding_set_by_rank() {
     let unit_assumed = parse(
         "3640",
         Some(ParseCtx {
-            expected_dimension: Some(unravel_nl::Dimension::Length),
+            expected_dimensions: unravel_nl::DimensionSet::from(unravel_nl::Dimension::Length),
             ..ParseCtx::default()
         }),
     );

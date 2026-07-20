@@ -1,6 +1,6 @@
 use unravel_nl::{
-    CanonicalizeRequest, Dimension, IssueCode, ParseCtx, Strictness, canonicalize_values,
-    repair_tool_call_message,
+    CanonicalizeRequest, Dimension, DimensionSet, IssueCode, ParseCtx, Strictness,
+    canonicalize_values, repair_tool_call_message,
 };
 
 #[test]
@@ -19,7 +19,7 @@ fn canonicalize_values_accepts_clean_values_and_rejects_strict_assumptions() {
             "length",
             "5 meterz",
             Some(ParseCtx {
-                expected_dimension: Some(Dimension::Length),
+                expected_dimensions: DimensionSet::from(Dimension::Length),
                 strictness: Strictness::Confirm,
                 ..ParseCtx::default()
             }),

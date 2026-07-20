@@ -1,6 +1,7 @@
 use unravel_nl::{
-    AcceptOptions, CompletionKind, CustomUnit, Dimension, FuzzyProfile, FuzzyTerm, IssueCode, Kind,
-    NumberFormat, ParseCtx, complete_readings, describe_parsed, describe_reading, parse,
+    AcceptOptions, CompletionKind, CustomUnit, Dimension, DimensionSet, FuzzyProfile, FuzzyTerm,
+    IssueCode, Kind, NumberFormat, ParseCtx, complete_readings, describe_parsed, describe_reading,
+    parse,
 };
 
 #[test]
@@ -33,7 +34,7 @@ fn completion_readings_fan_out_plain_numbers_to_expected_units() {
     let completions = complete_readings(
         "10",
         Some(ParseCtx {
-            expected_dimension: Some(Dimension::Mass),
+            expected_dimensions: DimensionSet::from(Dimension::Mass),
             ..ParseCtx::default()
         }),
     );
@@ -185,7 +186,7 @@ fn custom_fuzzy_profile_normalizes_terms_to_ranges() {
     let parsed = parse(
         "heavy",
         Some(ParseCtx {
-            expected_dimension: Some(Dimension::Mass),
+            expected_dimensions: DimensionSet::from(Dimension::Mass),
             fuzzy_profiles: vec![FuzzyProfile::new(
                 "parcels",
                 Dimension::Mass,

@@ -8,9 +8,9 @@
 //! consumer highlights.
 
 use unravel_nl::{
-    Dimension, IssueCode, Kind, Locale, ParseCtx, Parsed, Strictness, parse, parse_all,
-    parse_date_fast, parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
-    parse_recurrence_fast, ranked_findings,
+    Dimension, DimensionSet, IssueCode, Kind, Locale, ParseCtx, Parsed, Strictness, parse,
+    parse_all, parse_date_fast, parse_dimensions_for_editor, parse_number_fast,
+    parse_quantity_fast, parse_recurrence_fast, ranked_findings,
 };
 
 /// The contract, checked for every finding: the span is a slice of the input.
@@ -237,7 +237,7 @@ fn leading_whitespace_shifts_spans_past_the_original_spaces() {
         "  ３",
         Some(ParseCtx {
             expect: Some(Kind::Quantity),
-            expected_dimension: Some(Dimension::Length),
+            expected_dimensions: DimensionSet::from(Dimension::Length),
             ..ParseCtx::default()
         }),
     );

@@ -404,10 +404,10 @@ pub(crate) fn push_editor_dimension_match(
         return;
     }
     let local_ctx_storage;
-    let local_ctx = if ctx.expected_dimension.is_none() {
+    let local_ctx = if ctx.expected_dimensions.is_empty() {
         if let Some(hint) = hint {
             let mut updated = ctx.clone();
-            updated.expected_dimension = Some(hint);
+            updated.expected_dimensions = DimensionSet::from(hint);
             local_ctx_storage = updated;
             &local_ctx_storage
         } else {
@@ -417,9 +417,14 @@ pub(crate) fn push_editor_dimension_match(
         ctx
     };
     let mut parsed = parsed_shell(text, local_ctx);
-    parse_editor_dimension_into(text, local_ctx, &mut parsed);
+    let refused = parse_editor_dimension_into(text, local_ctx, &mut parsed);
     retarget_findings_to_input(&mut parsed);
-    if !parsed_is_editor_dimension(&parsed, hint, ctx.expected_dimension) {
+    // A candidate the caller's declared set refused is kept, so that the
+    // refusal is reported rather than dropped. A candidate the label hint alone
+    // filtered out refuses nothing the caller declared — the hint is this
+    // function's own inference — and is dropped as it always was.
+    let refused_by_caller = refused && !ctx.expected_dimensions.is_empty();
+    if !refused_by_caller && !parsed_is_editor_dimension(&parsed, hint, ctx.expected_dimensions) {
         return;
     }
 
@@ -624,15 +629,19 @@ pub(crate) fn candidate_starts_with_currency(text: &str, start: usize) -> bool {
 pub(crate) fn parsed_is_editor_dimension(
     parsed: &Parsed,
     hint: Option<Dimension>,
-    expected_dimension: Option<Dimension>,
+    expected_dimensions: DimensionSet,
 ) -> bool {
-    let allowed_dimension = expected_dimension.or(hint);
+    let allowed = if expected_dimensions.is_empty() {
+        hint.map(DimensionSet::from).unwrap_or_default()
+    } else {
+        expected_dimensions
+    };
     if let Some(best) = parsed.best.as_ref() {
-        if reading_is_dimension_quantity(best, allowed_dimension) {
+        if reading_is_dimension_quantity(best, allowed) {
             return true;
         }
         if best.kind == Kind::Number {
-            return allowed_dimension == Some(Dimension::Length)
+            return allowed.contains(Dimension::Length)
                 && parsed
                     .alternatives
                     .iter()
@@ -642,7 +651,7 @@ pub(crate) fn parsed_is_editor_dimension(
     parsed
         .alternatives
         .iter()
-        .any(|reading| reading_is_dimension_quantity(reading, allowed_dimension))
+        .any(|reading| reading_is_dimension_quantity(reading, allowed))
 }
 
 pub(crate) fn candidate_has_identifier_prefix(
@@ -660,18 +669,14 @@ pub(crate) fn is_embedded_identifier_char(ch: char) -> bool {
     ch == '_' || ch.is_ascii_alphanumeric() || matches!(ch, 'Ａ'..='Ｚ' | 'ａ'..='ｚ' | '０'..='９')
 }
 
-pub(crate) fn reading_is_dimension_quantity(
-    reading: &Reading,
-    expected_dimension: Option<Dimension>,
-) -> bool {
+pub(crate) fn reading_is_dimension_quantity(reading: &Reading, allowed: DimensionSet) -> bool {
     if reading.kind != Kind::Quantity {
         return false;
     }
     match reading.dimension {
-        Some(Dimension::Length | Dimension::Area) => match expected_dimension {
-            Some(dimension) => reading.dimension == Some(dimension),
-            None => true,
-        },
+        // The editor only ever accepts these two, whatever else is declared;
+        // an empty `allowed` is no further restriction, as everywhere else.
+        Some(dimension @ (Dimension::Length | Dimension::Area)) => allowed.allows(dimension),
         _ => false,
     }
 }
@@ -1005,25 +1010,39 @@ pub(crate) fn spans_overlap(
     left_start < right_end && right_start < left_end
 }
 
-pub(crate) fn parse_editor_dimension_into(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+/// Reads one editor-dimension candidate, and says whether it was refused.
+///
+/// Returns `true` when [`ParseCtx::expected_dimensions`] refused the reading —
+/// the reading was a dimension, and not one of the declared ones. The refusal
+/// is on `parsed` as an [`IssueCode::RejectedByPolicy`] finding either way; the
+/// return value is what tells [`push_editor_dimension_match`] that dropping the
+/// candidate would now be dropping a refusal, which the no-silent-loss contract
+/// does not allow.
+pub(crate) fn parse_editor_dimension_into(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) -> bool {
     let normalized_input = normalize_input_cow(text);
     let trimmed = normalized_input.trim();
 
     if is_editor_plain_number_candidate(trimmed) {
         parse_editor_dimension_number_into(trimmed, ctx, parsed);
-        return;
+        return false;
     }
 
     parse_quantity_fast_into(trimmed, ctx, parsed);
-    if parsed_is_editor_dimension(parsed, ctx.expected_dimension, ctx.expected_dimension) {
-        return;
+    if enforce_expected_dimensions(trimmed, ctx, parsed) {
+        // Falling through to the number fallback would wipe the refusal along
+        // with everything else it clears.
+        return parsed.best.is_none();
+    }
+    if parsed_is_editor_dimension(parsed, None, ctx.expected_dimensions) {
+        return false;
     }
 
     parse_editor_dimension_number_into(trimmed, ctx, parsed);
+    false
 }
 
 pub(crate) fn parse_editor_dimension_number_into(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
-    let expected_dimension = ctx.expected_dimension.unwrap_or(Dimension::Length);
+    let expected_dimension = editor_number_dimension(ctx);
     let mut number = parsed_shell(text, ctx);
     if let Some(ambiguous) = parse_ambiguous_number(text, ctx) {
         number.best = ambiguous.best;
@@ -1039,7 +1058,7 @@ pub(crate) fn parse_editor_dimension_number_into(text: &str, ctx: &ParseCtx, par
     }
     finalize_parsed(text, &mut number);
 
-    if parsed_is_editor_dimension(&number, Some(expected_dimension), Some(expected_dimension)) {
+    if parsed_is_editor_dimension(&number, None, DimensionSet::from(expected_dimension)) {
         // `number` was built from the normalized text, so adopting it wholesale
         // would replace the original input the caller handed in — and the spans
         // are translated against that original afterwards.
@@ -1057,6 +1076,23 @@ pub(crate) fn parse_editor_dimension_number_into(text: &str, ctx: &ParseCtx, par
         .findings
         .skipped
         .push(skipped(text, "no supported editor dimension matched"));
+}
+
+/// Picks the dimension a bare number in an editor field stands for.
+///
+/// A labelled bare number is a length written without its unit (`寸法3640`), so
+/// an unrestricted field reads it as one. A field that declared its domains
+/// reads it as a length whenever length is among them, and otherwise as the
+/// first domain it did declare — where, having no millimetre reading to offer,
+/// it will simply not be a dimension.
+pub(crate) fn editor_number_dimension(ctx: &ParseCtx) -> Dimension {
+    if ctx.expected_dimensions.contains(Dimension::Length) {
+        return Dimension::Length;
+    }
+    ctx.expected_dimensions
+        .iter()
+        .next()
+        .unwrap_or(Dimension::Length)
 }
 
 pub(crate) fn set_editor_plain_number_result(

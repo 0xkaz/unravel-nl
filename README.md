@@ -134,12 +134,12 @@ quantity, date, range, recurrence, conversion, or plain number. Use narrower
 entry points when the UI already knows the field type:
 
 ```rust
-use unravel_nl::{parse_quantity_fast, Dimension, ParseCtx};
+use unravel_nl::{parse_quantity_fast, Dimension, DimensionSet, ParseCtx};
 
 let parsed = parse_quantity_fast(
     "1,234 kg",
     Some(ParseCtx {
-        expected_dimension: Some(Dimension::Mass),
+        expected_dimensions: DimensionSet::of(&[Dimension::Mass]),
         ..ParseCtx::default()
     }),
 );
@@ -204,13 +204,13 @@ omitted entirely when that search fails, and callers must treat them as
 optional. The byte and character spans from the core are always present.
 
 ```rust
-use unravel_nl::{parse_all, Dimension, Locale, ParseCtx};
+use unravel_nl::{parse_all, Dimension, DimensionSet, Locale, ParseCtx};
 
 let matches = parse_all(
     "3m×4m のLDK",
     Some(ParseCtx {
         locale: Some(Locale::Ja),
-        expected_dimension: Some(Dimension::Length),
+        expected_dimensions: DimensionSet::of(&[Dimension::Length]),
         ..ParseCtx::default()
     }),
 );
@@ -400,7 +400,7 @@ assert_eq!(parsed.best.unwrap().custom_kind.as_deref(), Some("package_count"));
 ## Completions
 
 ```rust
-use unravel_nl::{complete, complete_readings, CompletionKind, Dimension, ParseCtx};
+use unravel_nl::{complete, complete_readings, CompletionKind, Dimension, DimensionSet, ParseCtx};
 
 let completions = complete("10 met", None);
 
@@ -411,7 +411,7 @@ assert_eq!(completions[0].kind, CompletionKind::Unit);
 let readings = complete_readings(
     "10",
     Some(ParseCtx {
-        expected_dimension: Some(Dimension::Mass),
+        expected_dimensions: DimensionSet::of(&[Dimension::Mass]),
         ..ParseCtx::default()
     }),
 );
@@ -436,7 +436,7 @@ assert_eq!(humanize(&best, None), "20 °C");
 ## Approximate And Fuzzy Input
 
 ```rust
-use unravel_nl::{parse, Dimension, FuzzyProfile, FuzzyTerm, ParseCtx};
+use unravel_nl::{parse, Dimension, DimensionSet, FuzzyProfile, FuzzyTerm, ParseCtx};
 
 let tolerance = parse("10 ± 0.5 mm", None);
 assert!(tolerance.best.unwrap().range.is_some());
@@ -447,7 +447,7 @@ assert!(bounded.best.unwrap().range.is_some());
 let hot = parse(
     "it's hot",
     Some(ParseCtx {
-        expected_dimension: Some(Dimension::Temperature),
+        expected_dimensions: DimensionSet::of(&[Dimension::Temperature]),
         ..ParseCtx::default()
     }),
 );
@@ -457,7 +457,7 @@ assert!(hot.best.unwrap().range.is_some());
 let custom = parse(
     "heavy",
     Some(ParseCtx {
-        expected_dimension: Some(Dimension::Mass),
+        expected_dimensions: DimensionSet::of(&[Dimension::Mass]),
         fuzzy_profiles: vec![FuzzyProfile::new(
             "parcels",
             Dimension::Mass,

@@ -18,6 +18,10 @@ use crate::*;
 /// or approximated is reported in [`Parsed::findings`] rather than dropped.
 /// `best` is `None` when nothing could be read at all.
 ///
+/// [`ParseCtx::expected_dimensions`] is enforced here: with a non-empty set, a
+/// reading from a measurement domain outside it is refused rather than
+/// returned, and the refusal is reported as [`IssueCode::RejectedByPolicy`].
+///
 /// ```
 /// use unravel_nl::{parse, Locale, ParseCtx};
 ///
@@ -53,27 +57,35 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         ParsePurpose::Number => parse_number_fast_into(trimmed, &ctx, &mut parsed),
         ParsePurpose::Date => parse_date_fast_into(trimmed, &ctx, &mut parsed),
         ParsePurpose::Recurrence => parse_recurrence_fast_into(trimmed, &mut parsed),
-        ParsePurpose::DimensionEditor => parse_editor_dimension_into(trimmed, &ctx, &mut parsed),
+        ParsePurpose::DimensionEditor => {
+            // The refusal it reports is already on `parsed`; only the editor
+            // extractor needs the answer as a value.
+            let _ = parse_editor_dimension_into(trimmed, &ctx, &mut parsed);
+        }
     }
+    enforce_expected_dimensions(trimmed, &ctx, &mut parsed);
     retarget_findings_to_input(&mut parsed);
     parsed
 }
 
 /// Parses `text` as a measurement, skipping date and recurrence grammars.
 ///
-/// Note that [`ParseCtx::expected_dimension`] is a hint, not a filter: this
-/// entry point reports whatever dimension it reads, so `5 kg` still parses as a
-/// mass even when a length was expected. Callers that need the reading refused
-/// should check [`Reading::dimension`] themselves, or use
-/// [`parse_dimensions_for_editor`], which does enforce the expectation.
+/// [`ParseCtx::expected_dimensions`] is a hard filter here. A non-empty set
+/// refuses any reading from a measurement domain outside it: `5 kg` under
+/// `[Dimension::Length]` returns `best: None` with the mass in
+/// [`Parsed::alternatives`] and an [`IssueCode::RejectedByPolicy`] finding,
+/// rather than the mass the caller said the field could not hold. Declaring the
+/// domains is also what keeps unit collisions across domains out of the answer:
+/// with lengths declared, `5 mM` cannot come back as a concentration and `5 m3`
+/// reads as the compound 5 m 3 cm.
 ///
 /// ```
-/// use unravel_nl::{parse_quantity_fast, Dimension, ParseCtx};
+/// use unravel_nl::{parse_quantity_fast, Dimension, DimensionSet, ParseCtx};
 ///
 /// let parsed = parse_quantity_fast(
 ///     "1,234 kg",
 ///     Some(ParseCtx {
-///         expected_dimension: Some(Dimension::Mass),
+///         expected_dimensions: DimensionSet::of(&[Dimension::Mass]),
 ///         ..ParseCtx::default()
 ///     }),
 /// );
@@ -98,6 +110,7 @@ pub(crate) fn parse_quantity_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed
         return parsed;
     }
     parse_quantity_fast_into(trimmed, ctx, &mut parsed);
+    enforce_expected_dimensions(trimmed, ctx, &mut parsed);
     retarget_findings_to_input(&mut parsed);
     parsed
 }
@@ -121,6 +134,12 @@ pub(crate) fn parse_quantity_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed
 /// Anything the shape already settles returns one reading and no finding:
 /// `1.23`, `1.2345`, and `0.5` are decimals, `1.234.567` is 1234567, and
 /// `1.234,56` is 1234.56.
+///
+/// [`ParseCtx::expected_dimensions`] is enforced here as everywhere else, but a
+/// bare number has no measurement domain, so a restriction does not refuse one:
+/// this entry point keeps working under any declared set. What the set does
+/// change is the millimetre alternative — a set containing [`Dimension::Length`]
+/// offers it, exactly as `expect: Some(Kind::Quantity)` does.
 pub fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     parse_number_fast_with_ctx(text, &ctx)
@@ -139,6 +158,7 @@ pub(crate) fn parse_number_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
         return parsed;
     }
     parse_number_fast_into(trimmed, ctx, &mut parsed);
+    enforce_expected_dimensions(trimmed, ctx, &mut parsed);
     retarget_findings_to_input(&mut parsed);
     parsed
 }
@@ -148,6 +168,10 @@ pub(crate) fn parse_number_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
 /// The rule lands in [`Reading::recurrence`]. Phrases that are recognized as
 /// recurrences but cannot be expressed as a supported rule are reported as
 /// [`IssueCode::RecurrenceUnsupported`] instead of being approximated.
+///
+/// [`ParseCtx::expected_dimensions`] is enforced here as everywhere else, and
+/// as with a date it never bites: a schedule has no measurement domain, so no
+/// declared set can refuse one.
 ///
 /// ```
 /// use unravel_nl::{parse_recurrence_fast, Kind};
@@ -172,6 +196,7 @@ pub fn parse_recurrence_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         return parsed;
     }
     parse_recurrence_fast_into(trimmed, &mut parsed);
+    enforce_expected_dimensions(trimmed, &ctx, &mut parsed);
     retarget_findings_to_input(&mut parsed);
     parsed
 }
@@ -182,6 +207,9 @@ pub fn parse_recurrence_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
 /// `next friday` resolve only when [`ParseCtx::reference_date`] is supplied and
 /// the `dates-jiff` feature is enabled; otherwise they are reported as findings
 /// rather than resolved against an implicit "today".
+///
+/// [`ParseCtx::expected_dimensions`] is enforced here as everywhere else, but a
+/// date has no measurement domain, so a declared set never refuses one.
 pub fn parse_date_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     let normalized_input = normalize_input_cow(text);
@@ -196,6 +224,7 @@ pub fn parse_date_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         return parsed;
     }
     parse_date_fast_into(trimmed, &ctx, &mut parsed);
+    enforce_expected_dimensions(trimmed, &ctx, &mut parsed);
     retarget_findings_to_input(&mut parsed);
     parsed
 }
@@ -217,6 +246,14 @@ pub(crate) fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
 /// Overlapping matches are resolved so the returned matches are ordered by
 /// position and never overlap, which makes them safe to use directly for
 /// highlighting the original string.
+///
+/// [`ParseCtx::expected_dimensions`] is enforced on every match, because every
+/// match is produced by [`parse`], [`parse_quantity_fast`], or
+/// [`parse_number_fast`]. A fragment read from a refused domain is still
+/// returned as a match, with `best: None`, the refused reading in
+/// [`Parsed::alternatives`], and an [`IssueCode::RejectedByPolicy`] finding: it
+/// was read and refused, and the span is exactly what a caller needs in order
+/// to say so.
 ///
 /// ```
 /// use unravel_nl::{parse_all, Locale, ParseCtx};
@@ -248,6 +285,14 @@ pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
 /// not attempted, so text like `予算1234` or `next friday` yields nothing
 /// instead of a wrong value. Japanese building units such as `帖` are kept, and
 /// labelled bare numbers such as `寸法3640` are read as unitless dimensions.
+///
+/// With an empty [`ParseCtx::expected_dimensions`] the accepted set is decided
+/// as it always was, by the label next to each candidate. A non-empty set
+/// narrows that: only the declared domains are kept, and a candidate that
+/// *would* have been a dimension but is not in the declared set is returned as
+/// a match with `best: None` and an [`IssueCode::RejectedByPolicy`] finding,
+/// rather than dropped. Text that is no dimension at all — `予算1234`,
+/// `next friday` — is still simply not a match, since nothing was refused.
 ///
 /// ```
 /// use unravel_nl::{parse_dimensions_for_editor, Locale, ParseCtx};
@@ -840,7 +885,7 @@ pub(crate) fn set_plain_number_result(
     reading: Reading,
     parsed: &mut Parsed,
 ) {
-    if ctx.expect == Some(Kind::Quantity) || ctx.expected_dimension == Some(Dimension::Length) {
+    if ctx.expect == Some(Kind::Quantity) || ctx.expected_dimensions.contains(Dimension::Length) {
         parsed.alternatives.push(Reading::quantity(
             reading.value.unwrap_or_default(),
             "mm",
@@ -1084,6 +1129,106 @@ pub(crate) fn range_is_descending(reading: &Reading) -> bool {
     false
 }
 
+/// Refuses a reading whose measurement domain the caller did not declare.
+///
+/// This is the one place [`ParseCtx::expected_dimensions`] is enforced, and
+/// every entry point runs it on the way out, so the declaration binds the same
+/// way whichever door the caller came through. An empty set is no restriction
+/// and returns immediately, which is what makes the field free for callers who
+/// never set it.
+///
+/// Three rules, each of which the field documentation states:
+///
+/// - A reading with **no** dimension — a bare number, a date, a recurrence — is
+///   never refused. It has no measurement domain to be outside of, and the
+///   collisions this exists to remove were all unit against unit.
+/// - A [`Kind::Range`] is judged by its endpoints, which is where a range keeps
+///   its dimension.
+/// - If a competing reading of the same input is in the set, it is promoted to
+///   `best` rather than lost along with the refused one. The refusal is still
+///   reported, because the choice between them is exactly what
+///   [`Parsed::findings`] exists to make visible.
+///
+/// The refused reading is moved into [`Parsed::alternatives`] rather than
+/// dropped, the same way an acceptance policy refusal is handled by
+/// [`reject_candidate`].
+///
+/// Returns whether anything was refused.
+pub(crate) fn enforce_expected_dimensions(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) -> bool {
+    if ctx.expected_dimensions.is_empty() {
+        return false;
+    }
+    let Some(best) = parsed.best.as_ref() else {
+        return false;
+    };
+    let Some(refused) = reading_dimension_outside(best, ctx.expected_dimensions) else {
+        return false;
+    };
+
+    let promoted = parsed
+        .alternatives
+        .iter()
+        .position(|reading| reading_is_within_dimensions(reading, ctx.expected_dimensions));
+    let refused_reading = parsed.best.take().expect("checked above");
+    if let Some(index) = promoted {
+        parsed.best = Some(parsed.alternatives.remove(index));
+    }
+    parsed.alternatives.push(refused_reading);
+    parsed.findings.skipped.push(skipped_with_span(
+        text,
+        &expected_dimensions_reason(refused, ctx.expected_dimensions),
+        IssueCode::RejectedByPolicy,
+        span(text),
+    ));
+    true
+}
+
+/// Returns the first dimension of `reading` that `expected` does not allow.
+///
+/// A range carries its dimensions on its endpoints, so it is asked about them;
+/// a reading with no dimension anywhere answers `None` and is allowed.
+pub(crate) fn reading_dimension_outside(
+    reading: &Reading,
+    expected: DimensionSet,
+) -> Option<Dimension> {
+    if let Some(dimension) = reading.dimension
+        && !expected.allows(dimension)
+    {
+        return Some(dimension);
+    }
+    let range = reading.range.as_ref()?;
+    reading_dimension_outside(&range.from, expected)
+        .or_else(|| reading_dimension_outside(&range.to, expected))
+}
+
+/// Whether a reading carries a dimension and every one of them is expected.
+///
+/// Stricter than the negation of [`reading_dimension_outside`]: a dimensionless
+/// reading is not refused, but it is not a *replacement* for a refused one
+/// either, so it is never promoted over one.
+pub(crate) fn reading_is_within_dimensions(reading: &Reading, expected: DimensionSet) -> bool {
+    let dimensioned = reading.dimension.is_some()
+        || reading
+            .range
+            .as_ref()
+            .is_some_and(|range| range.from.dimension.is_some() || range.to.dimension.is_some());
+    dimensioned && reading_dimension_outside(reading, expected).is_none()
+}
+
+pub(crate) fn expected_dimensions_reason(refused: Dimension, expected: DimensionSet) -> String {
+    let mut reason = format!(
+        "dimension {} is outside the expected dimensions: ",
+        refused.as_str()
+    );
+    for (index, dimension) in expected.iter().enumerate() {
+        if index > 0 {
+            reason.push_str(", ");
+        }
+        reason.push_str(dimension.as_str());
+    }
+    reason
+}
+
 pub(crate) fn reject_candidate(parsed: &mut Parsed, text: &str, reading: Reading, reason: &str) {
     parsed.alternatives.push(reading);
     parsed.findings.skipped.push(skipped_with_span(
@@ -1169,7 +1314,7 @@ mod tests {
             "3640",
             Some(ParseCtx {
                 expect: Some(Kind::Quantity),
-                expected_dimension: Some(Dimension::Length),
+                expected_dimensions: DimensionSet::from(Dimension::Length),
                 ..ParseCtx::default()
             }),
         );

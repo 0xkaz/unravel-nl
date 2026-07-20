@@ -121,7 +121,43 @@ pub enum Dimension {
     Radioactivity,
 }
 
+/// Every [`Dimension`], in declaration order.
+///
+/// The order is the bit order of [`DimensionSet`], so it is also the order in
+/// which a set reports its members.
+pub(crate) const ALL_DIMENSIONS: [Dimension; 24] = [
+    Dimension::Length,
+    Dimension::Area,
+    Dimension::Mass,
+    Dimension::Time,
+    Dimension::Volume,
+    Dimension::Currency,
+    Dimension::Temperature,
+    Dimension::Speed,
+    Dimension::Data,
+    Dimension::DataRate,
+    Dimension::FlowRate,
+    Dimension::Concentration,
+    Dimension::Acceleration,
+    Dimension::Force,
+    Dimension::Torque,
+    Dimension::Pressure,
+    Dimension::Power,
+    Dimension::Charge,
+    Dimension::Voltage,
+    Dimension::Current,
+    Dimension::Resistance,
+    Dimension::Illuminance,
+    Dimension::RadiationEquivalentDose,
+    Dimension::Radioactivity,
+];
+
 impl Dimension {
+    /// Returns the bit this dimension occupies in a [`DimensionSet`].
+    const fn bit(self) -> u32 {
+        1 << self as u32
+    }
+
     /// Returns the stable lowercase identifier for this dimension.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -150,6 +186,123 @@ impl Dimension {
             Self::RadiationEquivalentDose => "radiation_equivalent_dose",
             Self::Radioactivity => "radioactivity",
         }
+    }
+}
+
+/// Holds a set of [`Dimension`] values, as the measurement domains a caller
+/// will accept.
+///
+/// This is the type of [`ParseCtx::expected_dimensions`]. The empty set — the
+/// [`Default`] — means *no restriction*, and every parse behaves as though the
+/// field were not there. A non-empty set is a hard filter: a reading whose
+/// dimension is outside it is refused rather than returned, and the refusal is
+/// reported as [`IssueCode::RejectedByPolicy`].
+///
+/// The set is a bitset in a single `u32`, so it is [`Copy`], it never
+/// allocates, and building or testing one is a couple of machine instructions.
+/// [`ParseCtx`] is cloned on several internal paths, and the overwhelmingly
+/// common value is the empty set; a `Vec<Dimension>` would have made that clone
+/// a heap operation for callers who never asked for the feature.
+///
+/// ```
+/// use unravel_nl::{Dimension, DimensionSet};
+///
+/// let plan = DimensionSet::of(&[Dimension::Length, Dimension::Area]);
+///
+/// assert!(plan.contains(Dimension::Length));
+/// assert!(!plan.contains(Dimension::Mass));
+/// assert!(DimensionSet::new().is_empty());
+/// ```
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+pub struct DimensionSet(u32);
+
+/// Prints the members, not the bits: `DimensionSet(1)` says nothing to someone
+/// reading a failing assertion, and this type shows up inside [`ParseCtx`],
+/// which is printed whole in test output.
+impl std::fmt::Debug for DimensionSet {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_set()
+            .entries(self.iter().map(Dimension::as_str))
+            .finish()
+    }
+}
+
+impl DimensionSet {
+    /// Creates the empty set, which places no restriction on parsing.
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
+    /// Creates a set holding exactly the given dimensions.
+    pub const fn of(dimensions: &[Dimension]) -> Self {
+        let mut bits = 0;
+        let mut index = 0;
+        while index < dimensions.len() {
+            bits |= dimensions[index].bit();
+            index += 1;
+        }
+        Self(bits)
+    }
+
+    /// Returns this set with `dimension` added.
+    pub const fn with(self, dimension: Dimension) -> Self {
+        Self(self.0 | dimension.bit())
+    }
+
+    /// Adds `dimension` to this set.
+    pub fn insert(&mut self, dimension: Dimension) {
+        self.0 |= dimension.bit();
+    }
+
+    /// Returns whether `dimension` is a member of this set.
+    ///
+    /// This is membership, not policy: the empty set contains nothing, yet
+    /// allows everything. Use [`DimensionSet::allows`] to ask the policy
+    /// question.
+    pub const fn contains(self, dimension: Dimension) -> bool {
+        self.0 & dimension.bit() != 0
+    }
+
+    /// Returns whether a reading of `dimension` is allowed by this set.
+    ///
+    /// The empty set allows every dimension, which is what makes an unset
+    /// [`ParseCtx::expected_dimensions`] mean "no restriction".
+    pub const fn allows(self, dimension: Dimension) -> bool {
+        self.0 == 0 || self.contains(dimension)
+    }
+
+    /// Returns whether this set is empty, i.e. places no restriction.
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Returns how many dimensions are in this set.
+    pub const fn len(self) -> usize {
+        self.0.count_ones() as usize
+    }
+
+    /// Iterates the members of this set in [`Dimension`] declaration order.
+    pub fn iter(self) -> impl Iterator<Item = Dimension> + Clone {
+        ALL_DIMENSIONS
+            .into_iter()
+            .filter(move |dimension| self.contains(*dimension))
+    }
+}
+
+impl From<Dimension> for DimensionSet {
+    fn from(dimension: Dimension) -> Self {
+        Self::new().with(dimension)
+    }
+}
+
+impl FromIterator<Dimension> for DimensionSet {
+    fn from_iter<I: IntoIterator<Item = Dimension>>(dimensions: I) -> Self {
+        let mut set = Self::new();
+        for dimension in dimensions {
+            set.insert(dimension);
+        }
+        set
     }
 }
 
@@ -390,11 +543,48 @@ pub struct ParseCtx {
     ///
     /// To actually restrict what is parsed, set [`ParseCtx::purpose`].
     pub expect: Option<Kind>,
-    /// Expected quantity dimension. This is a hint, not a filter: [`parse`] and
-    /// [`parse_quantity_fast`] report whatever dimension they read, so `5 kg`
-    /// still parses as a mass when a length was expected. Only
-    /// [`parse_dimensions_for_editor`] enforces it.
-    pub expected_dimension: Option<Dimension>,
+    /// Measurement domains the caller will accept. This is a hard filter, not a
+    /// hint.
+    ///
+    /// The empty set — the default — places no restriction. A non-empty set
+    /// binds on every entry point: [`parse`], [`parse_quantity_fast`],
+    /// [`parse_number_fast`], [`parse_date_fast`], [`parse_recurrence_fast`],
+    /// [`parse_all`], [`parse_dimensions_for_editor`], [`complete`],
+    /// [`complete_readings`], and [`canonicalize_values`]. A reading whose
+    /// dimension is outside the set never comes back as [`Parsed::best`]; it is
+    /// moved to [`Parsed::alternatives`] and reported as
+    /// [`IssueCode::RejectedByPolicy`], so the refusal is visible rather than
+    /// silent. If a competing reading of the same input *is* in the set, that
+    /// reading is promoted to `best` instead — `5m3` under
+    /// `DimensionSet::of(&[Dimension::Length])` reads as 5 m 3 cm rather than
+    /// as 5 cubic metres.
+    ///
+    /// A [`Kind::Range`] is judged by its endpoints, since the range reading
+    /// itself carries no dimension.
+    ///
+    /// **Readings that have no dimension at all are not refused.** A bare
+    /// number, a date, and a recurrence have no measurement domain, so they
+    /// cannot collide with one; restricting the domains a unit may come from
+    /// says nothing about whether the field may hold `3640`. This is what lets
+    /// [`parse_number_fast`] stay useful under a restriction, and what keeps a
+    /// labelled bare number readable by [`parse_dimensions_for_editor`].
+    /// [`complete`] is deliberately stricter — see its documentation.
+    ///
+    /// ```
+    /// use unravel_nl::{parse_quantity_fast, Dimension, DimensionSet, IssueCode, ParseCtx};
+    ///
+    /// let parsed = parse_quantity_fast(
+    ///     "5 mM",
+    ///     Some(ParseCtx {
+    ///         expected_dimensions: DimensionSet::of(&[Dimension::Length]),
+    ///         ..ParseCtx::default()
+    ///     }),
+    /// );
+    ///
+    /// assert!(parsed.best.is_none());
+    /// assert_eq!(parsed.findings.skipped[0].code, IssueCode::RejectedByPolicy);
+    /// ```
+    pub expected_dimensions: DimensionSet,
     /// Numeric punctuation policy.
     pub number_format: NumberFormat,
     /// Selects which grammar [`parse`] runs. This is a hard filter, not a hint.
@@ -423,7 +613,9 @@ pub struct ParseCtx {
     /// number while `parse_dimensions_for_editor("3640", ..)` returns nothing,
     /// because an unlabelled bare number is not a dimension.
     ///
-    /// Contrast [`ParseCtx::expected_dimension`], which really is only a hint.
+    /// [`ParseCtx::expected_dimensions`] is the other hard filter, and the two
+    /// are independent: this one selects the grammar, that one selects the
+    /// measurement domains a reading may come from.
     pub purpose: ParsePurpose,
     /// Controls which broad parser shapes are accepted.
     pub accept: AcceptOptions,
@@ -969,19 +1161,78 @@ mod tests {
         assert!(parse_dimensions_for_editor("3640", None).is_empty());
     }
 
-    /// `ParseCtx::expected_dimension` really is only a hint for `parse`.
+    /// `ParseCtx::expected_dimensions` binds `parse`, and an empty set does not.
     #[test]
-    fn expected_dimension_is_only_a_hint() {
+    fn expected_dimensions_refuse_an_out_of_domain_reading() {
+        let unrestricted = parse("5 kg", None);
+        let best = unrestricted.best.as_ref().expect("a canonical reading");
+        assert_eq!(best.dimension, Some(Dimension::Mass));
+
+        // An empty set is exactly the unrestricted parse.
+        assert_eq!(
+            parse(
+                "5 kg",
+                Some(ParseCtx {
+                    expected_dimensions: DimensionSet::new(),
+                    ..ParseCtx::default()
+                })
+            ),
+            unrestricted
+        );
+
         let parsed = parse(
             "5 kg",
             Some(ParseCtx {
-                expected_dimension: Some(Dimension::Length),
+                expected_dimensions: DimensionSet::of(&[Dimension::Length]),
                 ..ParseCtx::default()
             }),
         );
-        let best = parsed.best.expect("a canonical reading");
-        assert_eq!(best.dimension, Some(Dimension::Mass));
-        assert_eq!(best.unit.as_deref(), Some("kg"));
+        assert!(parsed.best.is_none());
+        // The refused reading stays visible rather than vanishing.
+        assert_eq!(parsed.alternatives[0].unit.as_deref(), Some("kg"));
+        let skipped = parsed
+            .findings
+            .skipped
+            .iter()
+            .find(|issue| issue.code == IssueCode::RejectedByPolicy)
+            .expect("a rejection finding");
+        assert_eq!(skipped.reason, EXPECTED_DIMENSION_REASON_5KG);
+    }
+
+    const EXPECTED_DIMENSION_REASON_5KG: &str =
+        "dimension mass is outside the expected dimensions: length";
+
+    /// A bitset in one word: no allocation for the empty case, and set algebra
+    /// that agrees with the enum.
+    #[test]
+    fn dimension_set_holds_every_dimension_independently() {
+        let mut all = DimensionSet::new();
+        assert!(all.is_empty());
+        assert_eq!(all.len(), 0);
+
+        for dimension in ALL_DIMENSIONS {
+            // The empty set allows everything and contains nothing.
+            assert!(DimensionSet::new().allows(dimension), "{dimension:?}");
+            assert!(!all.contains(dimension), "{dimension:?}");
+            all.insert(dimension);
+            assert!(all.contains(dimension), "{dimension:?}");
+        }
+        assert_eq!(all.len(), ALL_DIMENSIONS.len());
+        assert_eq!(all.iter().collect::<Vec<_>>(), ALL_DIMENSIONS.to_vec());
+        assert_eq!(all, ALL_DIMENSIONS.into_iter().collect::<DimensionSet>());
+
+        let pair = DimensionSet::of(&[Dimension::Length, Dimension::Area]);
+        assert_eq!(pair.len(), 2);
+        assert!(pair.allows(Dimension::Area));
+        assert!(!pair.allows(Dimension::Mass));
+        assert_eq!(
+            pair,
+            DimensionSet::from(Dimension::Length).with(Dimension::Area)
+        );
+        assert_eq!(std::mem::size_of::<DimensionSet>(), 4);
+        // The debug form names the members, since it is read in assertions.
+        assert_eq!(format!("{pair:?}"), r#"{"length", "area"}"#);
+        assert_eq!(format!("{:?}", DimensionSet::new()), "{}");
     }
 
     /// `ParseCtx::expect` does not constrain which grammar `parse` runs.

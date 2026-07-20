@@ -12,6 +12,14 @@ use crate::*;
 /// the candidate the prefix already covers (an exact match scores `1.0`). At
 /// most 24 candidates are returned.
 ///
+/// A non-empty [`ParseCtx::expected_dimensions`] keeps only candidates from the
+/// declared domains. This is one step stricter than parsing, and deliberately:
+/// a candidate with no dimension at all — a date word — is dropped here, while
+/// an equivalent *reading* is not refused by [`parse`]. Completion generates a
+/// menu rather than reading an input, so leaving an unusable entry out loses
+/// nothing the caller wrote, and there is no findings channel on which a
+/// refusal could be reported anyway.
+///
 /// Returns an empty vector when there is no token to complete.
 pub fn complete(prefix: &str, ctx: Option<ParseCtx>) -> Vec<Completion> {
     let ctx = ctx.unwrap_or_default();
@@ -128,11 +136,19 @@ pub fn complete(prefix: &str, ctx: Option<ParseCtx>) -> Vec<Completion> {
 /// text is a bare number, candidate units are fanned out so the user can pick
 /// the unit they meant instead of the parser assuming one. At most 24
 /// candidates are returned, the same cap [`complete`] applies.
+///
+/// [`ParseCtx::expected_dimensions`] binds here twice over. The readings come
+/// from [`parse`], so the refused one is already out of `best`; and the
+/// refused reading is not offered as an alternative either, because a picker
+/// entry the field cannot hold is a candidate the user must not be able to
+/// choose. The unit fan-out is drawn only from the declared domains.
 pub fn complete_readings(text: &str, ctx: Option<ParseCtx>) -> Vec<CompletionReading> {
     let ctx = ctx.unwrap_or_default();
     let parsed = parse(text, Some(ctx.clone()));
     let mut completions = Vec::new();
-    if let Some(best) = parsed.best {
+    let offerable =
+        |reading: &Reading| reading_dimension_outside(reading, ctx.expected_dimensions).is_none();
+    if let Some(best) = parsed.best.filter(&offerable) {
         completions.push(CompletionReading {
             text: text.to_owned(),
             score: best.confidence.unwrap_or(0.0),
@@ -140,7 +156,7 @@ pub fn complete_readings(text: &str, ctx: Option<ParseCtx>) -> Vec<CompletionRea
             reason: "best".to_owned(),
         });
     }
-    for alternative in parsed.alternatives {
+    for alternative in parsed.alternatives.into_iter().filter(&offerable) {
         completions.push(CompletionReading {
             text: text.to_owned(),
             score: alternative.confidence.unwrap_or(0.0),
@@ -200,9 +216,7 @@ pub(crate) fn push_unit_fanout(
     }
 
     for unit in &ctx.custom_units {
-        if let Some(expected) = ctx.expected_dimension
-            && expected != unit.dimension
-        {
+        if !ctx.expected_dimensions.allows(unit.dimension) {
             continue;
         }
         // A caller-supplied factor can be huge or non-finite; the product is
@@ -246,10 +260,9 @@ pub(crate) fn push_completion_reading_if_new(
 }
 
 pub(crate) fn units_for_completion_fanout(ctx: &ParseCtx) -> Vec<&'static UnitDef> {
-    let dimension = ctx.expected_dimension;
     let mut units = Vec::new();
     for unit in UNIT_DEFS {
-        if dimension.is_none_or(|expected| expected == unit.dimension) {
+        if ctx.expected_dimensions.allows(unit.dimension) {
             units.push(unit);
         }
     }
@@ -420,8 +433,12 @@ pub(crate) fn completion_allowed(
     dimension: Option<Dimension>,
     ctx: &ParseCtx,
 ) -> bool {
-    if let Some(expected_dimension) = ctx.expected_dimension
-        && dimension != Some(expected_dimension)
+    // Stricter than parsing on purpose: a candidate with no dimension at all —
+    // a date, a bare time word — is dropped from a field that declared its
+    // domains, because a menu entry the field cannot hold is noise, and nothing
+    // the caller wrote is being discarded by leaving it out.
+    if !ctx.expected_dimensions.is_empty()
+        && !dimension.is_some_and(|dimension| ctx.expected_dimensions.contains(dimension))
     {
         return false;
     }
@@ -563,7 +580,7 @@ mod tests {
             "坪",
             Some(ParseCtx {
                 locale: Some(Locale::Ja),
-                expected_dimension: Some(Dimension::Area),
+                expected_dimensions: DimensionSet::from(Dimension::Area),
                 ..ParseCtx::default()
             }),
         );
@@ -594,7 +611,7 @@ mod tests {
         let temperature = complete(
             "cel",
             Some(ParseCtx {
-                expected_dimension: Some(Dimension::Temperature),
+                expected_dimensions: DimensionSet::from(Dimension::Temperature),
                 ..ParseCtx::default()
             }),
         );

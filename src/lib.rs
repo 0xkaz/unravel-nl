@@ -150,8 +150,8 @@ pub(crate) use suggest::*;
 pub(crate) use types::*;
 pub use types::{
     AcceptOptions, Completion, CompletionKind, CompletionReading, CurrencyRate, CustomUnit, Date,
-    Dimension, FuzzyProfile, FuzzyTerm, HumanizeCtx, Kind, Locale, NumberFormat, ParseCtx,
-    ParsePurpose, Parsed, ParsedMatch, Provenance, RangeReading, Reading, ResourceField,
+    Dimension, DimensionSet, FuzzyProfile, FuzzyTerm, HumanizeCtx, Kind, Locale, NumberFormat,
+    ParseCtx, ParsePurpose, Parsed, ParsedMatch, Provenance, RangeReading, Reading, ResourceField,
     ResourceView, Strictness, Suggestion,
 };
 pub(crate) use unit_aliases::*;

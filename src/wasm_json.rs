@@ -244,10 +244,23 @@ pub(crate) fn parse_wasm_context(
 ) -> ParseCtx {
     ParseCtx {
         locale: parse_locale_tag(locale),
-        expected_dimension: parse_dimension_tag(expected_dimension),
+        expected_dimensions: parse_dimension_set_tag(expected_dimension),
         strictness: parse_strictness_tag(strictness),
         ..ParseCtx::default()
     }
+}
+
+/// Reads the `expected_dimension` tag, which may name several dimensions.
+///
+/// The boundary is a fixed `&str` signature, so a set is written as a
+/// comma-separated list: `"length"`, `"length,area"`. An empty tag is the empty
+/// set — no restriction — and an unrecognized name is dropped, as every tag
+/// parser here drops what it cannot read.
+#[cfg(feature = "wasm")]
+pub(crate) fn parse_dimension_set_tag(text: &str) -> DimensionSet {
+    text.split(',')
+        .filter_map(|tag| parse_dimension_tag(tag.trim()))
+        .collect()
 }
 
 #[cfg(feature = "wasm")]
@@ -409,7 +422,7 @@ mod wasm_tests {
     fn builds_a_context_from_all_three_tags() {
         let ctx = parse_wasm_context("ja-JP", "area", "strict");
         assert_eq!(ctx.locale, Some(Locale::Ja));
-        assert_eq!(ctx.expected_dimension, Some(Dimension::Area));
+        assert_eq!(ctx.expected_dimensions, DimensionSet::from(Dimension::Area));
         assert_eq!(ctx.strictness, Strictness::Strict);
 
         // Every tag empty is the same as the default context.
@@ -417,8 +430,19 @@ mod wasm_tests {
 
         // Unrecognized tags are absorbed, not reported.
         let sloppy = parse_wasm_context("", "lenght", "stict");
-        assert_eq!(sloppy.expected_dimension, None);
+        assert_eq!(sloppy.expected_dimensions, DimensionSet::new());
         assert_eq!(sloppy.strictness, Strictness::Forgiving);
+
+        // Several dimensions are written as a comma-separated list, and an
+        // unreadable member is dropped without taking the rest with it.
+        assert_eq!(
+            parse_wasm_context("", "length, area", "").expected_dimensions,
+            DimensionSet::of(&[Dimension::Length, Dimension::Area])
+        );
+        assert_eq!(
+            parse_wasm_context("", "length,lenght", "").expected_dimensions,
+            DimensionSet::from(Dimension::Length)
+        );
     }
 
     #[test]
