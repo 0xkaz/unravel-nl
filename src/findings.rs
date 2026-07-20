@@ -19,6 +19,9 @@ pub enum IssueCode {
     /// The input was non-empty but no reading could be extracted from it.
     NoValue,
     /// A unit-like token was found but is not in the unit registry.
+    ///
+    /// Reserved: unreadable input is currently reported as
+    /// [`IssueCode::NoValue`], so no parse produces this code today.
     UnknownUnit,
     /// A misspelled unit was corrected to a registry entry, e.g. `meterz` to `m`.
     TypoCorrected,

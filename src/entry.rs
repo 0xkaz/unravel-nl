@@ -72,8 +72,11 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
 
 /// Parses `text` as a measurement, skipping date and recurrence grammars.
 ///
-/// Set [`ParseCtx::expected_dimension`] when the field is dimension-specific;
-/// readings of other dimensions are then rejected rather than returned.
+/// Note that [`ParseCtx::expected_dimension`] is a hint, not a filter: this
+/// entry point reports whatever dimension it reads, so `5 kg` still parses as a
+/// mass even when a length was expected. Callers that need the reading refused
+/// should check [`Reading::dimension`] themselves, or use
+/// [`parse_dimensions_for_editor`], which does enforce the expectation.
 ///
 /// ```
 /// use unravel_nl::{parse_quantity_fast, Dimension, ParseCtx};
