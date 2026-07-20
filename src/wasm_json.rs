@@ -14,16 +14,48 @@ pub fn parse_input_schema_json() -> &'static str {
 }
 
 /// Returns the parsed-output schema as a static JSON string.
+///
+/// This schema describes the full parse contract — the shape of a [`Parsed`]
+/// value — and requires `input`, `best`, `alternatives`, `suggestions`, and
+/// `findings` with `additionalProperties: false`.
+///
+/// **The WASM/FFI `*_json` functions in this crate do not emit this shape.**
+/// They emit a deliberately compact summary envelope — `{ok, input, best,
+/// issues}` for the single-value functions, and an array of span objects
+/// wrapping that envelope for the `parse_all` and editor functions — which this
+/// schema rejects. Treat this schema as the documented contract for
+/// callers that build the JSON from [`Parsed`] themselves, not as a validator
+/// for the WASM output.
 pub fn parsed_output_schema_json() -> &'static str {
     PARSED_OUTPUT_SCHEMA_JSON
 }
 
 /// Returns the MCP parse-tool schema as a static JSON string.
+///
+/// The declared `outputSchema` is [`parsed_output_schema_json`], the full parse
+/// contract. **The WASM/FFI `*_json` functions do not produce that shape**, so
+/// a validating MCP client cannot be wired straight from those functions to
+/// this tool declaration; a host that uses this schema must serialize a
+/// [`Parsed`] into the contract shape itself.
 pub fn mcp_tool_schema_json() -> &'static str {
     MCP_TOOL_SCHEMA_JSON
 }
 
 /// Parses one reading and returns a JSON string at the WASM/FFI boundary around [`parse`].
+///
+/// # Envelope
+///
+/// The returned object is a compact summary envelope with exactly the keys
+/// `ok`, `input`, `best`, and `issues` — for example
+/// `{"ok":true,"input":"about 20kg","best":{"kind":"quantity","value":20,"unit":"kg","dimension":"mass"},"issues":[{"code":"APPROXIMATION","severity":"warning","rank":30,"ref_text":"about"}]}`.
+///
+/// This is deliberately **not** the parse contract published by
+/// [`parsed_output_schema_json`], which requires `input`, `best`,
+/// `alternatives`, `suggestions`, and `findings` and forbids extra properties.
+/// The envelope trades `alternatives`, `suggestions`, and the structured
+/// [`Findings`] split for a flat ranked `issues` list plus an `ok` flag, which
+/// is what a UI boundary usually wants. Do not validate it against that schema;
+/// use the Rust [`Parsed`] value when you need the full contract.
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -32,6 +64,10 @@ pub fn parse_json(text: &str) -> String {
 }
 
 /// Parses one reading with a locale hint and returns a JSON string at the WASM/FFI boundary around [`parse`].
+///
+/// Returns the same compact summary envelope as [`parse_json`] — `{ok, input,
+/// best, issues}` — which is deliberately not the parse contract published by
+/// [`parsed_output_schema_json`].
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -46,6 +82,10 @@ pub fn parse_json_with_locale(text: &str, locale: &str) -> String {
 }
 
 /// Parses one reading with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse`].
+///
+/// Returns the same compact summary envelope as [`parse_json`] — `{ok, input,
+/// best, issues}` — which is deliberately not the parse contract published by
+/// [`parsed_output_schema_json`].
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -62,6 +102,15 @@ pub fn parse_json_with_context(
 }
 
 /// Parses all readings and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
+///
+/// # Envelope
+///
+/// The returned JSON is an array of match objects, each with the keys `start`,
+/// `end`, `byteStart`, `byteEnd`, `charStart`, `charEnd`, `text`, and `parsed`,
+/// where `parsed` is the compact summary envelope described on [`parse_json`].
+/// This is deliberately **not** the parse contract published by
+/// [`parsed_output_schema_json`]; that schema describes a single [`Parsed`]
+/// value and rejects both the array wrapper and the envelope inside it.
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -70,6 +119,15 @@ pub fn parse_all_json(text: &str) -> String {
 }
 
 /// Parses all readings with a locale hint and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
+///
+/// # Envelope
+///
+/// The returned JSON is an array of match objects, each with the keys `start`,
+/// `end`, `byteStart`, `byteEnd`, `charStart`, `charEnd`, `text`, and `parsed`,
+/// where `parsed` is the compact summary envelope described on [`parse_json`].
+/// This is deliberately **not** the parse contract published by
+/// [`parsed_output_schema_json`]; that schema describes a single [`Parsed`]
+/// value and rejects both the array wrapper and the envelope inside it.
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -87,6 +145,15 @@ pub fn parse_all_json_with_locale(text: &str, locale: &str) -> String {
 }
 
 /// Parses all readings with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
+///
+/// # Envelope
+///
+/// The returned JSON is an array of match objects, each with the keys `start`,
+/// `end`, `byteStart`, `byteEnd`, `charStart`, `charEnd`, `text`, and `parsed`,
+/// where `parsed` is the compact summary envelope described on [`parse_json`].
+/// This is deliberately **not** the parse contract published by
+/// [`parsed_output_schema_json`]; that schema describes a single [`Parsed`]
+/// value and rejects both the array wrapper and the envelope inside it.
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -106,6 +173,15 @@ pub fn parse_all_json_with_context(
 }
 
 /// Parses editor dimension readings and returns a JSON string at the WASM/FFI boundary around [`parse_dimensions_for_editor`].
+///
+/// # Envelope
+///
+/// The returned JSON is an array of match objects, each with the keys `start`,
+/// `end`, `byteStart`, `byteEnd`, `charStart`, `charEnd`, `text`, and `parsed`,
+/// where `parsed` is the compact summary envelope described on [`parse_json`].
+/// This is deliberately **not** the parse contract published by
+/// [`parsed_output_schema_json`]; that schema describes a single [`Parsed`]
+/// value and rejects both the array wrapper and the envelope inside it.
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -114,6 +190,15 @@ pub fn parse_dimensions_for_editor_json(text: &str) -> String {
 }
 
 /// Parses editor dimensions with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse_dimensions_for_editor`].
+///
+/// # Envelope
+///
+/// The returned JSON is an array of match objects, each with the keys `start`,
+/// `end`, `byteStart`, `byteEnd`, `charStart`, `charEnd`, `text`, and `parsed`,
+/// where `parsed` is the compact summary envelope described on [`parse_json`].
+/// This is deliberately **not** the parse contract published by
+/// [`parsed_output_schema_json`]; that schema describes a single [`Parsed`]
+/// value and rejects both the array wrapper and the envelope inside it.
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -217,5 +302,38 @@ mod tests {
             IssueCode::TimezoneUnsupported.as_str(),
             "TIMEZONE_UNSUPPORTED"
         );
+    }
+
+    /// The WASM/FFI envelope is deliberately not the published parse contract,
+    /// as the docs on the schema accessors and the `*_json` functions now say.
+    #[test]
+    fn wasm_envelope_is_not_the_published_output_schema() {
+        let envelope = parsed_summary_json(&parse("about 20kg", None));
+        for key in ["\"ok\":", "\"input\":", "\"best\":", "\"issues\":"] {
+            assert!(envelope.contains(key), "envelope should carry {key}");
+        }
+        // The contract's required members are absent from the envelope.
+        for key in ["\"alternatives\"", "\"suggestions\"", "\"findings\""] {
+            assert!(!envelope.contains(key), "envelope should not carry {key}");
+        }
+        // ...yet the schema requires them and forbids the envelope's extras.
+        let schema = parsed_output_schema_json();
+        assert!(schema.contains(
+            "\"required\": [\"input\", \"best\", \"alternatives\", \"suggestions\", \"findings\"]"
+        ));
+        assert!(schema.contains("\"additionalProperties\": false"));
+        assert!(!schema.contains("\"ok\""));
+        // And the MCP declaration still points its outputSchema at that contract.
+        assert!(mcp_tool_schema_json().contains("parsed-output.json"));
+    }
+
+    /// The input schema's prose must match the behaviour documented on
+    /// [`ParseCtx`].
+    #[test]
+    fn input_schema_prose_matches_behaviour() {
+        let schema = parse_input_schema_json();
+        assert!(schema.contains("Reserved for adapter layers and currently ignored by the parser"));
+        assert!(schema.contains("This is a hard filter, not a hint"));
+        assert!(schema.contains("This does not constrain parsing"));
     }
 }

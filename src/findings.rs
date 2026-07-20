@@ -40,6 +40,12 @@ pub enum IssueCode {
     /// where it is undecidable whether the bounds were swapped by mistake.
     AmbiguousNumber,
     /// The date has more than one plausible reading, e.g. `05/06/2026`.
+    ///
+    /// That three-part numeric slash form is only read when the `dates-jiff`
+    /// feature is enabled; on a default build it produces no reading and no
+    /// finding at all. The two-part form (`05/06`, which also competes with a
+    /// fraction reading) reports this code on any build, provided
+    /// [`ParseCtx::reference_date`] supplies the year.
     AmbiguousDate,
     /// The unit has more than one plausible reading, e.g. a locale-dependent cup.
     AmbiguousUnit,
@@ -588,10 +594,70 @@ mod tests {
         let mismatched = parse("10 USD to 20 JPY", None);
         assert!(mismatched.best.is_none());
         assert_eq!(mismatched.findings.skipped[0].code, IssueCode::NoValue);
-        // The `humanize` fallback the docs now name.
+        // The `humanize` fallback the docs now name: `unrepresentable` stands in
+        // for the number, and a quantity keeps its unit alongside it.
         assert_eq!(
             humanize(&Reading::number(f64::INFINITY, 0.9), None),
             "unrepresentable"
+        );
+        assert_eq!(
+            humanize(
+                &Reading::quantity(
+                    f64::INFINITY,
+                    "m",
+                    Dimension::Length,
+                    Provenance::SiMultiple,
+                    false,
+                    0.9,
+                ),
+                None,
+            ),
+            "unrepresentable m"
+        );
+    }
+
+    /// The `AmbiguousDate` doc example is feature-gated: `05/06/2026` is only
+    /// read with `dates-jiff`, while the two-part form reports the code on any
+    /// build once a reference date supplies the year.
+    #[test]
+    fn ambiguous_date_example_requires_dates_jiff() {
+        let three_part = parse("05/06/2026", None);
+        #[cfg(feature = "dates-jiff")]
+        {
+            assert_eq!(
+                three_part
+                    .best
+                    .as_ref()
+                    .and_then(|best| best.date.as_deref()),
+                Some("2026-05-06")
+            );
+            assert!(
+                three_part
+                    .findings
+                    .ambiguities
+                    .iter()
+                    .any(|issue| issue.code == IssueCode::AmbiguousDate)
+            );
+        }
+        #[cfg(not(feature = "dates-jiff"))]
+        {
+            assert!(three_part.best.is_none());
+            assert!(three_part.findings.ambiguities.is_empty());
+        }
+
+        let two_part = parse(
+            "05/06",
+            Some(ParseCtx {
+                reference_date: Date::new(2026, 1, 1),
+                ..ParseCtx::default()
+            }),
+        );
+        assert!(
+            two_part
+                .findings
+                .ambiguities
+                .iter()
+                .any(|issue| issue.code == IssueCode::AmbiguousDate)
         );
     }
 

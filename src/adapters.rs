@@ -161,7 +161,8 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
 /// A reading that carries no usable value still renders as a word rather than
 /// an empty string, so the output is always displayable: `unknown date`,
 /// `unknown recurrence`, `unresolved range`, `unresolved`, and — for a value
-/// that is infinite or `NaN` — the literal `unrepresentable`. No library entry
+/// that is infinite or `NaN` — `unrepresentable` in place of the number, so a
+/// quantity keeps its unit and renders as `unrepresentable m`. No library entry
 /// point hands back such a value: [`parse`] reports it as a loss and
 /// [`complete_readings`] leaves the candidate out. It reaches [`humanize`] only
 /// through a [`Reading`] the caller assembled or edited themselves.

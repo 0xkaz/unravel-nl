@@ -18,7 +18,7 @@ pub(crate) const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
     "expect": {
       "type": "string",
       "enum": ["quantity", "date", "range", "number", "recurrence"],
-      "description": "Optional expected top-level reading kind."
+      "description": "Optional expected top-level reading kind. This does not constrain parsing; it only filters completion candidates and adds a millimeter length alternative for a bare number when set to quantity. Use purpose to restrict what is parsed."
     },
     "expected_dimension": {
       "type": "string",
@@ -35,7 +35,7 @@ pub(crate) const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
       "type": "string",
       "enum": ["general", "quantity", "number", "date", "recurrence", "dimension_editor"],
       "default": "general",
-      "description": "Optional grammar dispatch hint. Use dimension_editor for UI fields that only accept building dimensions."
+      "description": "Selects the parser grammar. This is a hard filter, not a hint: any value other than general parses exactly as the matching narrow entry point would, and input the selected grammar does not read is refused with NO_VALUE. Use dimension_editor for UI fields that only accept building dimensions."
     },
     "accept": {
       "type": "object",
@@ -55,7 +55,7 @@ pub(crate) const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
     },
     "timezone": {
       "type": "string",
-      "description": "Optional caller-supplied IANA timezone hint for adapter layers. The core parser does not infer timezone from the Rust host environment."
+      "description": "Reserved for adapter layers and currently ignored by the parser. Setting it does not change any parse result and never populates a reading timezone, which is read only from the input text. The core parser also never infers a timezone from the host environment."
     },
     "strictness": {
       "type": "string",

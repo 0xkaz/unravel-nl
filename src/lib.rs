@@ -84,6 +84,17 @@
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
+// Compile and run every Rust example in both READMEs as a doctest, so the
+// published documentation cannot drift from the API. Gated on `dates-jiff`
+// because several examples parse dates, which that feature provides.
+#[cfg(all(doctest, feature = "dates-jiff"))]
+#[doc = include_str!("../README.md")]
+struct ReadmeExamples;
+
+#[cfg(all(doctest, feature = "dates-jiff"))]
+#[doc = include_str!("../README.ja.md")]
+struct ReadmeJaExamples;
+
 mod adapters;
 mod completion;
 mod currency;

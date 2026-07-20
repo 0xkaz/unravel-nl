@@ -3,6 +3,21 @@
 `unravel-nl` is a deterministic Rust library for turning informal or ambiguous
 natural-language quantities into canonical readings, plus human-readable output.
 
+Japanese documentation: [README.ja.md](README.ja.md)
+
+## Guarantees
+
+- **Deterministic.** The same input and context always produce the same result.
+  No randomness, no models, no host clock, no locale environment.
+- **No panic.** The public API is written never to panic; input it cannot read
+  comes back as a finding, not as an unwind.
+- **No silent loss.** Anything skipped, ambiguous, or approximate is reported in
+  `findings` instead of being quietly dropped.
+- **No forced choice.** When a fragment has several plausible readings, the
+  competing readings are returned in `alternatives` rather than the parser
+  committing to one.
+- **No I/O and no runtime dependencies** on the default compute path.
+
 The first slice focuses on:
 
 - Japanese customary length and area input such as `5尺3寸`, `6帖`, and `1坪`
@@ -34,8 +49,9 @@ The first slice focuses on:
 - Golden corpus and round-trip tests for representative canonical readings,
   including common examples from public natural-language parsing behavior
 - Locale alias slices for en-GB, Spanish, French, Portuguese, Chinese, and
-  Japanese inputs such as `05/06/2026`, `1,5 litros`, `2 mètres carrés`,
-  `10 quilômetros`, `明天`, `下周五`, `4畳半`, and `1間半`
+  Japanese inputs such as `1,5 litros`, `2 mètres carrés`, `10 quilômetros`,
+  `4畳半`, and `1間半`; the date forms among them (`05/06/2026`, `明天`,
+  `下周五`) need the `dates-jiff` feature
 - Currency amounts such as `USD 12.34`, `12 bucks`, `99 pence`, `¥1,234`, and
   ambiguous `$12`
 - Temperature input such as `20°C`, `68 F`, `293.15 K`, and `摂氏20度`
@@ -59,13 +75,12 @@ The first slice focuses on:
   single-value JSON parsing and span-preserving multi-value extraction
 - Browser adapter TypeScript definitions for UI integration
 - No-Silent-Loss findings for skipped, ambiguous, and approximate readings
-- A normalized parser dispatch path and exact-first unit alias lookup to keep
-  no-match and typo-heavy inputs bounded as the locale catalog grows
+- A normalized parser dispatch path, exact-first unit alias lookup, and a
+  first-byte index over the unit registry, so typo-heavy and no-match inputs do
+  not walk the whole catalog
 
 The default compute path has no I/O and no runtime dependencies. Calendar
 arithmetic is available behind the optional `dates-jiff` feature.
-
-Japanese documentation: [README.ja.md](README.ja.md)
 
 ## Installation
 
@@ -180,9 +195,13 @@ assert_eq!(matches[2].parsed.best.as_ref().unwrap().dimension, Some(Dimension::A
 ```
 
 The Rust scanner preserves byte spans and uses a token-window dispatch path for
-dimension-like substrings. WASM JSON includes both byte and character spans,
-and browser adapters add JavaScript `codeUnitStart` / `codeUnitEnd` fields for
-UI highlighting.
+dimension-like substrings. WASM JSON includes both byte and character spans.
+
+Browser adapters additionally try to attach JavaScript `codeUnitStart` /
+`codeUnitEnd` fields for UI highlighting. These are best effort: they are
+recovered by searching the source string for the matched text, so they are
+omitted entirely when that search fails, and callers must treat them as
+optional. The byte and character spans from the core are always present.
 
 ```rust
 use unravel_nl::{parse_all, Dimension, Locale, ParseCtx};
@@ -203,6 +222,14 @@ assert_eq!(matches[1].start, 4);
 ```
 
 ## Date Parsing
+
+Date parsing needs the `dates-jiff` feature, which is off by default. Without
+it the examples in this section return no reading and report a finding instead —
+the parser refuses to guess rather than resolving against an implicit "today".
+
+```toml
+unravel-nl = { version = "0.1", features = ["dates-jiff"] }
+```
 
 ```rust
 use unravel_nl::{parse, Date, Locale, ParseCtx};
@@ -540,7 +567,9 @@ make check       # lint + test + test-dates
 ```
 
 `make test-wasm` requires [`wasm-pack`](https://rustwasm.github.io/wasm-pack/)
-and Node.js. `make web-test` requires `npm install` inside `web/` first.
+and Node.js. `make test-wasm` and `make web-test` both require `npm install`
+inside `web/` first — the React adapter smoke test imports React from
+`web/node_modules`.
 
 ## Attribution
 

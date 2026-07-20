@@ -216,7 +216,17 @@ pub struct AcceptOptions {
     pub ranges: bool,
     /// Whether conversion expressions are accepted.
     pub conversions: bool,
-    /// Whether compound expressions are accepted.
+    /// Whether same-dimension registry compounds are accepted.
+    ///
+    /// This governs one grammar only: two or more whitespace-separated
+    /// `<number> <unit>` pairs whose units all live in the unit registry and
+    /// all share a dimension and canonical unit, such as `3 yd 2 ft` or
+    /// `1 hour 30 minutes`. With `compounds: false` those are refused and
+    /// reported as [`IssueCode::RejectedByPolicy`].
+    ///
+    /// Other multi-part grammars are *not* gated by this flag and still parse
+    /// with `compounds: false`: feet-and-inches (`5ft 11in` → `1.8034 m`) and
+    /// shakkanhō (`5尺3寸` → `1.60606… m`).
     pub compounds: bool,
     /// Whether fuzzy quantity terms are accepted.
     pub fuzzy: bool,
@@ -293,19 +303,51 @@ impl Date {
 pub struct ParseCtx {
     /// Locale hint used to disambiguate units and number formats.
     pub locale: Option<Locale>,
-    /// Expected top-level reading kind.
+    /// Expected top-level reading kind. This does **not** constrain parsing.
+    ///
+    /// [`parse`] ignores it when choosing a grammar: `parse("5 kg", ..)` with
+    /// `expect: Some(Kind::Date)` or `Some(Kind::Recurrence)` still returns the
+    /// `5 kg` quantity. Only two places read it:
+    ///
+    /// - [`complete`] and [`complete_readings`] filter candidates by it, so
+    ///   `Some(Kind::Date)` keeps date completions only and
+    ///   `Some(Kind::Number)` or `Some(Kind::Recurrence)` drops every candidate.
+    /// - A bare number parsed with `Some(Kind::Quantity)` gains a millimetre
+    ///   length alternative and a [`IssueCode::UnitAssumed`] ambiguity.
+    ///
+    /// To actually restrict what is parsed, set [`ParseCtx::purpose`].
     pub expect: Option<Kind>,
-    /// Expected quantity dimension.
+    /// Expected quantity dimension. This is a hint, not a filter: [`parse`] and
+    /// [`parse_quantity_fast`] report whatever dimension they read, so `5 kg`
+    /// still parses as a mass when a length was expected. Only
+    /// [`parse_dimensions_for_editor`] enforces it.
     pub expected_dimension: Option<Dimension>,
     /// Numeric punctuation policy.
     pub number_format: NumberFormat,
-    /// Grammar-dispatch hint for the caller's parsing task.
+    /// Selects which grammar [`parse`] runs. This is a hard filter, not a hint.
+    ///
+    /// A non-[`ParsePurpose::General`] value makes [`parse`] behave exactly as
+    /// if the corresponding narrow entry point had been called
+    /// ([`parse_quantity_fast`], [`parse_number_fast`], [`parse_date_fast`],
+    /// [`parse_recurrence_fast`], [`parse_dimensions_for_editor`]), so input
+    /// that the selected grammar does not read is refused rather than handed to
+    /// another grammar: `parse("5 kg", ..)` with
+    /// `purpose: ParsePurpose::Number` and `parse("next friday", ..)` with
+    /// `purpose: ParsePurpose::Quantity` both return `best: None` and report
+    /// [`IssueCode::NoValue`].
+    ///
+    /// Contrast [`ParseCtx::expected_dimension`], which really is only a hint.
     pub purpose: ParsePurpose,
     /// Controls which broad parser shapes are accepted.
     pub accept: AcceptOptions,
     /// Civil reference date used to resolve relative dates.
     pub reference_date: Option<Date>,
-    /// Caller-supplied timezone hint for supported adapter layers.
+    /// Reserved for adapter layers. **Currently ignored by the parser.**
+    ///
+    /// No parsing path reads this field today: a parse with it set is identical
+    /// to the same parse with it unset, and it never reaches
+    /// [`Reading::timezone`], which is populated only from a timezone written
+    /// in the input text. Setting it is harmless but has no effect.
     pub timezone: Option<String>,
     /// Strictness applied when accepting interpretations.
     pub strictness: Strictness,
@@ -318,11 +360,20 @@ pub struct ParseCtx {
 }
 
 /// Defines a directional conversion between two currencies.
+///
+/// The parser matches [`CurrencyRate::from`] and [`CurrencyRate::to`] against
+/// normalized currency codes by exact string comparison, so both fields must
+/// already hold the normalized (uppercase) form. Building the struct with a
+/// literal and lowercase codes compiles but silently never matches:
+/// `CurrencyRate { from: "usd".into(), to: "jpy".into(), factor: 150.0 }` leaves
+/// `parse("USD 10 to JPY", ..)` with `best: None`, while the same rate built
+/// with [`CurrencyRate::new`] converts it. Prefer [`CurrencyRate::new`], which
+/// normalizes both codes for you.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CurrencyRate {
-    /// Source currency code.
+    /// Source currency code, in normalized (uppercase) form such as `USD`.
     pub from: String,
-    /// Target currency code.
+    /// Target currency code, in normalized (uppercase) form such as `JPY`.
     pub to: String,
     /// Multiplier that converts an amount in `from` to an amount in `to`.
     pub factor: f64,
@@ -681,4 +732,271 @@ pub(crate) struct AmbiguousParse {
 pub(crate) struct ParsedReading {
     pub(crate) reading: Reading,
     pub(crate) approximations: Vec<Approximation>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::assert_close;
+
+    /// `ParseCtx::purpose` is a hard filter, not a hint: a grammar that does not
+    /// read the input refuses it instead of falling back to another grammar.
+    #[test]
+    fn purpose_refuses_input_outside_the_selected_grammar() {
+        let numbers_only = parse(
+            "5 kg",
+            Some(ParseCtx {
+                purpose: ParsePurpose::Number,
+                ..ParseCtx::default()
+            }),
+        );
+        assert!(numbers_only.best.is_none());
+        assert!(
+            numbers_only
+                .findings
+                .skipped
+                .iter()
+                .any(|issue| issue.code == IssueCode::NoValue)
+        );
+
+        let quantities_only = parse(
+            "next friday",
+            Some(ParseCtx {
+                purpose: ParsePurpose::Quantity,
+                ..ParseCtx::default()
+            }),
+        );
+        assert!(quantities_only.best.is_none());
+        assert!(
+            quantities_only
+                .findings
+                .skipped
+                .iter()
+                .any(|issue| issue.code == IssueCode::NoValue)
+        );
+    }
+
+    /// `ParseCtx::purpose` dispatches to exactly the matching narrow entry point.
+    #[test]
+    fn purpose_matches_the_narrow_entry_points() {
+        let with_purpose = |purpose| {
+            move |text: &str| {
+                parse(
+                    text,
+                    Some(ParseCtx {
+                        purpose,
+                        ..ParseCtx::default()
+                    }),
+                )
+            }
+        };
+        assert_eq!(
+            with_purpose(ParsePurpose::Quantity)("5 kg"),
+            parse_quantity_fast("5 kg", None)
+        );
+        assert_eq!(
+            with_purpose(ParsePurpose::Number)("1,234"),
+            parse_number_fast("1,234", None)
+        );
+        assert_eq!(
+            with_purpose(ParsePurpose::Date)("2026-05-06"),
+            parse_date_fast("2026-05-06", None)
+        );
+        assert_eq!(
+            with_purpose(ParsePurpose::Recurrence)("every monday"),
+            parse_recurrence_fast("every monday", None)
+        );
+    }
+
+    /// `ParseCtx::expected_dimension` really is only a hint for `parse`.
+    #[test]
+    fn expected_dimension_is_only_a_hint() {
+        let parsed = parse(
+            "5 kg",
+            Some(ParseCtx {
+                expected_dimension: Some(Dimension::Length),
+                ..ParseCtx::default()
+            }),
+        );
+        let best = parsed.best.expect("a canonical reading");
+        assert_eq!(best.dimension, Some(Dimension::Mass));
+        assert_eq!(best.unit.as_deref(), Some("kg"));
+    }
+
+    /// `ParseCtx::expect` does not constrain which grammar `parse` runs.
+    #[test]
+    fn expect_does_not_constrain_parsing() {
+        for kind in [Kind::Date, Kind::Recurrence, Kind::Number, Kind::Range] {
+            let parsed = parse(
+                "5 kg",
+                Some(ParseCtx {
+                    expect: Some(kind),
+                    ..ParseCtx::default()
+                }),
+            );
+            let best = parsed.best.expect("a canonical reading");
+            assert_eq!(best.kind, Kind::Quantity);
+            assert_eq!(best.unit.as_deref(), Some("kg"));
+        }
+    }
+
+    /// The two things `ParseCtx::expect` does affect: completion filtering and
+    /// the millimetre alternative offered for a bare number.
+    #[test]
+    fn expect_filters_completions_and_adds_a_millimetre_alternative() {
+        let expecting = |kind| {
+            move |prefix: &str| {
+                complete(
+                    prefix,
+                    Some(ParseCtx {
+                        expect: Some(kind),
+                        ..ParseCtx::default()
+                    }),
+                )
+            }
+        };
+
+        // `Date` keeps date candidates and drops the rest.
+        assert!(
+            complete("ma", None)
+                .iter()
+                .any(|candidate| candidate.kind != CompletionKind::Date)
+        );
+        let dates_only = expecting(Kind::Date)("ma");
+        assert!(!dates_only.is_empty());
+        assert!(
+            dates_only
+                .iter()
+                .all(|candidate| candidate.kind == CompletionKind::Date)
+        );
+
+        // `Number` and `Recurrence` drop every candidate.
+        assert!(!complete("me", None).is_empty());
+        assert!(expecting(Kind::Number)("me").is_empty());
+        assert!(expecting(Kind::Recurrence)("me").is_empty());
+
+        assert!(parse("42", None).alternatives.is_empty());
+        let parsed = parse(
+            "42",
+            Some(ParseCtx {
+                expect: Some(Kind::Quantity),
+                ..ParseCtx::default()
+            }),
+        );
+        assert_eq!(
+            parsed
+                .alternatives
+                .iter()
+                .map(|reading| reading.unit.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("mm")]
+        );
+    }
+
+    /// `ParseCtx::timezone` is reserved and currently inert.
+    #[test]
+    fn timezone_is_ignored_by_the_parser() {
+        let with_timezone = |text: &str| {
+            parse(
+                text,
+                Some(ParseCtx {
+                    timezone: Some("Asia/Tokyo".to_owned()),
+                    ..ParseCtx::default()
+                }),
+            )
+        };
+        for text in ["3pm Asia/Tokyo", "3pm", "5 kg", "2026-05-06"] {
+            let hinted = with_timezone(text);
+            let plain = parse(text, None);
+            assert_eq!(hinted.best, plain.best, "best differs for {text}");
+            assert_eq!(
+                hinted.findings, plain.findings,
+                "findings differ for {text}"
+            );
+        }
+        assert_eq!(
+            with_timezone("3pm")
+                .best
+                .expect("a canonical reading")
+                .timezone,
+            None
+        );
+    }
+
+    /// `CurrencyRate` fields are matched exactly, so lowercase codes never hit.
+    #[test]
+    fn currency_rate_fields_must_hold_normalized_codes() {
+        let with_rate = |rate: CurrencyRate| {
+            parse(
+                "USD 10 to JPY",
+                Some(ParseCtx {
+                    currency_rates: vec![rate],
+                    ..ParseCtx::default()
+                }),
+            )
+        };
+
+        let lowercase = CurrencyRate {
+            from: "usd".to_owned(),
+            to: "jpy".to_owned(),
+            factor: 150.0,
+        };
+        assert!(with_rate(lowercase).best.is_none());
+
+        let uppercase = CurrencyRate {
+            from: "USD".to_owned(),
+            to: "JPY".to_owned(),
+            factor: 150.0,
+        };
+        assert_eq!(
+            with_rate(uppercase).best.expect("a reading").value,
+            Some(1500.0)
+        );
+
+        assert_eq!(
+            with_rate(CurrencyRate::new("usd", "jpy", 150.0))
+                .best
+                .expect("a reading")
+                .value,
+            Some(1500.0)
+        );
+    }
+
+    /// `AcceptOptions::compounds` gates only same-dimension registry compounds.
+    #[test]
+    fn compounds_gates_only_registry_compounds() {
+        let refused = |text: &str| {
+            parse(
+                text,
+                Some(ParseCtx {
+                    accept: AcceptOptions {
+                        compounds: false,
+                        ..AcceptOptions::default()
+                    },
+                    ..ParseCtx::default()
+                }),
+            )
+        };
+
+        for text in ["3 yd 2 ft", "1 hour 30 minutes"] {
+            let parsed = refused(text);
+            assert!(parsed.best.is_none(), "{text} should be refused");
+            assert!(
+                parsed
+                    .findings
+                    .skipped
+                    .iter()
+                    .any(|issue| issue.code == IssueCode::RejectedByPolicy),
+                "{text} should be rejected by policy"
+            );
+        }
+
+        let feet_inches = refused("5ft 11in").best.expect("feet-inches still parses");
+        assert_eq!(feet_inches.unit.as_deref(), Some("m"));
+        assert_close(feet_inches.value.expect("a value"), 1.8034);
+
+        let shakkanho = refused("5尺3寸").best.expect("shakkanhō still parses");
+        assert_eq!(shakkanho.unit.as_deref(), Some("m"));
+        assert_close(shakkanho.value.expect("a value"), 1.606_060_606_060_606);
+    }
 }
