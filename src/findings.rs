@@ -1,23 +1,55 @@
+//! Findings: everything the parser could not silently resolve.
+//!
+//! The parser never discards part of its input without saying so. Anything it
+//! could not read, could not read unambiguously, or read only approximately is
+//! reported through [`Findings`] alongside the value. Callers that ignore
+//! findings still get a usable [`Parsed`], but they give up the guarantee that
+//! nothing was quietly dropped.
+
 use crate::*;
 
+/// Machine-readable reason a fragment was skipped, ambiguous, or approximate.
+///
+/// Codes are stable strings across the FFI boundary via [`IssueCode::as_str`],
+/// so UI and tool layers can branch on them without matching on prose.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IssueCode {
+    /// The input was empty, or contained nothing but whitespace.
     Empty,
+    /// The input was non-empty but no reading could be extracted from it.
     NoValue,
+    /// A unit-like token was found but is not in the unit registry.
     UnknownUnit,
+    /// A misspelled unit was corrected to a registry entry, e.g. `meterz` to `m`.
     TypoCorrected,
+    /// No unit was written and one was inferred from context or expectation.
     UnitAssumed,
+    /// The number itself has more than one plausible reading, e.g. `1.234`.
     AmbiguousNumber,
+    /// The date has more than one plausible reading, e.g. `05/06/2026`.
     AmbiguousDate,
+    /// The unit has more than one plausible reading, e.g. a locale-dependent cup.
     AmbiguousUnit,
+    /// The currency has more than one plausible reading, e.g. a bare `$`.
     AmbiguousCurrency,
+    /// A timezone was recognized but cannot be resolved in this configuration.
     TimezoneUnsupported,
+    /// A recurrence phrase was recognized but is not expressible as a rule.
     RecurrenceUnsupported,
+    /// A reading was found but refused by the active [`Strictness`] policy.
     RejectedByPolicy,
+    /// The value is approximate, e.g. `about 20kg` or a shakkanhō conversion.
     Approximation,
 }
 
 impl IssueCode {
+    /// Returns the stable `SCREAMING_SNAKE_CASE` string for this code.
+    ///
+    /// ```
+    /// use unravel_nl::IssueCode;
+    ///
+    /// assert_eq!(IssueCode::UnknownUnit.as_str(), "UNKNOWN_UNIT");
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Empty => "EMPTY",
@@ -37,54 +69,98 @@ impl IssueCode {
     }
 }
 
+/// A byte range within the original input, with the text it covers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Span {
+    /// Byte offset of the first byte of the fragment.
     pub start: usize,
+    /// Byte offset one past the last byte of the fragment.
     pub end: usize,
+    /// The fragment itself, as it appeared in the input.
     pub text: String,
 }
 
+/// Everything the parser could not resolve silently.
+///
+/// An empty `Findings` means the whole input was consumed into the reading
+/// with no guesswork. A non-empty one is the parser telling you exactly where
+/// it had to skip, choose, or approximate.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Findings {
+    /// Fragments that produced no reading at all.
     pub skipped: Vec<Skipped>,
+    /// Fragments that had more than one plausible reading.
     pub ambiguities: Vec<Ambiguity>,
+    /// Readings that are not exact, and how far off they may be.
     pub approximations: Vec<Approximation>,
 }
 
+/// A fragment of the input that produced no reading.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Skipped {
+    /// Why the fragment was skipped, as a stable code.
     pub code: IssueCode,
+    /// The fragment that was skipped.
     pub ref_text: String,
+    /// Human-readable explanation, intended for display.
     pub reason: String,
+    /// Where the fragment sits in the original input.
     pub span: Span,
 }
 
+/// A fragment that had more than one plausible reading.
+///
+/// The reading the parser ranked first is still in [`Parsed::best`]; the
+/// competing readings are in [`Parsed::alternatives`]. The parser does not
+/// silently commit to one reading — it records the ambiguity here.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ambiguity {
+    /// Which kind of ambiguity this is, as a stable code.
     pub code: IssueCode,
+    /// The fragment that was ambiguous.
     pub ref_text: String,
+    /// Human-readable explanation, intended for display.
     pub reason: String,
+    /// How many readings were plausible, when that count is known.
     pub candidate_count: Option<usize>,
+    /// Where the fragment sits in the original input.
     pub span: Span,
 }
 
+/// A reading that is approximate rather than exact.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Approximation {
+    /// Why the value is approximate, as a stable code.
     pub code: IssueCode,
+    /// The fragment the approximation came from.
     pub ref_text: String,
+    /// Human-readable explanation, intended for display.
     pub reason: String,
+    /// Relative error as a fraction (`0.05` meaning 5%), when it is known.
     pub relative_error: Option<f64>,
+    /// Where the fragment sits in the original input.
     pub span: Span,
 }
 
+/// How much a finding should interrupt the user.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IssueSeverity {
+    /// The parser filled in something reasonable; worth showing, not blocking.
     Info,
+    /// The reading is usable but the parser made a choice worth confirming.
     Warning,
+    /// No usable reading, or the active policy refused the one that was found.
     Error,
 }
 
 impl IssueSeverity {
+    /// Returns the stable lowercase string for this severity.
+    ///
+    /// ```
+    /// use unravel_nl::IssueSeverity;
+    ///
+    /// assert_eq!(IssueSeverity::Warning.as_str(), "warning");
+    /// ```
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Info => "info",
@@ -94,17 +170,45 @@ impl IssueSeverity {
     }
 }
 
+/// A finding flattened into display-ready form, with severity and priority.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RankedIssue {
+    /// The underlying finding code.
     pub code: IssueCode,
+    /// How much this finding should interrupt the user.
     pub severity: IssueSeverity,
+    /// Display priority, higher first. Ranges from `30` to `100`.
     pub rank: u16,
+    /// Whether a usable reading still exists despite this finding.
+    ///
+    /// `false` only for [`IssueCode::Empty`] and [`IssueCode::NoValue`], where
+    /// there is nothing to fall back on.
     pub recoverable: bool,
+    /// The fragment the finding refers to.
     pub ref_text: String,
+    /// Human-readable explanation, intended for display.
     pub reason: String,
+    /// Where the fragment sits in the original input.
     pub span: Span,
 }
 
+/// Flattens [`Parsed::findings`] into a single list ordered for display.
+///
+/// Skipped fragments, ambiguities, and approximations are merged, each tagged
+/// with a [`IssueSeverity`] and a numeric rank, then sorted by rank descending
+/// (ties broken by the referenced text) so a UI can show the most important
+/// problem first without knowing the code taxonomy.
+///
+/// ```
+/// use unravel_nl::{parse, ranked_findings, IssueSeverity};
+///
+/// let parsed = parse("", None);
+/// let issues = ranked_findings(&parsed);
+///
+/// assert_eq!(issues[0].severity, IssueSeverity::Error);
+/// assert_eq!(issues[0].rank, 100);
+/// assert!(!issues[0].recoverable);
+/// ```
 pub fn ranked_findings(parsed: &Parsed) -> Vec<RankedIssue> {
     let mut issues = Vec::new();
 

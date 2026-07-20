@@ -1,29 +1,36 @@
 use crate::*;
 
+/// Identifies the version of the JSON parsing contract.
 pub const CONTRACT_VERSION: &str = "unravel-nl.parse.v1";
 
+/// Returns the current JSON parsing contract version.
 pub fn contract_version() -> &'static str {
     CONTRACT_VERSION
 }
 
+/// Returns the parse-input schema as a static JSON string.
 pub fn parse_input_schema_json() -> &'static str {
     PARSE_INPUT_SCHEMA_JSON
 }
 
+/// Returns the parsed-output schema as a static JSON string.
 pub fn parsed_output_schema_json() -> &'static str {
     PARSED_OUTPUT_SCHEMA_JSON
 }
 
+/// Returns the MCP parse-tool schema as a static JSON string.
 pub fn mcp_tool_schema_json() -> &'static str {
     MCP_TOOL_SCHEMA_JSON
 }
 
+/// Parses one reading and returns a JSON string at the WASM/FFI boundary around [`parse`].
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_json(text: &str) -> String {
     parsed_summary_json(&parse(text, None))
 }
 
+/// Parses one reading with a locale hint and returns a JSON string at the WASM/FFI boundary around [`parse`].
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_json_with_locale(text: &str, locale: &str) -> String {
@@ -36,6 +43,7 @@ pub fn parse_json_with_locale(text: &str, locale: &str) -> String {
     ))
 }
 
+/// Parses one reading with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse`].
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_json_with_context(
@@ -50,12 +58,14 @@ pub fn parse_json_with_context(
     ))
 }
 
+/// Parses all readings and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_all_json(text: &str) -> String {
     parsed_matches_summary_json(text, &parse_all(text, None))
 }
 
+/// Parses all readings with a locale hint and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_all_json_with_locale(text: &str, locale: &str) -> String {
@@ -71,6 +81,7 @@ pub fn parse_all_json_with_locale(text: &str, locale: &str) -> String {
     )
 }
 
+/// Parses all readings with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_all_json_with_context(
@@ -88,12 +99,14 @@ pub fn parse_all_json_with_context(
     )
 }
 
+/// Parses editor dimension readings and returns a JSON string at the WASM/FFI boundary around [`parse_dimensions_for_editor`].
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_dimensions_for_editor_json(text: &str) -> String {
     parsed_matches_summary_json(text, &parse_dimensions_for_editor(text, None))
 }
 
+/// Parses editor dimensions with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse_dimensions_for_editor`].
 #[cfg(feature = "wasm")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_dimensions_for_editor_json_with_context(

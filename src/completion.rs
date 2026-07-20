@@ -1,5 +1,18 @@
+//! Completion candidates for input fields.
+//!
+//! [`complete`] completes the token being typed; [`complete_readings`] ranks
+//! whole interpretations of what has been typed so far.
+
 use crate::*;
 
+/// Completes the unit, date, time, or currency token at the end of `prefix`.
+///
+/// Candidates are drawn from the unit registry, any [`ParseCtx::custom_units`],
+/// and the built-in date/time/currency vocabularies, then ranked by how much of
+/// the candidate the prefix already covers (an exact match scores `1.0`). At
+/// most 24 candidates are returned.
+///
+/// Returns an empty vector when there is no token to complete.
 pub fn complete(prefix: &str, ctx: Option<ParseCtx>) -> Vec<Completion> {
     let ctx = ctx.unwrap_or_default();
     let Some(raw_prefix) = completion_prefix(prefix) else {
@@ -108,6 +121,12 @@ pub fn complete(prefix: &str, ctx: Option<ParseCtx>) -> Vec<Completion> {
     completions
 }
 
+/// Ranks the plausible whole readings of `text`, for a preview or picker UI.
+///
+/// The best reading and its alternatives are returned with their parse
+/// confidence as the score and a `reason` naming where each came from. When the
+/// text is a bare number, candidate units are fanned out so the user can pick
+/// the unit they meant instead of the parser assuming one.
 pub fn complete_readings(text: &str, ctx: Option<ParseCtx>) -> Vec<CompletionReading> {
     let ctx = ctx.unwrap_or_default();
     let parsed = parse(text, Some(ctx.clone()));

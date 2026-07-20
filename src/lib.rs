@@ -1,8 +1,51 @@
 //! Deterministic parsing for informal natural-language quantities and values.
 //!
+//! `unravel-nl` turns informal or ambiguous text such as `5尺3寸`, `about 20kg`,
+//! `1.234,56 kg`, or `6帖` into canonical readings, and renders canonical
+//! readings back into human-readable strings.
+//!
+//! # Guarantees
+//!
+//! - **Deterministic.** The same input and context always produce the same
+//!   result. No randomness, no models, no host clock, no locale environment.
+//! - **No silent loss.** Anything skipped, ambiguous, or approximate is
+//!   reported in [`Findings`] instead of being quietly dropped.
+//! - **No forced choice.** When a fragment has several plausible readings, the
+//!   competing readings are returned in [`Parsed::alternatives`] rather than
+//!   the parser committing to one.
+//! - **No I/O and no runtime dependencies** on the default compute path.
+//!
+//! # Getting started
+//!
+//! Use [`parse`] when the kind of value is unknown, or a narrower entry point
+//! such as [`parse_quantity_fast`], [`parse_date_fast`], or
+//! [`parse_dimensions_for_editor`] when the field type is already known — see
+//! the entry point table in those functions' documentation.
+//!
+//! ```
+//! use unravel_nl::{humanize, parse, HumanizeCtx, Locale, ParseCtx};
+//!
+//! let parsed = parse(
+//!     "5尺3寸",
+//!     Some(ParseCtx {
+//!         locale: Some(Locale::Ja),
+//!         ..ParseCtx::default()
+//!     }),
+//! );
+//!
+//! let best = parsed.best.expect("a canonical reading");
+//! assert_eq!(best.unit.as_deref(), Some("m"));
+//! assert_eq!(
+//!     humanize(&best, Some(HumanizeCtx { locale: Some(Locale::Ja) })),
+//!     "5尺3寸 (approx.)"
+//! );
+//! ```
+//!
 //! This crate is an independent Rust implementation inspired by the public API
 //! shape of `pascalorg/lingo` (MIT). It does not copy source code from that
 //! project.
+
+#![warn(missing_docs)]
 
 mod adapters;
 mod completion;

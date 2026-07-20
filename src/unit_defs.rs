@@ -1,13 +1,21 @@
 use crate::*;
 
+/// Describes a registered unit and its conversion to a canonical unit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct UnitDef {
+    /// Stable identifier used to name this unit in the registry.
     pub id: &'static str,
+    /// Canonical output unit to which [`UnitDef::factor`] converts values.
     pub canonical_unit: &'static str,
+    /// Accepted textual representations of the unit.
     pub aliases: &'static [&'static str],
+    /// Physical or semantic dimension measured by the unit.
     pub dimension: Dimension,
+    /// Multiplier that converts a value in this unit to [`UnitDef::canonical_unit`].
     pub factor: f64,
+    /// Source or standard underlying the conversion factor.
     pub provenance: Provenance,
+    /// Whether conversion through this definition is approximate.
     pub approximate: bool,
 }
 

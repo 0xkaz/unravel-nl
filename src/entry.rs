@@ -1,5 +1,50 @@
+//! Entry points.
+//!
+//! [`parse`] is the broad entry point: use it when the input could be any of a
+//! quantity, date, time, range, recurrence, conversion request, or plain
+//! number. Every other entry point here is narrower, and narrower is better
+//! whenever the caller already knows what the field holds — a dedicated entry
+//! point does less grammar dispatch, so it is faster and, more importantly, it
+//! cannot misread the input as some other kind of value. A date field parsed
+//! with [`parse_date_fast`] will never come back holding a currency.
+//!
+//! | Entry point | Use when |
+//! | --- | --- |
+//! | [`parse`] | The kind of value is unknown. |
+//! | [`parse_quantity_fast`] | The field holds a measurement. |
+//! | [`parse_number_fast`] | The field holds a bare number. |
+//! | [`parse_date_fast`] | The field holds a date. |
+//! | [`parse_recurrence_fast`] | The field holds a repeating schedule. |
+//! | [`parse_all`] | Free text that may contain several values. |
+//! | [`parse_dimensions_for_editor`] | Free text where only lengths and areas count. |
+
 use crate::*;
 
+/// Parses one value out of `text`, trying every supported grammar.
+///
+/// This is the general entry point. Set [`ParseCtx::purpose`] to restrict the
+/// dispatch without switching functions, or call one of the narrower entry
+/// points in this module directly.
+///
+/// The reading the parser ranked first is in [`Parsed::best`], competing
+/// readings are in [`Parsed::alternatives`], and anything skipped, ambiguous,
+/// or approximated is reported in [`Parsed::findings`] rather than dropped.
+/// `best` is `None` when nothing could be read at all.
+///
+/// ```
+/// use unravel_nl::{parse, Locale, ParseCtx};
+///
+/// let parsed = parse(
+///     "5尺3寸",
+///     Some(ParseCtx {
+///         locale: Some(Locale::Ja),
+///         ..ParseCtx::default()
+///     }),
+/// );
+///
+/// let best = parsed.best.expect("a canonical reading");
+/// assert_eq!(best.unit.as_deref(), Some("m"));
+/// ```
 pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     let normalized_input = normalize_input_cow(text);
@@ -25,6 +70,24 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     parsed
 }
 
+/// Parses `text` as a measurement, skipping date and recurrence grammars.
+///
+/// Set [`ParseCtx::expected_dimension`] when the field is dimension-specific;
+/// readings of other dimensions are then rejected rather than returned.
+///
+/// ```
+/// use unravel_nl::{parse_quantity_fast, Dimension, ParseCtx};
+///
+/// let parsed = parse_quantity_fast(
+///     "1,234 kg",
+///     Some(ParseCtx {
+///         expected_dimension: Some(Dimension::Mass),
+///         ..ParseCtx::default()
+///     }),
+/// );
+///
+/// assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("kg"));
+/// ```
 pub fn parse_quantity_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     parse_quantity_fast_with_ctx(text, &ctx)
@@ -45,6 +108,10 @@ pub(crate) fn parse_quantity_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed
     parsed
 }
 
+/// Parses `text` as a bare number, without attaching a unit.
+///
+/// Locale number formats still apply, so grouping and decimal separators are
+/// read according to [`ParseCtx::number_format`] and [`ParseCtx::locale`].
 pub fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     parse_number_fast_with_ctx(text, &ctx)
@@ -65,6 +132,21 @@ pub(crate) fn parse_number_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
     parsed
 }
 
+/// Parses `text` as a repeating schedule, canonicalized to an RRULE string.
+///
+/// The rule lands in [`Reading::recurrence`]. Phrases that are recognized as
+/// recurrences but cannot be expressed as a supported rule are reported as
+/// [`IssueCode::RecurrenceUnsupported`] instead of being approximated.
+///
+/// ```
+/// use unravel_nl::{parse_recurrence_fast, Kind};
+///
+/// let parsed = parse_recurrence_fast("every monday", None);
+/// let best = parsed.best.unwrap();
+///
+/// assert_eq!(best.kind, Kind::Recurrence);
+/// assert_eq!(best.recurrence.as_deref(), Some("FREQ=WEEKLY;BYDAY=MO"));
+/// ```
 pub fn parse_recurrence_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     let normalized_input = normalize_input_cow(text);
@@ -81,6 +163,12 @@ pub fn parse_recurrence_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     parsed
 }
 
+/// Parses `text` as a date, skipping quantity and currency grammars.
+///
+/// The parser never reads the host clock. Relative expressions such as
+/// `next friday` resolve only when [`ParseCtx::reference_date`] is supplied and
+/// the `dates-jiff` feature is enabled; otherwise they are reported as findings
+/// rather than resolved against an implicit "today".
 pub fn parse_date_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     let ctx = ctx.unwrap_or_default();
     let normalized_input = normalize_input_cow(text);
@@ -108,6 +196,27 @@ pub(crate) fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
     }
 }
 
+/// Extracts every value found in a sentence, with byte spans.
+///
+/// The input is split into clauses and each clause is scanned for readings.
+/// Overlapping matches are resolved so the returned matches are ordered by
+/// position and never overlap, which makes them safe to use directly for
+/// highlighting the original string.
+///
+/// ```
+/// use unravel_nl::{parse_all, Locale, ParseCtx};
+///
+/// let matches = parse_all(
+///     "延床100㎡、敷地面積120㎡、高さ3.5m",
+///     Some(ParseCtx {
+///         locale: Some(Locale::Ja),
+///         ..ParseCtx::default()
+///     }),
+/// );
+///
+/// assert_eq!(matches.len(), 3);
+/// assert_eq!(matches[0].text, "延床100㎡");
+/// ```
 pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
     let ctx = ctx.unwrap_or_default();
     let mut matches = Vec::new();
@@ -117,6 +226,27 @@ pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
     sorted_non_overlapping_matches(matches)
 }
 
+/// Extracts only building dimensions from free text, for editor fields.
+///
+/// A narrowed [`parse_all`] for inputs where a length or an area is the only
+/// meaningful reading. Currency, dates, and general grammar are deliberately
+/// not attempted, so text like `予算1234` or `next friday` yields nothing
+/// instead of a wrong value. Japanese building units such as `帖` are kept, and
+/// labelled bare numbers such as `寸法3640` are read as unitless dimensions.
+///
+/// ```
+/// use unravel_nl::{parse_dimensions_for_editor, Locale, ParseCtx};
+///
+/// let matches = parse_dimensions_for_editor(
+///     "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640",
+///     Some(ParseCtx {
+///         locale: Some(Locale::Ja),
+///         ..ParseCtx::default()
+///     }),
+/// );
+///
+/// assert_eq!(matches.len(), 4);
+/// ```
 pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
     let mut ctx = ctx.unwrap_or_default();
     ctx.purpose = ParsePurpose::DimensionEditor;

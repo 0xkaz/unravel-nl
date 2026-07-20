@@ -1,13 +1,25 @@
+//! Adapters for presenting readings and for AI/tool call boundaries.
+//!
+//! [`humanize`] turns a canonical reading back into a sentence. The
+//! canonicalize functions wrap parsing in an accept/reject decision suitable
+//! for validating machine-supplied field values, returning an explanatory
+//! message instead of a value when the input is not acceptable.
+
 use crate::*;
 
+/// One field to canonicalize, as submitted by a caller or a tool call.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanonicalizeRequest {
+    /// Field name, used to address the value in the resulting message.
     pub field: String,
+    /// The raw text submitted for this field.
     pub text: String,
+    /// Parsing context for this field, if any.
     pub ctx: Option<ParseCtx>,
 }
 
 impl CanonicalizeRequest {
+    /// Builds a request for `field` from the submitted `text`.
     pub fn new(field: &str, text: &str, ctx: Option<ParseCtx>) -> Self {
         Self {
             field: field.to_owned(),
@@ -17,16 +29,46 @@ impl CanonicalizeRequest {
     }
 }
 
+/// The verdict on one canonicalized field.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanonicalizedValue {
+    /// Field name copied from the request.
     pub field: String,
+    /// The raw text that was submitted.
     pub input: String,
+    /// Whether the value was accepted under the request's strictness.
     pub ok: bool,
+    /// The accepted reading. `None` whenever `ok` is `false`.
     pub canonical: Option<Reading>,
+    /// The full parse, available whether or not the value was accepted.
     pub parsed: Parsed,
+    /// Why the value was rejected. `None` whenever `ok` is `true`.
     pub message: Option<String>,
 }
 
+/// Canonicalizes a batch of submitted field values, accepting or rejecting each.
+///
+/// A value is accepted only if a reading was found and nothing was skipped.
+/// Under [`Strictness::Confirm`] or [`Strictness::Strict`], any ambiguity or
+/// approximation also rejects it — so an accepted value is one the parser did
+/// not have to guess at. Rejections carry a message tagged with the
+/// [`IssueCode`], plus a did-you-mean suggestion when one is available.
+///
+/// ```
+/// use unravel_nl::{canonicalize_values, CanonicalizeRequest, ParseCtx, Strictness};
+///
+/// let values = canonicalize_values(&[CanonicalizeRequest::new(
+///     "weight",
+///     "about 20kg",
+///     Some(ParseCtx {
+///         strictness: Strictness::Strict,
+///         ..ParseCtx::default()
+///     }),
+/// )]);
+///
+/// assert!(!values[0].ok);
+/// assert!(values[0].message.as_ref().unwrap().contains("[APPROXIMATION]"));
+/// ```
 pub fn canonicalize_values(requests: &[CanonicalizeRequest]) -> Vec<CanonicalizedValue> {
     requests
         .iter()
@@ -47,6 +89,11 @@ pub fn canonicalize_values(requests: &[CanonicalizeRequest]) -> Vec<Canonicalize
         .collect()
 }
 
+/// Canonicalizes one field and returns only the rejection message, if any.
+///
+/// Intended for repairing a machine-generated tool call: `None` means the value
+/// was acceptable, `Some(message)` is text that can be handed back to the
+/// caller explaining what to fix.
 pub fn repair_tool_call_message(field: &str, text: &str, ctx: Option<ParseCtx>) -> Option<String> {
     let request = CanonicalizeRequest::new(field, text, ctx);
     canonicalize_values(&[request])
@@ -104,6 +151,30 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
     )
 }
 
+/// Renders a canonical reading as a human-readable string.
+///
+/// Output is locale-sensitive: with [`Locale::Ja`] a length in metres is
+/// rendered in shakkanhō units and a temperature as `摂氏20度`. Values that came
+/// from an approximate conversion are marked as approximate rather than
+/// presented as exact.
+///
+/// ```
+/// use unravel_nl::{humanize, parse, HumanizeCtx, Locale, ParseCtx};
+///
+/// let parsed = parse(
+///     "5尺3寸",
+///     Some(ParseCtx {
+///         locale: Some(Locale::Ja),
+///         ..ParseCtx::default()
+///     }),
+/// );
+/// let best = parsed.best.expect("a canonical reading");
+///
+/// assert_eq!(
+///     humanize(&best, Some(HumanizeCtx { locale: Some(Locale::Ja) })),
+///     "5尺3寸 (approx.)"
+/// );
+/// ```
 pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
     let locale = ctx.and_then(|ctx| ctx.locale);
     match (locale, value.kind, value.value, value.unit.as_deref()) {
@@ -152,6 +223,11 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
     }
 }
 
+/// Flattens a reading into a labelled field list for UI and tool layers.
+///
+/// Only the fields the reading actually carries are emitted, so the view can be
+/// rendered generically without checking each `Option`. The view's summary is
+/// the locale-independent [`humanize`] rendering.
 pub fn describe_reading(reading: &Reading) -> ResourceView {
     let object = match reading.kind {
         Kind::Quantity => "unravel.quantity",
@@ -205,6 +281,11 @@ pub fn describe_reading(reading: &Reading) -> ResourceView {
     }
 }
 
+/// Flattens a whole parse, including finding counts, into a field list.
+///
+/// Unlike [`describe_reading`], this reports the outcome as well as the value:
+/// the `ok` field is `true` only when a reading was found and nothing was
+/// skipped, and the finding counts show how much the parser had to guess.
 pub fn describe_parsed(parsed: &Parsed) -> ResourceView {
     let mut fields = Vec::new();
     push_resource_field(&mut fields, "input", &parsed.input);

@@ -24,10 +24,12 @@ pub(crate) const US_CUP_L: f64 = 0.236_588_236_5;
 pub(crate) const UK_CUP_L: f64 = 0.284_130_625;
 pub(crate) const METRIC_CUP_L: f64 = 0.25;
 
+/// Returns every built-in unit definition in registry order.
 pub fn unit_definitions() -> &'static [UnitDef] {
     UNIT_DEFS
 }
 
+/// Iterates over built-in unit definitions for the given dimension.
 pub fn units_of(dimension: Dimension) -> impl Iterator<Item = &'static UnitDef> {
     UNIT_DEFS
         .iter()
