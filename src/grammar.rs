@@ -452,15 +452,14 @@ fn try_grammar(
         }
         Grammar::Clock => set_if_read(parse_clock_time(trimmed), parsed),
         Grammar::Duration => set_if_read(parse_duration(trimmed), parsed),
-        Grammar::FeetInches => {
-            // An apostrophe is a foot mark and a Swiss digit group separator,
-            // and one function answers which for every entry point.
-            if let Some(readings) = apostrophe_readings(trimmed, ctx) {
-                readings.report(ApostropheBest::Feet, trimmed, parsed);
-                return true;
-            }
-            set_if_read(parse_feet_inches(trimmed), parsed)
-        }
+        // An apostrophe is a foot mark and a Swiss digit group separator, and
+        // for a while both readings were built so the choice could be reported.
+        // They cannot both stand: a Swiss group is three digits, so the
+        // follower is at least 100, while inches have to stay under the foot
+        // above them. `1'234` is a number and `1'11` is a height, and neither
+        // is a choice. What is left is grammar order, which is written down
+        // once — see `GRAMMAR_ORDER`.
+        Grammar::FeetInches => set_if_read(parse_feet_inches(trimmed), parsed),
         Grammar::Cups => {
             let Some((best, alternatives, ambiguity)) = parse_cups(trimmed, ctx) else {
                 return false;
@@ -482,10 +481,6 @@ fn try_grammar(
             true
         }
         Grammar::AmbiguousNumber => {
-            if let Some(readings) = apostrophe_readings(trimmed, ctx) {
-                readings.report(ApostropheBest::Number, trimmed, parsed);
-                return true;
-            }
             let Some(ambiguous) = parse_ambiguous_number(trimmed, ctx) else {
                 return false;
             };

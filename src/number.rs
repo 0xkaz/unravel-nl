@@ -151,63 +151,17 @@ pub(crate) fn is_group_separator(ch: char) -> bool {
     SPACE_STYLE_SEPARATORS.contains(&ch)
 }
 
-/// The two readings an apostrophe has, when the text really has both.
-///
-/// `'` is a foot mark (`5'11"`) and a Swiss digit group separator (`1'234`),
-/// and nothing in the character settles which. The parser used to settle it per
-/// entry point and say nothing: `parse("1'234")` returned 6.2484 m, one foot
-/// and 234 inches, while `parse_number_fast("1'234")` returned 1234, both with
-/// an empty findings channel. Now one function reads both, and every entry
-/// point reports the choice it made along with the reading it did not take.
-pub(crate) struct ApostropheReadings {
-    number: Reading,
-    feet: Reading,
-}
-
-/// Which reading an entry point ranks first, given the grammars it reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ApostropheBest {
-    /// A bare-number entry point, which does not read feet and inches at all.
-    Number,
-    /// An entry point that reads the foot mark.
-    Feet,
-}
-
-/// The single definition of what an apostrophe means in `text`.
-///
-/// `Some` only when the text reads *both* ways; a text only one of them
-/// accepts — `5'11"` as feet, `1 234` as a number — has nothing to report and
-/// is left to the ordinary grammars.
-pub(crate) fn apostrophe_readings(text: &str, ctx: &ParseCtx) -> Option<ApostropheReadings> {
-    if !text.contains('\'') {
-        return None;
-    }
-    let number = parse_plain_number_ctx(text, ctx)?;
-    let feet = parse_feet_inches(text)?;
-    Some(ApostropheReadings { number, feet })
-}
-
-impl ApostropheReadings {
-    /// Writes both readings onto `parsed`, ranked, with the choice reported.
-    pub(crate) fn report(self, best: ApostropheBest, text: &str, parsed: &mut Parsed) {
-        let (best, alternative) = match best {
-            ApostropheBest::Number => (self.number, self.feet),
-            ApostropheBest::Feet => (self.feet, self.number),
-        };
-        parsed.best = Some(best);
-        parsed.alternatives.push(alternative);
-        parsed.findings.ambiguities.push(ambiguity(
-            text,
-            APOSTROPHE_REASON,
-            Some(2),
-            IssueCode::AmbiguousNumber,
-        ));
-    }
-}
-
-/// Stated once so the entry points cannot describe the same choice differently.
-pub(crate) const APOSTROPHE_REASON: &str =
-    "Apostrophe could be a Swiss digit group separator or a foot mark.";
+// An apostrophe is a foot mark (`5'11"`) and a Swiss digit group separator
+// (`1'234`). Both readings used to be built and offered as a choice, because
+// each entry point had been settling it privately and saying nothing —
+// `parse("1'234")` gave 6.2484 m while `parse_number_fast("1'234")` gave 1234,
+// neither with a finding.
+//
+// The choice turned out not to exist. A Swiss group is three digits, so the
+// follower is 100 or more, and inches have to stay under the foot above them,
+// so it is under 12. No text satisfies both. The apparatus that reported the
+// ambiguity is gone with it, rather than left in place describing a fork the
+// parser can no longer reach.
 
 /// Removes space-style grouping, but only where it really is grouping.
 ///
@@ -1098,27 +1052,16 @@ mod tests {
                     reading.is_empty() || reading == expected,
                     "{name} reads {input:?} as {reading:?}, not {expected:?}"
                 );
-                let claimed = parsed
-                    .findings
-                    .ambiguities
-                    .iter()
-                    .filter(|issue| issue.reason == APOSTROPHE_REASON)
-                    .count();
-                if reading.len() > 1 {
-                    let ambiguity = parsed
-                        .findings
-                        .ambiguities
-                        .iter()
-                        .find(|issue| issue.reason == APOSTROPHE_REASON)
-                        .unwrap_or_else(|| panic!("{name} chose silently on {input:?}"));
-                    assert_eq!(ambiguity.code, IssueCode::AmbiguousNumber, "{name}");
-                    assert_eq!(ambiguity.candidate_count, Some(2), "{name}");
-                } else {
-                    assert_eq!(
-                        claimed, 0,
-                        "{name} called {input:?} ambiguous while reading it one way"
-                    );
-                }
+                // The two grammars are disjoint, so an apostrophe never leaves
+                // a fork behind. If one ever does, the reading below stops
+                // being alone and this says so rather than letting an entry
+                // point pick quietly, which is how the two spellings drifted
+                // apart in the first place.
+                assert!(
+                    reading.len() <= 1,
+                    "{name} found {} readings for {input:?}: {reading:?}",
+                    reading.len()
+                );
             }
         }
 
@@ -1136,16 +1079,16 @@ mod tests {
                 .unwrap(),
             1234.0,
         );
-        assert_eq!(
+        // The editor offers `1234 mm` for a bare number, which is its own
+        // suggestion and not a second reading of the apostrophe. What must not
+        // be there is the foot reading, which canonicalises to metres.
+        assert!(
             matches[0]
                 .parsed
-                .findings
-                .ambiguities
+                .alternatives
                 .iter()
-                .filter(|issue| issue.reason == APOSTROPHE_REASON)
-                .count(),
-            0,
-            "the editor called a one-way reading a choice"
+                .all(|reading| reading.unit.as_deref() != Some("m")),
+            "the editor kept a foot reading of an apostrophe it read as digits"
         );
 
         // A text only one of the two grammars accepts is not ambiguous, and is
