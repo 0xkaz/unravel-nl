@@ -175,3 +175,13 @@ export function defineUnravelElement(
 ): CustomElementConstructor | null;
 
 export function rankIssues(parsed: Parsed | null | undefined): Issue[];
+
+/**
+ * Whether a parse is acceptable. The Rust side decides: when `parsed.ok` is
+ * present it is returned unchanged, so a field cannot show green on something
+ * the core refused. The fallback exists only for a hand-built result.
+ */
+export function acceptsParsed(
+  parsed: Parsed | null | undefined,
+  issues?: Issue[],
+): boolean;

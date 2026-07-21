@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import {
   applyParseState,
   canonicalizeFieldsForUi,
@@ -280,4 +281,31 @@ function mockElement(value) {
       }
     },
   };
+}
+
+// The hand-written `.d.ts` is a second copy of the export list, so it can fall
+// behind the module it describes. It already did: `acceptsParsed` shipped
+// without a declaration, which left it unimportable from TypeScript while every
+// runtime test passed. Compare the two lists instead of trusting them to agree.
+{
+  const here = new URL(".", import.meta.url);
+  const source = await readFile(new URL("../web/unravel-adapters.js", here), "utf8");
+  const types = await readFile(new URL("../web/unravel-adapters.d.ts", here), "utf8");
+  const named = (text, pattern) =>
+    [...text.matchAll(pattern)].map((match) => match[1]).sort();
+
+  const exported = named(source, /^export\s+(?:async\s+)?(?:function|const|class)\s+([A-Za-z_$][\w$]*)/gm);
+  const declared = named(types, /^export\s+(?:declare\s+)?(?:function|const|class)\s+([A-Za-z_$][\w$]*)/gm);
+
+  assert.ok(exported.length > 0, "no runtime exports found — the pattern stopped matching");
+  assert.deepEqual(
+    exported.filter((name) => !declared.includes(name)),
+    [],
+    "exported from unravel-adapters.js but not declared in unravel-adapters.d.ts",
+  );
+  assert.deepEqual(
+    declared.filter((name) => !exported.includes(name)),
+    [],
+    "declared in unravel-adapters.d.ts but not exported from unravel-adapters.js",
+  );
 }

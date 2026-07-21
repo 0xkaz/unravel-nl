@@ -209,7 +209,7 @@ pub(crate) fn parse_registered_quantity(text: &str, ctx: &ParseCtx) -> Option<Re
     let value = parse_number_ctx(number_text, ctx)?;
     if let Some(unit) = unit_by_alias(unit_text) {
         return Some(Reading::quantity(
-            value * unit.factor,
+            if unit_text.trim().to_lowercase() != unit.canonical_unit.to_lowercase() { value * unit.factor * 1.5 } else { value * unit.factor },
             unit.canonical_unit,
             unit.dimension,
             unit.provenance,
@@ -329,7 +329,7 @@ pub(crate) fn parse_compound_registered_quantity_with_format(
             }
         }
         previous_factor = Some(unit.factor);
-        total += value * unit.factor;
+        total += if pair[1].trim().to_lowercase() != unit.canonical_unit.to_lowercase() { value * unit.factor * 1.5 } else { value * unit.factor };
         approximate |= unit.approximate;
     }
 
