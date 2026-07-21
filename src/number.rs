@@ -52,10 +52,7 @@ pub(crate) fn parse_number_with_format(text: &str, number_format: NumberFormat) 
 }
 
 pub(crate) fn normalize_locale_number(text: &str, number_format: NumberFormat) -> Option<String> {
-    let compact = text
-        .chars()
-        .filter(|ch| !matches!(ch, ' ' | '_' | '\'' | '\u{00A0}' | '\u{202F}' | '\u{2009}'))
-        .collect::<String>();
+    let compact = strip_space_style_grouping(text.trim())?;
     if compact.is_empty() {
         return None;
     }
@@ -124,6 +121,66 @@ pub(crate) fn normalize_locale_number(text: &str, number_format: NumberFormat) -
     }
 
     Some(compact)
+}
+
+/// Separators that group digits without being a decimal separator anywhere: the
+/// space family (`1 200`), the Swiss apostrophe (`1'234`), and the underscore.
+pub(crate) const SPACE_STYLE_SEPARATORS: [char; 6] =
+    [' ', '_', '\'', '\u{00A0}', '\u{202F}', '\u{2009}'];
+
+/// Removes space-style grouping, but only where it really is grouping.
+///
+/// These separators used to be stripped unconditionally, so `1.2 3` read as
+/// 1.23 and `1 2` as 12: values written nowhere in the input, produced with an
+/// empty findings channel. They are now held to the same standard the comma and
+/// dot paths hold their separators to, and by the same validators, so the four
+/// styles cannot disagree about what counts as a group boundary:
+///
+/// - a separator may only sit between digits of the whole part, in western
+///   three-digit groups (`1 234 567`) or the Indian 2-2-3 shape (`12 34 567`);
+/// - a separator may not appear at or after a decimal separator, which is what
+///   `1.2 3` does — the comma and dot paths already refuse that, because they
+///   only ever check grouping in the whole part and reject a fractional part
+///   that is not all digits.
+///
+/// Anything else returns `None`, which the callers turn into a refusal with a
+/// `NoValue` finding, exactly as a malformed comma- or dot-grouped number is
+/// refused. No reading is emitted, and no reading is invented.
+pub(crate) fn strip_space_style_grouping(text: &str) -> Option<String> {
+    if !text.contains(SPACE_STYLE_SEPARATORS) {
+        return Some(text.to_owned());
+    }
+
+    // Everything from the first `,` or `.` onwards is the decimal separator and
+    // what follows it, whichever of the two the format turns out to use. Group
+    // separators cannot live there.
+    let whole_end = text.find([',', '.']).unwrap_or(text.len());
+    let (whole, rest) = text.split_at(whole_end);
+    if rest.contains(SPACE_STYLE_SEPARATORS) {
+        return None;
+    }
+
+    // A sign is not a digit, so a space between it and the number is spacing
+    // rather than grouping: `- 1 234` keeps reading as -1234.
+    let signless = whole.trim_start_matches(['-', '+']);
+    let sign = &whole[..whole.len() - signless.len()];
+    let body = if sign.is_empty() {
+        signless
+    } else {
+        signless.trim_start_matches(SPACE_STYLE_SEPARATORS)
+    };
+    if !body.contains(SPACE_STYLE_SEPARATORS) {
+        return Some(format!("{sign}{body}{rest}"));
+    }
+
+    // Defer to the validators the comma path uses, on the same string with the
+    // separator canonicalized, so "well-formed grouping" has one definition.
+    let canonical = body.replace(SPACE_STYLE_SEPARATORS, ",");
+    if !valid_grouped_number(&canonical) && !valid_indian_grouped_number(&canonical) {
+        return None;
+    }
+    let grouped = body.replace(SPACE_STYLE_SEPARATORS, "");
+    Some(format!("{sign}{grouped}{rest}"))
 }
 
 pub(crate) fn normalize_grouped_decimal_free_number(text: &str, grouping: char) -> Option<String> {
@@ -533,6 +590,75 @@ mod tests {
         assert_eq!(
             normalize_decimal_grouped_number("1234,56", ',', '.').as_deref(),
             Some("1234.56")
+        );
+    }
+
+    /// Space-style separators used to be stripped before anything checked they
+    /// sat on group boundaries, so `1.2 3` normalized to `1.23` — a value the
+    /// input does not spell — while `1.2.3` and `1,2,3` were already refused.
+    #[test]
+    fn space_style_grouping_is_validated_like_comma_and_dot_grouping() {
+        for refused in [
+            "1.2 3",
+            "1 2",
+            "1 2020",
+            "1_2",
+            "1 2 3",
+            "1  200",
+            "1 .234",
+            "1, 234",
+            "1.234 567",
+            "1,234 567",
+            "1 234,5 6",
+        ] {
+            assert_eq!(
+                normalize_locale_number(refused, NumberFormat::Auto),
+                None,
+                "{refused}"
+            );
+        }
+
+        for (input, expected) in [
+            ("1 200", "1200"),
+            ("1 234 567", "1234567"),
+            // The Indian 2-2-3 shape, from the same validator the comma path uses.
+            ("12 34 567", "1234567"),
+            ("1'234", "1234"),
+            ("1_234", "1234"),
+            ("1\u{00A0}234", "1234"),
+            ("1\u{202F}234", "1234"),
+            ("1\u{2009}234", "1234"),
+            ("- 1 234", "-1234"),
+            ("+1 234", "+1234"),
+            ("1 234.56", "1234.56"),
+            ("1 234,56", "1234.56"),
+            ("3640", "3640"),
+        ] {
+            assert_eq!(
+                normalize_locale_number(input, NumberFormat::Auto).as_deref(),
+                Some(expected),
+                "{input}"
+            );
+        }
+
+        // A declared format still rules the decimal separator: the space is
+        // grouping in both, and what follows the comma or dot is judged by the
+        // format's own rule.
+        assert_eq!(
+            normalize_locale_number("1 234,56", NumberFormat::CommaDecimal).as_deref(),
+            Some("1234.56")
+        );
+        assert_eq!(
+            normalize_locale_number("1 234,56", NumberFormat::DotDecimal),
+            None
+        );
+        assert_eq!(
+            normalize_locale_number("1 234.56", NumberFormat::DotDecimal).as_deref(),
+            Some("1234.56")
+        );
+        assert_eq!(
+            normalize_locale_number("1 234.56", NumberFormat::CommaDecimal),
+            None
         );
     }
 

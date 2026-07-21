@@ -219,9 +219,22 @@ fn ascii_digits(text: &str) -> String {
     folded(text).chars().filter(char::is_ascii_digit).collect()
 }
 
-fn is_subsequence(needle: &str, haystack: &str) -> bool {
-    let mut chars = haystack.chars();
-    needle.chars().all(|ch| chars.any(|other| other == ch))
+/// Whether `fraction` is written as the digits following a decimal mark.
+///
+/// A fractional part is only ever spelled one way: right after the mark, with
+/// nothing in between. `1.2 3` reading as 1.23 is exactly the shape this
+/// rejects — the input writes `2` after the point, not `23`. Trailing input
+/// digits the value does not carry are allowed, because `1.10` reads as 1.1.
+fn fraction_is_written(fraction: &str, folded_input: &str) -> bool {
+    let chars: Vec<char> = folded_input.chars().collect();
+    chars.iter().enumerate().any(|(index, ch)| {
+        matches!(ch, '.' | ',')
+            && chars[index + 1..]
+                .iter()
+                .take_while(|next| next.is_ascii_digit())
+                .collect::<String>()
+                .starts_with(fraction)
+    })
 }
 
 fn assert_not_fabricated(reading: &Reading, findings: &Findings, input: &str, entry: &str) {
@@ -251,17 +264,37 @@ fn assert_not_fabricated(reading: &Reading, findings: &Findings, input: &str, en
         && !digits.is_empty()
         && let Some(value) = reading.value
     {
-        let written = format!("{value}");
-        let mut value_digits: String = written.chars().filter(char::is_ascii_digit).collect();
-        if value.abs() < 1.0 {
-            // `,12` reads as `0.12`; the leading zero is notation, not a
-            // digit taken from the input.
-            value_digits = value_digits.trim_start_matches('0').to_owned();
-        }
+        // The strict property: the number is *written* in the input. Its whole
+        // part is one unbroken run of digits there, group separators aside, and
+        // its fractional digits sit immediately after a decimal mark. Checking
+        // the digits as a subsequence instead used to be necessary because
+        // `1.2 3` read as 1.23, which no reading of the input spells; that is
+        // now refused, so the property can be stated as written.
+        let written = format!("{}", value.abs());
         assert!(
-            is_subsequence(&value_digits, &digits),
-            "{entry}({input:?}) read {value}, whose digits are not in the input"
+            !written.contains('e'),
+            "{entry}({input:?}) read {value}, which is not written in any form"
         );
+        let (whole, fraction) = written.split_once('.').unwrap_or((written.as_str(), ""));
+        // `,12` reads as `0.12`; the leading zero is notation, not a digit
+        // taken from the input.
+        let whole_digits = whole.trim_start_matches('0');
+        assert!(
+            whole_digits.is_empty() || digits.contains(whole_digits),
+            "{entry}({input:?}) read {value}, whose whole part is not written in the input"
+        );
+        assert!(
+            fraction.is_empty() || fraction_is_written(fraction, &folded_input),
+            "{entry}({input:?}) read {value}, whose fraction is not written in the input"
+        );
+    }
+
+    // An endpoint is a reading like any other, and is held to the same rule:
+    // `parse("1.2 3-4 kg")` reporting an interval from 1.23 is the fabrication
+    // this whole file is about.
+    if let Some(range) = reading.range.as_ref() {
+        assert_not_fabricated(&range.from, findings, input, entry);
+        assert_not_fabricated(&range.to, findings, input, entry);
     }
 
     // A unit reported for a string of nothing but digits was not read from the
@@ -312,25 +345,45 @@ fn no_reading_is_invented_from_text_that_does_not_hold_it() {
     }
 }
 
-/// A live instance of the fabrication class, in `parse` rather than in the
-/// removed scanner — recorded, not fixed, because fixing it changes a surviving
-/// path and is not part of removing sentence scanning.
+/// The instance of the fabrication class that used to live in `parse`.
 ///
-/// `parse("1.2 3-4 kg")` reports an interval from 1.23 kg to 4 kg with an empty
-/// findings list. `1.23` is the space-grouping rule (`1 200` reads as 1200)
-/// applied across a decimal point, so the endpoint is not written anywhere in
-/// the input, and nothing on any channel says a choice was made. The stricter
-/// property — an endpoint the parser reports is spelled in the text — fails
-/// here, which is why the test above checks digits rather than substrings.
+/// `parse("1.2 3-4 kg")` reported an interval from 1.23 kg to 4 kg with an
+/// empty findings list. `1.23` was the space-grouping rule (`1 200` reads as
+/// 1200) applied across a decimal point: a group separator cannot follow one, so
+/// the endpoint was written nowhere in the input, and nothing on any channel
+/// said a choice had been made. Space-style separators are now validated the
+/// way the comma and dot paths validate theirs, so the malformed shapes are
+/// refused with a finding while real grouping keeps reading.
 #[test]
-#[ignore = "known defect in `parse`, recorded rather than fixed: see the doc comment"]
-fn space_grouping_across_a_decimal_point_is_a_silent_invention() {
-    let parsed = parse("1.2 3-4 kg", None);
-    let best = parsed.best.as_ref().expect("a range");
-    let range = best.range.as_ref().expect("endpoints");
-    assert_eq!(range.from.value, Some(1.23));
-    assert!(
-        !silent(&parsed.findings),
-        "an endpoint the input does not spell was reported with no finding"
-    );
+fn space_grouping_across_a_decimal_point_is_refused_not_invented() {
+    for input in ["1.2 3-4 kg", "1.2 3", "1 2", "1 2020", "1_2", "1.234 567"] {
+        let parsed = parse(input, None);
+        assert!(
+            parsed.best.is_none(),
+            "{input:?} was read as {:?}",
+            parsed.best
+        );
+        assert!(
+            !silent(&parsed.findings),
+            "{input:?} produced no reading and no finding"
+        );
+    }
+
+    // Grouping that is grouping still reads, western and Indian alike, and
+    // through every space-family separator the crate accepts.
+    for (input, expected) in [
+        ("1 200", 1200.0),
+        ("1 234 567", 1_234_567.0),
+        ("12 34 567", 1_234_567.0),
+        ("1_234", 1234.0),
+        ("- 1 234", -1234.0),
+        ("1 234,56", 1234.56),
+        ("1\u{00A0}234", 1234.0),
+        ("1\u{202F}234", 1234.0),
+        ("1\u{2009}234", 1234.0),
+    ] {
+        let parsed = parse(input, None);
+        let best = parsed.best.as_ref().unwrap_or_else(|| panic!("{input:?}"));
+        assert_eq!(best.value, Some(expected), "{input:?}");
+    }
 }
