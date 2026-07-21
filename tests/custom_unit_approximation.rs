@@ -55,10 +55,6 @@ fn approximate_custom_unit_is_reported_in_findings() {
 
     assert_reported_approximate(&parse(text, Some(smoot_ctx(true))), text);
     assert_reported_approximate(&parse_quantity_fast(text, Some(smoot_ctx(true))), text);
-
-    let matches = parse_all(text, Some(smoot_ctx(true)));
-    assert_eq!(matches.len(), 1);
-    assert_reported_approximate(&matches[0].parsed, text);
 }
 
 /// The fix must not over-report: an exact custom unit stays finding-free.

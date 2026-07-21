@@ -14,7 +14,7 @@
 
 use unravel_nl::{
     CanonicalizeRequest, Dimension, DimensionSet, IssueCode, Kind, Locale, ParseCtx, Parsed,
-    canonicalize_values, complete, complete_readings, parse, parse_all, parse_date_fast,
+    canonicalize_values, complete, complete_readings, parse, parse_date_fast,
     parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast, parse_recurrence_fast,
 };
 
@@ -161,12 +161,6 @@ fn every_entry_point_enforces_the_declared_domains() {
     }
 
     // The scan keeps the span and carries the refusal on it.
-    let scanned = parse_all(input, dimensions.clone());
-    assert_eq!(scanned.len(), 1);
-    assert_eq!(scanned[0].text, "5 W");
-    assert!(scanned[0].parsed.best.is_none());
-    assert!(rejection(&scanned[0].parsed).is_some());
-
     let editor = parse_dimensions_for_editor(input, dimensions.clone());
     assert_eq!(editor.len(), 1);
     assert!(editor[0].parsed.best.is_none());
@@ -209,11 +203,6 @@ fn an_empty_set_is_no_restriction_at_all() {
         assert_eq!(
             parse_quantity_fast(input, empty.clone()),
             parse_quantity_fast(input, None),
-            "{input}"
-        );
-        assert_eq!(
-            parse_all(input, empty.clone()).len(),
-            parse_all(input, None).len(),
             "{input}"
         );
         assert_eq!(
@@ -600,11 +589,6 @@ fn a_promoted_compound_is_described_as_the_reading_it_became() {
             assert_close(best.value.expect(input), metres);
             assert_eq!(ambiguity(&parsed), COMPOUND_READ, "{input}");
         }
-
-        // The scan carries the same corrected sentence.
-        let scanned = parse_all(input, ctx(&[Dimension::Length]));
-        assert_eq!(scanned.len(), 1, "{input}");
-        assert_eq!(ambiguity(&scanned[0].parsed), COMPOUND_READ, "{input}");
     }
 
     // With nothing left to promote, the finding says that instead of naming a

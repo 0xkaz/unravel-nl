@@ -14,7 +14,7 @@
 //! (`5m3` is shaped exactly like `1m80`) it is reported as an alternative with
 //! an `AmbiguousUnit` finding rather than dropped.
 
-use unravel_nl::{Dimension, IssueCode, Parsed, parse, parse_all, parse_quantity_fast};
+use unravel_nl::{Dimension, IssueCode, Parsed, parse, parse_quantity_fast};
 
 fn assert_close(actual: f64, expected: f64) {
     assert!(
@@ -80,12 +80,6 @@ fn watt_beats_the_week_idiom_through_every_entry_point() {
         assert!(parsed.alternatives.is_empty(), "{input:?}");
         assert!(parsed.findings.ambiguities.is_empty(), "{input:?}");
         assert!(parsed.findings.skipped.is_empty(), "{input:?}");
-
-        let scanned = parse_all(input, None);
-        assert_eq!(scanned.len(), 1, "{input:?}");
-        let scanned = scanned[0].parsed.best.as_ref().expect("a reading");
-        assert_eq!(scanned.unit.as_deref(), Some("W"), "{input:?}");
-        assert_close(scanned.value.expect("a value"), 5.0);
     }
 }
 
@@ -170,21 +164,6 @@ fn closed_up_registry_alias_leads_and_reports_the_compound_reading() {
         );
         assert_eq!(parsed.findings.ambiguities[0].span.text, input);
         assert!(parsed.findings.skipped.is_empty(), "{input:?}");
-
-        // `parse_all` is built on the fast dispatch and inherits both.
-        let scanned = parse_all(input, None);
-        assert_eq!(scanned.len(), 1, "{input:?}");
-        let scanned = &scanned[0].parsed;
-        assert_close(
-            scanned.best.as_ref().expect("a reading").value.expect("v"),
-            value,
-        );
-        assert_eq!(scanned.alternatives.len(), 1, "{input:?}");
-        assert_eq!(
-            scanned.findings.ambiguities[0].code,
-            IssueCode::AmbiguousUnit,
-            "{input:?}"
-        );
     }
 }
 
@@ -268,13 +247,6 @@ fn case_sensitive_aliases_keep_their_own_reading() {
         assert_eq!(parsed.alternatives.len(), alternatives, "{input:?}");
         assert_eq!(parsed.findings.ambiguities.len(), alternatives, "{input:?}");
         assert!(parsed.findings.skipped.is_empty(), "{input:?}");
-
-        let scanned = parse_all(input, None);
-        assert_eq!(scanned.len(), 1, "{input:?}");
-        let scanned = scanned[0].parsed.best.as_ref().expect("a reading");
-        assert_eq!(scanned.unit.as_deref(), Some(unit), "{input:?}");
-        assert_eq!(scanned.dimension, Some(dimension), "{input:?}");
-        assert_close(scanned.value.expect("a value"), value);
     }
 }
 

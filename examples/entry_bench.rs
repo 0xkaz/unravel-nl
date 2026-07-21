@@ -4,7 +4,7 @@ use std::{
 };
 
 use unravel_nl::{
-    Date, Locale, ParseCtx, parse, parse_all, parse_date_fast, parse_dimensions_for_editor,
+    Date, Locale, ParseCtx, parse, parse_date_fast, parse_dimensions_for_editor,
     parse_quantity_fast,
 };
 
@@ -35,14 +35,6 @@ const DATE_INPUTS: &[&str] = &[
     "sexta-feira que vem",
     "明天",
     "下周五",
-];
-
-const SENTENCES: &[&str] = &[
-    "延床100㎡、敷地面積120㎡、高さ3.5m、予算¥1,234",
-    "ship 2 boxes at 5 kg each by friday",
-    "幅１．５ｍ；重量五キログラム；面積百二十平米",
-    "convert 72 in to cm and keep pressure under 10 inH₂O",
-    "dose 20 mSv, activity 5 MBq, flow 5 gpm",
 ];
 
 const EDITOR_SENTENCES: &[&str] = &[
@@ -97,7 +89,6 @@ fn main() {
         iterations,
         parse_date_fast,
     );
-    run_scan("parse_all() sentence corpus", SENTENCES, iterations);
     run_editor_scan(
         "parse_dimensions_for_editor() corpus",
         EDITOR_SENTENCES,
@@ -122,25 +113,6 @@ fn run_parse(
             matched += 1;
         }
         black_box(parsed);
-    }
-
-    print_result(label, iterations, matched, started.elapsed());
-}
-
-fn run_scan(label: &str, inputs: &[&str], iterations: usize) {
-    let started = Instant::now();
-    let mut matched = 0_usize;
-    let ctx = Some(ParseCtx {
-        locale: Some(Locale::Ja),
-        reference_date: Date::new(2026, 7, 19),
-        ..ParseCtx::default()
-    });
-
-    for idx in 0..iterations {
-        let input = inputs[idx % inputs.len()];
-        let matches = parse_all(black_box(input), black_box(ctx.clone()));
-        matched += matches.len();
-        black_box(matches);
     }
 
     print_result(label, iterations, matched, started.elapsed());

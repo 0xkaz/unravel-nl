@@ -22,7 +22,7 @@ pub fn parse_input_schema_json() -> &'static str {
 /// **The WASM/FFI `*_json` functions in this crate do not emit this shape.**
 /// They emit a deliberately compact summary envelope — `{ok, input, best,
 /// issues}` for the single-value functions, and an array of span objects
-/// wrapping that envelope for the `parse_all` and editor functions — which this
+/// wrapping that envelope for the editor functions — which this
 /// schema rejects. Treat this schema as the documented contract for
 /// callers that build the JSON from [`Parsed`] themselves, not as a validator
 /// for the WASM output.
@@ -116,80 +116,6 @@ pub fn parse_json_with_context(
         text,
         Some(parse_wasm_context(locale, expected_dimension, strictness)),
     ))
-}
-
-/// Parses all readings and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
-///
-/// # Envelope
-///
-/// The returned JSON is an array of match objects, each with the keys `start`,
-/// `end`, `byteStart`, `byteEnd`, `charStart`, `charEnd`, `text`, and `parsed`,
-/// where `parsed` is the compact summary envelope described on [`parse_json`].
-/// This is deliberately **not** the parse contract published by
-/// [`parsed_output_schema_json`]; that schema describes a single [`Parsed`]
-/// value and rejects both the array wrapper and the envelope inside it.
-#[cfg(feature = "wasm")]
-#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
-#[wasm_bindgen::prelude::wasm_bindgen]
-pub fn parse_all_json(text: &str) -> String {
-    parsed_matches_summary_json(text, &parse_all(text, None))
-}
-
-/// Parses all readings with a locale hint and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
-///
-/// # Envelope
-///
-/// The returned JSON is an array of match objects, each with the keys `start`,
-/// `end`, `byteStart`, `byteEnd`, `charStart`, `charEnd`, `text`, and `parsed`,
-/// where `parsed` is the compact summary envelope described on [`parse_json`].
-/// This is deliberately **not** the parse contract published by
-/// [`parsed_output_schema_json`]; that schema describes a single [`Parsed`]
-/// value and rejects both the array wrapper and the envelope inside it.
-#[cfg(feature = "wasm")]
-#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
-#[wasm_bindgen::prelude::wasm_bindgen]
-pub fn parse_all_json_with_locale(text: &str, locale: &str) -> String {
-    parsed_matches_summary_json(
-        text,
-        &parse_all(
-            text,
-            Some(ParseCtx {
-                locale: parse_locale_tag(locale),
-                ..ParseCtx::default()
-            }),
-        ),
-    )
-}
-
-/// Parses all readings with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse_all`].
-///
-/// # Envelope
-///
-/// The returned JSON is an array of match objects, each with the keys `start`,
-/// `end`, `byteStart`, `byteEnd`, `charStart`, `charEnd`, `text`, and `parsed`,
-/// where `parsed` is the compact summary envelope described on [`parse_json`].
-/// This is deliberately **not** the parse contract published by
-/// [`parsed_output_schema_json`]; that schema describes a single [`Parsed`]
-/// value and rejects both the array wrapper and the envelope inside it.
-#[cfg(feature = "wasm")]
-#[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
-#[wasm_bindgen::prelude::wasm_bindgen]
-pub fn parse_all_json_with_context(
-    text: &str,
-    locale: &str,
-    expected_dimension: &str,
-    strictness: &str,
-) -> String {
-    if unreadable_dimension_tag(expected_dimension) {
-        return unreadable_dimension_tag_matches_json(text, expected_dimension);
-    }
-    parsed_matches_summary_json(
-        text,
-        &parse_all(
-            text,
-            Some(parse_wasm_context(locale, expected_dimension, strictness)),
-        ),
-    )
 }
 
 /// Parses editor dimension readings and returns a JSON string at the WASM/FFI boundary around [`parse_dimensions_for_editor`].
@@ -606,9 +532,13 @@ mod wasm_tests {
     }
 
     #[test]
-    fn parse_all_json_carries_the_position_triple() {
-        let json = parse_all_json("3m and 20kg");
+    fn parse_dimensions_for_editor_json_extracts_labelled_lengths() {
+        let json = parse_dimensions_for_editor_json("幅3m 奥行4m");
         assert!(is_valid_json(&json), "{json}");
+        assert!(json.contains("\"dimension\":\"length\""), "{json}");
+        assert!(json.starts_with('['), "{json}");
+        // Every key of the span envelope, including the byte/char position
+        // triple, which callers index the original string with.
         for key in [
             "\"start\":",
             "\"end\":",
@@ -621,75 +551,19 @@ mod wasm_tests {
         ] {
             assert!(json.contains(key), "{key} missing from {json}");
         }
-        assert!(json.starts_with('['), "{json}");
-
-        assert_eq!(parse_all_json(""), "[]");
-    }
-
-    #[test]
-    fn parse_all_json_with_locale_reports_char_offsets_past_multibyte_text() {
-        let json = parse_all_json_with_locale("3m×4m のLDK", "ja");
-        assert!(is_valid_json(&json), "{json}");
-        for key in ["\"start\":", "\"byteStart\":", "\"charStart\":"] {
-            assert!(json.contains(key), "{key} missing from {json}");
-        }
         // The char offsets must differ from the byte offsets once a multi-byte
         // character precedes a match, which is the whole point of shipping both.
-        let matches = parse_all("3m×4m のLDK", None);
+        let matches = parse_dimensions_for_editor("幅3m 奥行4m", None);
         let last = matches.last().expect("a match");
         assert!(last.start > 0);
         assert!(
-            byte_to_char_offset("3m×4m のLDK", last.start) < last.start,
+            byte_to_char_offset("幅3m 奥行4m", last.start) < last.start,
             "{last:?}"
         );
-    }
-
-    /// The tags must reach the parser, not merely be accepted. Asserting the
-    /// envelope is well-formed and carries `charStart` would pass with the tags
-    /// thrown away, so the assertion is the *difference* the tags make: with an
-    /// expected dimension the bare millimetre numbers gain `UNIT_ASSUMED`, and
-    /// without one they do not.
-    #[test]
-    fn parse_all_json_with_context_applies_the_tags() {
-        let tagged = parse_all_json_with_context("幅3640 高さ2400", "ja", "length", "forgiving");
-        let untagged = parse_all_json("幅3640 高さ2400");
-        assert!(is_valid_json(&tagged), "{tagged}");
-        assert!(is_valid_json(&untagged), "{untagged}");
-        assert!(tagged.contains("\"charStart\":"), "{tagged}");
-
-        assert_eq!(
-            tagged.matches("\"code\":\"UNIT_ASSUMED\"").count(),
-            2,
-            "{tagged}"
-        );
-        assert!(!untagged.contains("UNIT_ASSUMED"), "{untagged}");
-        assert_ne!(tagged, untagged);
-
-        // A misspelled dimension tag is refused rather than absorbed, and the
-        // refusal arrives as one match over the whole input: an empty array
-        // would be the same silence, and answering `untagged` would be the
-        // fail-open this refuses.
-        let typo = parse_all_json_with_context("幅3640 高さ2400", "ja", "lenght", "forgiving");
-        assert_ne!(typo, untagged);
-        assert_eq!(
-            typo,
-            "[{\"start\":0,\"end\":18,\"byteStart\":0,\"byteEnd\":18,\"charStart\":0,\
-             \"charEnd\":12,\"text\":\"幅3640 高さ2400\",\"parsed\":{\"ok\":false,\
-             \"input\":\"幅3640 高さ2400\",\"best\":null,\"issues\":[\
-             {\"code\":\"REJECTED_BY_POLICY\",\"severity\":\"error\",\"rank\":90,\
-             \"ref_text\":\"幅3640 高さ2400\"}]}}]"
-        );
-    }
-
-    #[test]
-    fn parse_dimensions_for_editor_json_extracts_labelled_lengths() {
-        let json = parse_dimensions_for_editor_json("幅3m 奥行4m");
-        assert!(is_valid_json(&json), "{json}");
-        assert!(json.contains("\"dimension\":\"length\""), "{json}");
-        assert!(json.contains("\"charStart\":"), "{json}");
 
         // An unlabelled bare number is not a dimension, so nothing is extracted.
         assert_eq!(parse_dimensions_for_editor_json("3640"), "[]");
+        assert_eq!(parse_dimensions_for_editor_json(""), "[]");
     }
 
     /// Labelled, unambiguous, exactly-typed lengths are the case where the tags

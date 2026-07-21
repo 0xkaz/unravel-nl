@@ -1,8 +1,6 @@
 //! Keeps the README and README.ja.md examples honest.
 
-use unravel_nl::{
-    HumanizeCtx, Locale, ParseCtx, humanize, parse, parse_all, parse_dimensions_for_editor,
-};
+use unravel_nl::{HumanizeCtx, Locale, ParseCtx, humanize, parse, parse_dimensions_for_editor};
 
 #[test]
 fn readme_shakkanho_example() {
@@ -24,19 +22,6 @@ fn readme_shakkanho_example() {
         ),
         "5尺3寸 (approx.)"
     );
-}
-
-#[test]
-fn readme_parse_all_example() {
-    let matches = parse_all(
-        "延床100㎡、敷地面積120㎡、高さ3.5m",
-        Some(ParseCtx {
-            locale: Some(Locale::Ja),
-            ..ParseCtx::default()
-        }),
-    );
-    assert_eq!(matches.len(), 3);
-    assert_eq!(matches[0].text, "延床100㎡");
 }
 
 #[test]

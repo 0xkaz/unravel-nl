@@ -9,8 +9,8 @@
 
 use unravel_nl::{
     Dimension, DimensionSet, IssueCode, Kind, Locale, ParseCtx, Parsed, Strictness, parse,
-    parse_all, parse_date_fast, parse_dimensions_for_editor, parse_number_fast,
-    parse_quantity_fast, parse_recurrence_fast, ranked_findings,
+    parse_date_fast, parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
+    parse_recurrence_fast, ranked_findings,
 };
 
 /// The contract, checked for every finding: the span is a slice of the input.
@@ -314,14 +314,6 @@ fn every_entry_point_reports_spans_against_its_own_input() {
             assert_spans_address_input(&parse_date_fast(input, Some(ctx.clone())), input);
             assert_spans_address_input(&parse_recurrence_fast(input, Some(ctx.clone())), input);
 
-            for found in parse_all(input, Some(ctx.clone())) {
-                assert_spans_address_input(&found.parsed, input);
-                assert_eq!(
-                    input.get(found.start..found.end),
-                    Some(found.text.as_str()),
-                    "parse_all match does not slice {input:?}"
-                );
-            }
             for found in parse_dimensions_for_editor(input, Some(ctx.clone())) {
                 assert_spans_address_input(&found.parsed, input);
                 assert_eq!(

@@ -9,9 +9,7 @@ wasm-pack build --target nodejs --out-dir pkg-node -- --features wasm
 ```
 
 The web target emits `parse_json(text)`, `parse_json_with_locale(text, locale)`,
-`parse_json_with_context(text, locale, expected_dimension, strictness)`,
-`parse_all_json(text)`, `parse_all_json_with_locale(text, locale)`, and
-`parse_all_json_with_context(text, locale, expected_dimension, strictness)`.
+and `parse_json_with_context(text, locale, expected_dimension, strictness)`.
 It also emits `parse_dimensions_for_editor_json(text)` and
 `parse_dimensions_for_editor_json_with_context(text, locale, expected_dimension,
 strictness)` for building-dimension-only editor scans.
@@ -32,9 +30,9 @@ Single-value exports return a compact JSON summary object with exactly the keys
 `ok`, `input`, `best`, and ranked `issues` — `input` is always present, echoing
 the string that was parsed. When `best` is a range reading it also carries a
 `range` object with `from` and `to`, each a nested reading with the same fields
-a top-level reading has. Multi-value exports return an array of matches with
-byte spans, character spans, original text, and a compact parsed summary. The
-Rust core uses byte spans; browser adapters should use `codeUnitStart` /
+a top-level reading has. The editor extractor exports return an array of
+matches with byte spans, character spans, original text, and a compact parsed
+summary. The Rust core uses byte spans; browser adapters should use `codeUnitStart` /
 `codeUnitEnd` from `parseAllForUi()` when slicing JavaScript strings.
 
 The browser adapter files are `web/unravel-adapters.js` and

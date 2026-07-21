@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
 import {
-  parse_all_json_with_context,
-  parse_all_json_with_locale,
   parse_dimensions_for_editor_json_with_context,
   parse_json,
   parse_json_with_context,
@@ -26,7 +24,9 @@ assert.equal(unsupportedTimezone.ok, false);
 assert.equal(unsupportedTimezone.issues[0].code, "TIMEZONE_UNSUPPORTED");
 assert.equal(unsupportedTimezone.issues[0].severity, "error");
 
-const room = JSON.parse(parse_all_json_with_locale("3m×4m のLDK", "ja"));
+const room = JSON.parse(
+  parse_dimensions_for_editor_json_with_context("3m×4m のLDK", "ja", "", ""),
+);
 assert.equal(room.length, 2);
 assert.equal(room[0].text, "3m");
 assert.equal(room[0].start, 0);
@@ -37,7 +37,9 @@ assert.equal(room[1].start, 4);
 assert.equal(room[1].byteStart, 4);
 assert.equal(room[1].charStart, 3);
 
-const plainLength = JSON.parse(parse_all_json_with_context("寸法3640", "ja", "length", ""));
+const plainLength = JSON.parse(
+  parse_dimensions_for_editor_json_with_context("寸法3640", "ja", "length", ""),
+);
 assert.equal(plainLength.length, 1);
 assert.equal(plainLength[0].parsed.best.kind, "number");
 assert.equal(plainLength[0].parsed.issues[0].code, "UNIT_ASSUMED");

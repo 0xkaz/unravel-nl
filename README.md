@@ -62,9 +62,10 @@ The first slice focuses on:
 - Static parse input, parsed output, and MCP tool schemas for AI/tool adapters
 - Split API entry points: broad `parse()`, narrower `parse_quantity_fast()`,
   `parse_number_fast()`, `parse_date_fast()`, `parse_recurrence_fast()`,
-  multi-value `parse_all()`, editor-focused `parse_dimensions_for_editor()`,
-  and reading-level `complete_readings()`
-- Multi-value extraction with byte spans via `parse_all()`
+  editor-focused `parse_dimensions_for_editor()`, and reading-level
+  `complete_readings()`
+- Building-dimension extraction with byte spans via
+  `parse_dimensions_for_editor()`
 - Explicit `NumberFormat` and `AcceptOptions` policies for callers that need
   deterministic punctuation and grammar-shape control
 - Core completion candidates for unit, date, time, currency, temperature, and
@@ -72,7 +73,7 @@ The first slice focuses on:
 - Custom unit kind metadata, custom fuzzy vocabulary profiles, and
   `describe_*` resource views for UI/tool adapters
 - Feature-gated WASM exports for browser or Node package adapters, including
-  single-value JSON parsing and span-preserving multi-value extraction
+  single-value JSON parsing and span-preserving dimension extraction
 - Browser adapter TypeScript definitions for UI integration
 - No-Silent-Loss findings for skipped, ambiguous, and approximate readings
 - A normalized parser dispatch path, exact-first unit alias lookup, and a
@@ -150,29 +151,24 @@ assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("kg"));
 Available specialized entries are `parse_quantity_fast()`,
 `parse_number_fast()`, `parse_date_fast()`, and `parse_recurrence_fast()`.
 Use `ParseCtx::purpose` when a single `parse()` call should avoid broad
-grammar dispatch. `parse_all()` scans sentences for multiple values,
-`parse_dimensions_for_editor()` scans only building dimensions and unitless
-dimension fields, and `complete_readings()` returns ranked canonical readings
-for completion UIs.
+grammar dispatch. `parse_dimensions_for_editor()` scans free text for building
+dimensions and unitless dimension fields, and `complete_readings()` returns
+ranked canonical readings for completion UIs.
 
-## Multi-Value Extraction
+## Dimension Extraction
 
-```rust
-use unravel_nl::{parse_all, Dimension, Locale, ParseCtx};
+There is deliberately no sentence-extraction entry point — no `parse_all()`, and
+no plan for one. Sentence scanning has to guess where one value ends and the
+next begins, and that guessing was the source of a defect in every round of
+review it went through; the reference library this crate follows the API shape
+of has no such call either. Single-value parsing, over a field the caller has
+already delimited, is the supported shape. The internal note **"Sentence
+extraction is out of scope"** records the five rounds of evidence behind that
+decision; it is kept with the project's design notes rather than in the
+published crate.
 
-let matches = parse_all(
-    "延床100㎡、敷地面積120㎡、高さ3.5m",
-    Some(ParseCtx {
-        locale: Some(Locale::Ja),
-        ..ParseCtx::default()
-    }),
-);
-
-assert_eq!(matches.len(), 3);
-assert_eq!(matches[0].text, "延床100㎡");
-assert_eq!(matches[0].parsed.best.as_ref().unwrap().dimension, Some(Dimension::Area));
-assert_eq!(matches[2].text, "3.5m");
-```
+The one scanner that remains is narrow by construction: it reads only building
+dimensions, out of editor fields, against a label it can name.
 
 For editor fields that only accept dimensions, use the dedicated scanner. It
 extracts length and area values, keeps Japanese building units, and avoids
@@ -204,9 +200,9 @@ omitted entirely when that search fails, and callers must treat them as
 optional. The byte and character spans from the core are always present.
 
 ```rust
-use unravel_nl::{parse_all, Dimension, DimensionSet, Locale, ParseCtx};
+use unravel_nl::{Dimension, DimensionSet, Locale, ParseCtx, parse_dimensions_for_editor};
 
-let matches = parse_all(
+let matches = parse_dimensions_for_editor(
     "3m×4m のLDK",
     Some(ParseCtx {
         locale: Some(Locale::Ja),
@@ -320,7 +316,7 @@ wasm-pack build --target nodejs --out-dir pkg-node -- --features wasm
 node tests/wasm_node_smoke.mjs
 ```
 
-The WASM package exports `parse_json*`, `parse_all_json*`, and
+The WASM package exports `parse_json*` and
 `parse_dimensions_for_editor_json*` functions, with locale-only and minimal
 context variants for `expected_dimension` and `strictness`. The browser smoke
 page is `tests/wasm_browser_e2e.html`; serve the repository root and open

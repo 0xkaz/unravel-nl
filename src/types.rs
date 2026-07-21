@@ -549,7 +549,7 @@ pub struct ParseCtx {
     /// The empty set — the default — places no restriction. A non-empty set
     /// binds on every entry point: [`parse`], [`parse_quantity_fast`],
     /// [`parse_number_fast`], [`parse_date_fast`], [`parse_recurrence_fast`],
-    /// [`parse_all`], [`parse_dimensions_for_editor`], [`complete`],
+    /// [`parse_dimensions_for_editor`], [`complete`],
     /// [`complete_readings`], and [`canonicalize_values`]. A reading whose
     /// dimension is outside the set never comes back as [`Parsed::best`]; it is
     /// moved to [`Parsed::alternatives`] and reported as

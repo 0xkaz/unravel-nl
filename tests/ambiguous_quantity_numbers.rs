@@ -9,7 +9,7 @@
 
 use unravel_nl::{
     CanonicalizeRequest, Dimension, IssueCode, Kind, NumberFormat, ParseCtx, Parsed, Strictness,
-    canonicalize_values, parse, parse_all, parse_number_fast, parse_quantity_fast,
+    canonicalize_values, parse, parse_number_fast, parse_quantity_fast,
 };
 
 fn ambiguous_number_findings(parsed: &Parsed) -> Vec<(&str, usize, usize)> {
@@ -254,18 +254,6 @@ fn range_endpoints_report_their_own_ambiguous_numbers() {
     );
 }
 
-/// The scanner sees the same ambiguity the single-value parser does.
-#[test]
-fn parse_all_reports_the_ambiguity_it_finds_in_a_sentence() {
-    let matches = parse_all("1.234 kg of flour", None);
-    assert_eq!(matches.len(), 1, "{matches:#?}");
-    let parsed = &matches[0].parsed;
-    assert_close(parsed.best.as_ref().unwrap().value.unwrap(), 1.234, "flour");
-    assert_eq!(parsed.alternatives.len(), 1);
-    assert_close(parsed.alternatives[0].value.unwrap(), 1234.0, "flour alt");
-    assert_eq!(ambiguous_number_findings(parsed).len(), 1);
-}
-
 /// The point of the strict validator: refuse what the parser had to guess at.
 #[test]
 fn strict_canonicalization_refuses_a_guessed_grouping() {
@@ -319,13 +307,6 @@ fn a_spaced_registry_unit_is_not_a_compound_height() {
             assert!(parsed.alternatives.is_empty(), "{input}: {parsed:#?}");
         }
     }
-
-    let matches = parse_all("the tank holds 5 m3", None);
-    assert_eq!(matches.len(), 1, "{matches:#?}");
-    assert_eq!(matches[0].text, "5 m3");
-    let best = matches[0].parsed.best.as_ref().expect("volume");
-    assert_close(best.value.unwrap(), 5000.0, "5 m3");
-    assert_eq!(best.dimension, Some(Dimension::Volume));
 }
 
 /// The compound-height readings the README documents, unchanged.

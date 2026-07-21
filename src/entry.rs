@@ -247,47 +247,9 @@ pub(crate) fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
     }
 }
 
-/// Extracts every value found in a sentence, with byte spans.
-///
-/// The input is split into clauses and each clause is scanned for readings.
-/// Overlapping matches are resolved so the returned matches are ordered by
-/// position and never overlap, which makes them safe to use directly for
-/// highlighting the original string.
-///
-/// [`ParseCtx::expected_dimensions`] is enforced on every match, because every
-/// match is produced by [`parse`], [`parse_quantity_fast`], or
-/// [`parse_number_fast`]. A fragment read from a refused domain is still
-/// returned as a match, with `best: None`, the refused reading in
-/// [`Parsed::alternatives`], and an [`IssueCode::RejectedByPolicy`] finding: it
-/// was read and refused, and the span is exactly what a caller needs in order
-/// to say so.
-///
-/// ```
-/// use unravel_nl::{parse_all, Locale, ParseCtx};
-///
-/// let matches = parse_all(
-///     "延床100㎡、敷地面積120㎡、高さ3.5m",
-///     Some(ParseCtx {
-///         locale: Some(Locale::Ja),
-///         ..ParseCtx::default()
-///     }),
-/// );
-///
-/// assert_eq!(matches.len(), 3);
-/// assert_eq!(matches[0].text, "延床100㎡");
-/// ```
-pub fn parse_all(text: &str, ctx: Option<ParseCtx>) -> Vec<ParsedMatch> {
-    let ctx = ctx.unwrap_or_default();
-    let mut matches = Vec::new();
-    for_clause_spans(text, |start, end| {
-        push_clause_matches(&mut matches, text, start, end, &ctx);
-    });
-    sorted_non_overlapping_matches(matches)
-}
-
 /// Extracts only building dimensions from free text, for editor fields.
 ///
-/// A narrowed [`parse_all`] for inputs where a length or an area is the only
+/// A scanner for inputs where a length or an area is the only
 /// meaningful reading. Currency, dates, and general grammar are deliberately
 /// not attempted, so text like `予算1234` or `next friday` yields nothing
 /// instead of a wrong value. Japanese building units such as `帖` are kept, and
@@ -1032,8 +994,7 @@ pub(crate) const AMBIGUOUS_ALTERNATIVE_FACTOR: f64 = 0.875;
 /// `spaced_registry_unit` drops the other without reporting anything.
 ///
 /// Runs from both `parse_normalized_into` and [`parse_quantity_fast_into`], so
-/// every entry point — including the `parse_all` scan, which is built on the
-/// latter — reports the same alternative and the same finding.
+/// every entry point reports the same alternative and the same finding.
 pub(crate) fn report_closed_compound_alternative(trimmed: &str, parsed: &mut Parsed) {
     let Some(best) = parsed.best.as_ref() else {
         return;

@@ -7,7 +7,7 @@
 
 use unravel_nl::{
     Dimension, DimensionSet, Findings, IssueCode, IssueSeverity, Kind, Locale, ParseCtx, Parsed,
-    Skipped, Span, parse, parse_all, ranked_findings,
+    Skipped, Span, parse, ranked_findings,
 };
 
 #[test]
@@ -132,10 +132,7 @@ fn unknown_unit_is_never_emitted() {
                 ..ParseCtx::default()
             }),
         ] {
-            assert_no_unknown_unit(&parse(&input, ctx.clone()), &input);
-            for found in parse_all(&input, ctx) {
-                assert_no_unknown_unit(&found.parsed, &input);
-            }
+            assert_no_unknown_unit(&parse(&input, ctx), &input);
         }
     }
 }

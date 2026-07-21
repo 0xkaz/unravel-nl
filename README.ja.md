@@ -87,26 +87,20 @@ assert_eq!(
 - `parse_number_fast()` — 素の数値のみ
 - `parse_date_fast()` — 日付のみ
 - `parse_recurrence_fast()` — 繰り返し表現のみ
-- `parse_all()` — 文中から複数の値をバイトスパン付きで抽出
-- `parse_dimensions_for_editor()` — 寸法・面積のみを対象とするエディタ向けスキャナ
+- `parse_dimensions_for_editor()` — 寸法・面積のみを対象とするエディタ向けスキャナ（バイトスパン付き）
 - `complete_readings()` — 補完 UI 向けの順位付き候補
 
-### 文中からの複数値抽出
+### 文中からの寸法抽出
 
-```rust
-use unravel_nl::{parse_all, Dimension, Locale, ParseCtx};
+文全体から複数の値を取り出す入口（`parse_all()`）は意図的に提供していません。文の
+走査は「どこで値が終わり次が始まるか」を推測せざるを得ず、その推測がレビューのたびに
+不具合の発生源になりました。API 形状の参照元ライブラリにも同等の関数はありません。
+呼び出し側が範囲を決めたフィールドに対する単一値パースが、サポートされる形です。
+判断の根拠となる5回分の検証記録は、公開クレートではなく設計ノート側の
+**「Sentence extraction is out of scope」** に残しています。
 
-let matches = parse_all(
-    "延床100㎡、敷地面積120㎡、高さ3.5m",
-    Some(ParseCtx {
-        locale: Some(Locale::Ja),
-        ..ParseCtx::default()
-    }),
-);
-
-assert_eq!(matches.len(), 3);
-assert_eq!(matches[0].text, "延床100㎡");
-```
+残っているスキャナは構造上狭いものだけです。エディタ欄の中から、ラベルで裏付けの取れる
+建築寸法だけを読み取ります。
 
 寸法しか受け付けないエディタ欄では、専用スキャナを使います。通貨・日付・一般文法を
 避けつつ、日本の建築単位を保ったまま長さと面積だけを拾います。

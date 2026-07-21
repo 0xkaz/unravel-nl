@@ -8,8 +8,6 @@
     <pre id="status">pending</pre>
     <script type="module">
       import init, {
-        parse_all_json_with_context,
-        parse_all_json_with_locale,
         parse_dimensions_for_editor_json_with_context,
         parse_json,
         parse_json_with_context,
@@ -21,9 +19,11 @@
       try {
         await init();
         const length = JSON.parse(parse_json_with_locale("5尺3寸", "ja"));
-        const room = JSON.parse(parse_all_json_with_locale("3m×4m のLDK", "ja"));
+        const room = JSON.parse(
+          parse_dimensions_for_editor_json_with_context("3m×4m のLDK", "ja", "", ""),
+        );
         const plainLength = JSON.parse(
-          parse_all_json_with_context("寸法3640", "ja", "length", ""),
+          parse_dimensions_for_editor_json_with_context("寸法3640", "ja", "length", ""),
         );
         const editorDimensions = JSON.parse(
           parse_dimensions_for_editor_json_with_context(

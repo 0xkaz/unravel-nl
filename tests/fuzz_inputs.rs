@@ -1,5 +1,5 @@
 use unravel_nl::{
-    IssueCode, Locale, ParseCtx, Parsed, ParsedMatch, Reading, complete, parse, parse_all,
+    IssueCode, Locale, ParseCtx, Parsed, ParsedMatch, Reading, complete, parse,
     parse_dimensions_for_editor, ranked_findings,
 };
 
@@ -101,13 +101,6 @@ fn assert_invariants_hold(input: &str) {
     assert_spans_address_input(&parsed, input);
     assert_reading_invariants(&parsed, input);
     assert_ranked_findings_invariants(&parsed, input);
-
-    let matches = parse_all(input, ctx.clone());
-    assert_matches_are_ordered_and_disjoint(&matches, input);
-    for found in &matches {
-        assert_spans_address_input(&found.parsed, input);
-        assert_reading_invariants(&found.parsed, input);
-    }
 
     let editor = parse_dimensions_for_editor(input, ctx);
     assert_matches_are_ordered_and_disjoint(&editor, input);

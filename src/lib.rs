@@ -34,7 +34,6 @@
 //! | [`parse_number_fast`] | The field holds a bare number. |
 //! | [`parse_date_fast`] | The field holds a date. |
 //! | [`parse_recurrence_fast`] | The field holds a repeating schedule. |
-//! | [`parse_all`] | Free text that may contain several values. |
 //! | [`parse_dimensions_for_editor`] | Free text where only lengths and areas count. |
 //!
 //! # Reading the result
@@ -130,8 +129,8 @@ pub(crate) use dates::*;
 pub(crate) use duration::*;
 pub(crate) use entry::*;
 pub use entry::{
-    parse, parse_all, parse_date_fast, parse_dimensions_for_editor, parse_number_fast,
-    parse_quantity_fast, parse_recurrence_fast,
+    parse, parse_date_fast, parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
+    parse_recurrence_fast,
 };
 pub(crate) use findings::*;
 pub use findings::{
@@ -165,7 +164,6 @@ pub use wasm_json::{
 };
 #[cfg(feature = "wasm")]
 pub use wasm_json::{
-    parse_all_json, parse_all_json_with_context, parse_all_json_with_locale,
     parse_dimensions_for_editor_json, parse_dimensions_for_editor_json_with_context, parse_json,
     parse_json_with_context, parse_json_with_locale,
 };
