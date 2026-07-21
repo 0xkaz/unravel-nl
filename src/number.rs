@@ -1076,32 +1076,54 @@ mod tests {
             values
         };
 
-        let entry_points: Vec<(&str, Parsed)> = vec![
-            ("parse", parse("1'234", None)),
-            ("parse_quantity_fast", parse_quantity_fast("1'234", None)),
-            ("parse_number_fast", parse_number_fast("1'234", None)),
-        ];
+        // The two grammars cannot both accept the same text. A Swiss group is
+        // three digits, and inches have to stay under the foot above them, so
+        // the follower is either at least 100 or under 12 and never both. What
+        // has to hold is that every entry point lands on the same side of that
+        // line, and that a single-reading text is not dressed up as a choice.
+        for input in ["1'234", "12'345", "1'11", "5'11\"", "1'2", "1'0", "1'13"] {
+            let entry_points: Vec<(&str, Parsed)> = vec![
+                ("parse", parse(input, None)),
+                ("parse_quantity_fast", parse_quantity_fast(input, None)),
+                ("parse_number_fast", parse_number_fast(input, None)),
+            ];
 
-        let expected = readings_of(&entry_points[0].1);
-        assert_eq!(expected.len(), 2, "both readings are on the table");
-        for (name, parsed) in &entry_points {
-            assert_eq!(
-                readings_of(parsed),
-                expected,
-                "{name} reads a different pair"
-            );
-            let ambiguity = parsed
-                .findings
-                .ambiguities
-                .iter()
-                .find(|issue| issue.reason == APOSTROPHE_REASON)
-                .unwrap_or_else(|| panic!("{name} chose silently"));
-            assert_eq!(ambiguity.code, IssueCode::AmbiguousNumber, "{name}");
-            assert_eq!(ambiguity.candidate_count, Some(2), "{name}");
+            let expected = readings_of(&entry_points[0].1);
+            for (name, parsed) in &entry_points {
+                // A narrow entry declining the text is the caller's own
+                // declaration — `parse_quantity_fast` has no business reading a
+                // bare 1234. Reading it *differently* is the failure.
+                let reading = readings_of(parsed);
+                assert!(
+                    reading.is_empty() || reading == expected,
+                    "{name} reads {input:?} as {reading:?}, not {expected:?}"
+                );
+                let claimed = parsed
+                    .findings
+                    .ambiguities
+                    .iter()
+                    .filter(|issue| issue.reason == APOSTROPHE_REASON)
+                    .count();
+                if reading.len() > 1 {
+                    let ambiguity = parsed
+                        .findings
+                        .ambiguities
+                        .iter()
+                        .find(|issue| issue.reason == APOSTROPHE_REASON)
+                        .unwrap_or_else(|| panic!("{name} chose silently on {input:?}"));
+                    assert_eq!(ambiguity.code, IssueCode::AmbiguousNumber, "{name}");
+                    assert_eq!(ambiguity.candidate_count, Some(2), "{name}");
+                } else {
+                    assert_eq!(
+                        claimed, 0,
+                        "{name} called {input:?} ambiguous while reading it one way"
+                    );
+                }
+            }
         }
 
         // The editor scanner reads the whole number rather than stopping at the
-        // apostrophe, and reports the same choice.
+        // apostrophe, and lands on the same reading as every other entry point.
         let matches = parse_dimensions_for_editor("幅1'234", None);
         assert_eq!(matches.len(), 1);
         assert_close(
@@ -1114,14 +1136,16 @@ mod tests {
                 .unwrap(),
             1234.0,
         );
-        assert!(
+        assert_eq!(
             matches[0]
                 .parsed
                 .findings
                 .ambiguities
                 .iter()
-                .any(|issue| issue.reason == APOSTROPHE_REASON),
-            "the editor chose silently"
+                .filter(|issue| issue.reason == APOSTROPHE_REASON)
+                .count(),
+            0,
+            "the editor called a one-way reading a choice"
         );
 
         // A text only one of the two grammars accepts is not ambiguous, and is

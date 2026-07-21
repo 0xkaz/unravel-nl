@@ -15,8 +15,8 @@
 //!   detectable downstream, an invented one is not.
 
 use unravel_nl::{
-    Findings, Kind, Locale, ParseCtx, Parsed, Reading, parse, parse_date_fast,
-    parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
+    Findings, Kind, Locale, ParseCtx, Parsed, Reading, UnitDef, parse, parse_date_fast,
+    parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast, unit_definitions,
 };
 
 /// Inputs the removed scanner tests used, plus the shapes that broke it, plus a
@@ -354,20 +354,16 @@ fn cjk_runs(input: &str) -> Vec<String> {
     runs
 }
 
-/// Whether `unit` is written in the input as its own token.
+/// Whether `needle` occurs in `text` as its own token.
 ///
 /// `m` is written in `5 m 3 cm` and in `3m`, but not in `3mm` or `5 min`: a
-/// canonical unit that only appears inside a longer word was not read from
-/// there, it came out of a conversion, and a converted value cannot be checked
-/// digit for digit.
-fn unit_written_verbatim(unit: &str, input: &str) -> bool {
-    let text = folded(input);
-    let unit = unit.to_lowercase();
-    if unit.is_empty() {
+/// unit that only appears inside a longer word was not read from there.
+fn token_written(needle: &str, text: &str) -> bool {
+    if needle.is_empty() {
         return false;
     }
     let bytes: Vec<char> = text.chars().collect();
-    let needle: Vec<char> = unit.chars().collect();
+    let needle: Vec<char> = needle.chars().collect();
     (0..bytes.len().saturating_sub(needle.len() - 1)).any(|start| {
         bytes[start..start + needle.len()] == needle[..]
             && !bytes
@@ -376,6 +372,127 @@ fn unit_written_verbatim(unit: &str, input: &str) -> bool {
             && !bytes
                 .get(start + needle.len())
                 .is_some_and(|ch| ch.is_alphabetic())
+    })
+}
+
+/// Whether `unit` is written in the input as its own token.
+fn unit_written_verbatim(unit: &str, input: &str) -> bool {
+    token_written(&unit.to_lowercase(), &folded(input))
+}
+
+/// Every registry unit that converts *into* `canonical` and whose spelling the
+/// input actually writes.
+///
+/// This is what makes a converted reading checkable. `105mm` reports `0.105 m`,
+/// and `0.105` is written nowhere — but `mm` is written, and the registry says
+/// `mm` multiplies by 0.001, so dividing the reading by that factor has to give
+/// back a number the input spells. The factor comes from [`unit_definitions`],
+/// which is data the conversion code reads rather than code that does the
+/// conversion, so this is an independent oracle and not the parser checking
+/// itself.
+fn written_conversion_sources(canonical: &str, input: &str) -> Vec<&'static UnitDef> {
+    let text = folded(input);
+    unit_definitions()
+        .iter()
+        .filter(|unit| unit.canonical_unit == canonical && unit.factor != 0.0)
+        .filter(|unit| {
+            unit.aliases
+                .iter()
+                .any(|alias| token_written(&alias.to_lowercase(), &text))
+        })
+        .collect()
+}
+
+/// Rounds to `digits` significant decimal digits.
+///
+/// Undoing a conversion in binary floating point does not land exactly on the
+/// number that was written: `0.105 / 0.001` is `105.00000000000001`. Comparing
+/// digit strings without this would reject every real conversion, so the
+/// comparison is made on the digits that survive rounding well below the noise
+/// floor — and far above any real disagreement, since a fabricated value
+/// differs in the leading digits, not the twelfth.
+fn round_significant(value: f64, digits: i32) -> f64 {
+    if value == 0.0 || !value.is_finite() {
+        return value;
+    }
+    let magnitude = value.abs().log10().floor();
+    let scale = 10f64.powi(digits - 1 - magnitude as i32);
+    (value * scale).round() / scale
+}
+
+/// Whether `value` is written in the input, digit for digit.
+///
+/// The whole part must be one unbroken run of digits there, group separators
+/// aside, and the fractional digits must sit immediately after a decimal mark.
+fn digits_are_written(value: f64, folded_input: &str, digits: &str) -> bool {
+    let written = format!("{}", value.abs());
+    if written.contains('e') {
+        return false;
+    }
+    let (whole, fraction) = written.split_once('.').unwrap_or((written.as_str(), ""));
+    // `,12` reads as `0.12`; the leading zero is notation, not a digit taken
+    // from the input.
+    let whole_digits = whole.trim_start_matches('0');
+    if !whole_digits.is_empty() && !digits.contains(whole_digits) {
+        return false;
+    }
+    fraction.is_empty() || fraction_is_written(fraction, folded_input)
+}
+
+/// The numbers the input writes, as plain digit runs with an optional decimal
+/// part. Used only to check arithmetic a mark in the input states.
+fn written_numbers(folded_input: &str) -> Vec<f64> {
+    let chars: Vec<char> = folded_input.chars().collect();
+    let mut numbers = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if !chars[index].is_ascii_digit() {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < chars.len() && chars[index].is_ascii_digit() {
+            index += 1;
+        }
+        if index + 1 < chars.len() && chars[index] == '.' && chars[index + 1].is_ascii_digit() {
+            index += 1;
+            while index < chars.len() && chars[index].is_ascii_digit() {
+                index += 1;
+            }
+        }
+        if let Ok(number) = chars[start..index]
+            .iter()
+            .collect::<String>()
+            .parse::<f64>()
+        {
+            numbers.push(number);
+        }
+    }
+    numbers
+}
+
+const PLUS_MINUS_TOKENS: &[&str] = &["±", "+/-", "+-"];
+
+/// Whether the input writes `a ± b` and `value` is one of the two endpoints.
+///
+/// A tolerance mark states arithmetic the way a compound states a sum: `10 ± 0.5
+/// mm` writes 9.5 and 10.5 without spelling either. Both operands still have to
+/// be written, so this verifies the endpoint against the numbers in the text
+/// rather than waving the shape through.
+fn is_tolerance_endpoint(value: f64, folded_input: &str) -> bool {
+    if !PLUS_MINUS_TOKENS
+        .iter()
+        .any(|token| folded_input.contains(token))
+    {
+        return false;
+    }
+    let numbers = written_numbers(folded_input);
+    numbers.iter().any(|center| {
+        numbers.iter().any(|delta| {
+            let tolerance = 1e-9 * value.abs().max(1.0);
+            (center - delta - value).abs() <= tolerance
+                || (center + delta - value).abs() <= tolerance
+        })
     })
 }
 
@@ -414,6 +531,30 @@ fn compound_pieces(input: &str) -> Vec<String> {
     pieces
 }
 
+/// Whether a compound's unspelled last place is a real one.
+///
+/// `1h30` means an hour and thirty *minutes*: the trailing `30` carries no unit,
+/// so the only way its contribution is not invented is if `remainder / 30` is
+/// the conversion factor of a registry unit of the same canonical measure, and
+/// the whole remainder stays inside the place above it. `1'234` — one foot and
+/// two hundred thirty-four inches — is refused here for the second reason,
+/// exactly as the spaced `1 ft 234 in` is refused by the parser itself.
+fn trailing_place_is_a_registry_place(
+    remainder: f64,
+    number: f64,
+    previous_part: f64,
+    canonical: &str,
+) -> bool {
+    if number == 0.0 || remainder <= 0.0 || remainder >= previous_part.abs() {
+        return false;
+    }
+    let factor = remainder / number;
+    unit_definitions().iter().any(|unit| {
+        unit.canonical_unit == canonical
+            && (unit.factor - factor).abs() <= 1e-9 * factor.abs().max(1.0)
+    })
+}
+
 /// Whether the reading is the sum of a compound the input actually writes.
 ///
 /// A compound quantity — `5 m 3 cm`, `2 lb 3 oz`, `5尺3寸`, `1h30` — states a
@@ -435,18 +576,50 @@ fn is_written_compound(
         return false;
     }
     let mut parts = Vec::new();
-    for piece in &pieces {
+    let mut trailing_bare = None;
+    for (index, piece) in pieces.iter().enumerate() {
+        // `1h30` and `1m80` write the last place as a bare number: the unit is
+        // the next place down and is implied, not spelled. Read straight from
+        // the text, so that a narrow entry point which declines to read a
+        // unitless `30` still sees the compound its broad sibling sees.
+        if index + 1 == pieces.len() {
+            let text = folded(piece);
+            if text.chars().all(|ch| ch.is_ascii_digit())
+                && let Ok(number) = text.parse::<f64>()
+            {
+                trailing_bare = Some(number);
+                continue;
+            }
+        }
         let parsed = entry(piece, ctx.clone());
         let Some(best) = parsed.best else {
             return false;
         };
         match (best.value, best.unit.clone()) {
             (Some(part), Some(unit)) if best.unit == reading.unit => parts.push((part, unit)),
+            // `1h30` and `1m80` write the last place as a bare number: the unit
+            // is the next place down and is implied, not spelled. That is a
+            // real notation, so the sum is verified rather than assumed —
+            // see `trailing_place_is_a_registry_place` below.
+            (Some(number), None) if index + 1 == pieces.len() && best.kind == Kind::Number => {
+                trailing_bare = Some(number);
+            }
             _ => return false,
         }
     }
     let sum: f64 = parts.iter().map(|(part, _)| part).sum();
-    if (sum - value).abs() > 1e-9 * value.abs().max(1.0) {
+    if let Some(number) = trailing_bare {
+        if parts.is_empty()
+            || !trailing_place_is_a_registry_place(
+                value - sum,
+                number,
+                parts[parts.len() - 1].0,
+                reading.unit.as_deref().unwrap_or_default(),
+            )
+        {
+            return false;
+        }
+    } else if (sum - value).abs() > 1e-9 * value.abs().max(1.0) {
         return false;
     }
     // Strictly descending magnitude, no unit written twice.
@@ -506,49 +679,77 @@ fn check_not_fabricated(
         }
     }
 
-    // Only bare numbers are checked digit for digit. A quantity is converted to
-    // its canonical unit, so `5cm` legitimately reads as `0.05`, and exponents
-    // legitimately carry digits the text does not spell. A quantity whose
-    // canonical unit is written verbatim was *not* converted, so it is held to
-    // the same rule as a bare number — unless the input writes a compound, whose
-    // sum is stated rather than guessed.
+    // Every reading that carries a number is checked digit for digit, against
+    // the number the input writes *in the unit the input writes it in*.
+    //
+    // A bare number is compared to itself. A quantity is compared to itself
+    // when its canonical unit is written verbatim, and otherwise to itself
+    // divided back through the registry factor of each convertible unit the
+    // input does spell — `105mm` reports `0.105 m`, and `0.105 / 0.001` is 105,
+    // which the input writes. Exempting converted quantities instead, which is
+    // what this used to do, left 56% of `parse`'s quantity readings unchecked:
+    // multiplying by 1.5 whenever the written unit differed from the canonical
+    // one turned `123456 mm` into 185.184 m with an empty findings list and the
+    // whole suite still green.
+    //
+    // Two shapes are checked elsewhere rather than here, because they state a
+    // number without spelling it:
+    //
+    // - a written compound (`5 m 3 cm`, `2 lb 3 oz`, `5尺3寸`, `1h30`), whose
+    //   sum `is_written_compound` verifies piece by piece;
+    // - a tolerance (`10 ± 0.5 mm`), whose endpoints `is_tolerance_endpoint`
+    //   verifies against the two operands the mark joins.
+    //
+    // **Not** checked, and named here so the gap is not mistaken for coverage:
+    // a quantity whose written unit is not in the registry at all — `6帖`,
+    // `4畳半`, `5尺`, `2 cups` — has no factor to divide back through on any
+    // public path, so its conversion goes unverified. `unit_definitions()`
+    // carries no entry for those spellings; the grammars in `quantity.rs` hold
+    // their factors privately. Likewise a reading whose number is written in
+    // CJK numerals (`百二十mm`) spells no ASCII digits to compare against.
     let digits = ascii_digits(input);
     let exponent = folded_input.contains('e');
-    let verbatim_unit = reading.kind == Kind::Quantity
-        && reading
-            .unit
-            .as_deref()
-            .is_some_and(|unit| unit_written_verbatim(unit, input))
+    let checkable_quantity = reading.kind == Kind::Quantity
+        && reading.unit.is_some()
         && !is_written_compound(reading, input, reader, ctx);
-    if (reading.kind == Kind::Number && reading.unit.is_none() || verbatim_unit)
+    if (reading.kind == Kind::Number && reading.unit.is_none() || checkable_quantity)
         && !exponent
         && !digits.is_empty()
         && let Some(value) = reading.value
     {
-        // The strict property: the number is *written* in the input. Its whole
-        // part is one unbroken run of digits there, group separators aside, and
-        // its fractional digits sit immediately after a decimal mark. Checking
-        // the digits as a subsequence instead used to be necessary because
-        // `1.2 3` read as 1.23, which no reading of the input spells; that is
-        // now refused, so the property can be stated as written.
-        let written = format!("{}", value.abs());
-        if written.contains('e') {
-            fail(format!(
-                "{entry}({input:?}) read {value}, which is not written in any form"
-            ));
+        let mut candidates: Vec<(f64, &str)> = Vec::new();
+        if reading.kind == Kind::Quantity {
+            let unit = reading.unit.as_deref().unwrap_or_default();
+            if unit_written_verbatim(unit, input) {
+                candidates.push((value, unit));
+            }
+            for source in written_conversion_sources(unit, input) {
+                candidates.push((round_significant(value / source.factor, 12), source.id));
+            }
+        } else {
+            candidates.push((value, ""));
         }
-        let (whole, fraction) = written.split_once('.').unwrap_or((written.as_str(), ""));
-        // `,12` reads as `0.12`; the leading zero is notation, not a digit
-        // taken from the input.
-        let whole_digits = whole.trim_start_matches('0');
-        if !whole_digits.is_empty() && !digits.contains(whole_digits) {
+
+        // No written source: the conversion cannot be undone from public data.
+        // Silence here is the documented gap above, not a pass.
+        if !candidates.is_empty()
+            && !candidates.iter().any(|(back, _)| {
+                digits_are_written(*back, &folded_input, &digits)
+                    || is_tolerance_endpoint(*back, &folded_input)
+            })
+        {
             fail(format!(
-                "{entry}({input:?}) read {value}, whose whole part is not written in the input"
-            ));
-        }
-        if !fraction.is_empty() && !fraction_is_written(fraction, &folded_input) {
-            fail(format!(
-                "{entry}({input:?}) read {value}, whose fraction is not written in the input"
+                "{entry}({input:?}) read {value}{}, which is written in the input under no unit it spells: {}",
+                reading
+                    .unit
+                    .as_deref()
+                    .map(|unit| format!(" {unit}"))
+                    .unwrap_or_default(),
+                candidates
+                    .iter()
+                    .map(|(back, unit)| format!("{back} {unit}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }
@@ -584,15 +785,25 @@ fn report(name: &str, violations: Vec<String>) {
     }
     let mut seen = std::collections::BTreeSet::new();
     let unique: Vec<&String> = violations.iter().filter(|v| seen.insert(*v)).collect();
+    // A whole-corpus sweep can fail tens of thousands of ways at once; the
+    // first few dozen name the shape, and the count carries the scale.
+    const SHOWN: usize = 40;
+    let elided = unique.len().saturating_sub(SHOWN);
     panic!(
-        "{name}: {} violations ({} distinct)\n{}",
+        "{name}: {} violations ({} distinct)\n{}{}",
         violations.len(),
         unique.len(),
         unique
             .iter()
+            .take(SHOWN)
             .map(|line| format!("  - {line}"))
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n"),
+        if elided == 0 {
+            String::new()
+        } else {
+            format!("\n  ... and {elided} more distinct")
+        }
     );
 }
 
@@ -663,11 +874,15 @@ fn no_reading_is_invented_from_text_that_does_not_hold_it() {
 /// the parser guessed that the longer string held nothing, silently.
 #[test]
 fn a_longer_context_never_silently_empties_a_readable_input() {
-    let bases = [
+    // Every base the corpus writes, not a hand-picked dozen. The list this
+    // replaced asked 12 bases × 10 tails × 4 contexts = 480 questions, which is
+    // few enough to miss a whole class: making the extractor return an empty
+    // `Vec` for any input containing `/`, `%` or `(` — so that `6帖 / 4畳半` and
+    // `幅3640 (外寸)` came back empty with no reason — left all 480 answers
+    // unchanged and the suite green.
+    let extra_bases = [
         "幅3640",
-        "3640",
         "3 m",
-        "寸法3640",
         "100㎡",
         "3.5m",
         "幅１．５ｍ",
@@ -676,13 +891,42 @@ fn a_longer_context_never_silently_empties_a_readable_input() {
         "壁厚105mm",
         "6帖",
         "width 3.5m",
+        "6帖 / 4畳半",
+        "幅3640 (外寸)",
+        "面積 50%",
     ];
+    // The tails cover the punctuation classes free text actually appends, not
+    // just the ones that read as numbers: a character that quietly disqualifies
+    // a whole string is exactly the shape this test exists to catch, and the
+    // list it replaced had no `/`, `(` or `%` in it at all.
     let tails = [
-        " and 2", " and 4", "、2", " x 2", " 2", " ok", "です", " and 4m", "。", " のLDK",
+        " and 2",
+        " and 4",
+        "、2",
+        " x 2",
+        " 2",
+        " ok",
+        "です",
+        " and 4m",
+        "。",
+        " のLDK",
+        " / 2",
+        " (外寸)",
+        " 50%",
+        " ± 5",
+        " *2",
+        "?",
     ];
 
     let mut violations = Vec::new();
-    for base in bases {
+    for base in corpus()
+        .iter()
+        .map(String::as_str)
+        .chain(extra_bases)
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+    {
+        let base = base.as_str();
         for ctx in contexts() {
             let before = parse_dimensions_for_editor(base, ctx.clone());
             if before.is_empty() {

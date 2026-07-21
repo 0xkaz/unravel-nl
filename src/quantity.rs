@@ -300,6 +300,12 @@ pub(crate) fn parse_compound_registered_quantity_with_format(
     let mut approximate = false;
     let mut previous_factor: Option<f64> = None;
 
+    // The rule below is stated once and asked for by name, because the
+    // apostrophe idiom in `currency.rs` writes the same compound with
+    // punctuation instead of unit words and has to answer it the same way.
+    // While the two carried the rule separately, `1 ft 234 in` was refused and
+    // `1'234` — the same sum — was returned as a confident reading.
+
     for pair in parts.chunks_exact(2) {
         let Some(value) = parse_number_with_format(pair[0], number_format) else {
             return CompoundOutcome::NotCompound;
@@ -322,7 +328,7 @@ pub(crate) fn parse_compound_registered_quantity_with_format(
                     "a compound has to descend into smaller units; this run repeats or climbs",
                 );
             }
-            if (value * unit.factor).abs() >= previous {
+            if !lower_place_stays_inside(value * unit.factor, previous) {
                 return CompoundOutcome::Malformed(
                     "a compound part has to stay inside the place above it",
                 );
@@ -485,6 +491,20 @@ fn metric_compound_shape(stripped: &str) -> bool {
                 && !centimeters.is_empty()
                 && !centimeters.contains(char::is_whitespace)
         })
+}
+
+/// Whether the lower part of a compound stays inside the place above it, both
+/// already in canonical units. Twelve inches is a foot, not part of one, so a
+/// reading that spells `1` and `12` and hands back two feet has added a place
+/// the text does not have.
+pub(crate) fn lower_place_stays_inside(lower_canonical: f64, place_above: f64) -> bool {
+    // A part that exactly fills the place above is a carry, not a part: twelve
+    // inches is the foot, as a hundred centimetres is the metre. The margin is
+    // here because the two do not round the same way — `100 * 0.01` lands on
+    // 1.0 and refuses, while `12 * 0.0254` lands just under 0.3048 and would
+    // otherwise be let through, so the same rule would answer differently
+    // depending on which units the caller happened to write.
+    lower_canonical.abs() < place_above * (1.0 - 1e-9)
 }
 
 /// The metres-and-centimetres idiom itself — `1m80` as 1.8 m — over text that

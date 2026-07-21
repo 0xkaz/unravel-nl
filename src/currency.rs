@@ -123,7 +123,13 @@ pub(crate) fn feet_inches_reading(lowered: &str) -> Option<(Reading, bool)> {
         if !unsigned_lower_place(cleaned) {
             return None;
         }
-        parse_number(cleaned)?
+        let inches = parse_number(cleaned)?;
+        // `1 ft 234 in` is refused for spilling out of the foot above it, and
+        // this is the same compound written with an apostrophe.
+        if !lower_place_stays_inside(inches * INCH_M, FOOT_M) {
+            return None;
+        }
+        inches
     };
 
     Some((
