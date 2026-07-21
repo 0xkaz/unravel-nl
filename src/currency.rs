@@ -117,6 +117,12 @@ pub(crate) fn feet_inches_reading(lowered: &str) -> Option<(Reading, bool)> {
             .trim_end_matches("in")
             .trim_end_matches('"')
             .trim();
+        // The inches part carries no unit of its own, so it has to be a bare
+        // count for the idiom to supply one: `5ft-11` is not five foot eleven
+        // less something, it is a shape this grammar does not read.
+        if !unsigned_lower_place(cleaned) {
+            return None;
+        }
         parse_number(cleaned)?
     };
 

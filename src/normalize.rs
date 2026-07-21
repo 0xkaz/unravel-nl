@@ -35,8 +35,13 @@ impl InputFeatures {
         let has_ascii_digit = trimmed.as_bytes().iter().any(u8::is_ascii_digit);
         let has_cjk_number = trimmed.chars().any(is_cjk_number_char);
         let has_number_word = lower.split_whitespace().any(is_english_number_word_like);
+        // A vulgar fraction is a number the parser reads (`½`), so the
+        // precheck has to say so — and it asks the same table the parser
+        // reads it with, rather than listing the characters a second time.
+        let has_fraction_char = trimmed.chars().any(|ch| fraction_char_value(ch).is_some());
         let has_number = has_ascii_digit
             || has_cjk_number
+            || has_fraction_char
             || has_number_word
             || lower
                 .split(|ch: char| !ch.is_ascii_alphabetic() && ch != '-')

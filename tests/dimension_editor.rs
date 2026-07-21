@@ -1,5 +1,6 @@
 use unravel_nl::{
-    Dimension, Kind, Locale, ParseCtx, ParsePurpose, parse, parse_dimensions_for_editor,
+    Dimension, IssueCode, Kind, Locale, ParseCtx, ParsePurpose, accepts, parse,
+    parse_dimensions_for_editor,
 };
 
 #[test]
@@ -130,6 +131,95 @@ fn parse_purpose_limits_broad_parser_work() {
         }),
     );
     assert!(non_dimension.best.is_none(), "{non_dimension:#?}");
+}
+
+/// A word the parser cannot read must not take the value next to it down.
+///
+/// The candidate window crosses a space on the guess that a unit follows, so
+/// `幅3640 and 2` used to be scanned as the single candidate `3640 and`, which
+/// read as nothing — and a candidate that reads as nothing was dropped, taking
+/// the 3640 and every finding about it with it. The reading is what the caller
+/// typed, so it is returned, and the word that beat the parser is reported as
+/// `TRAILING_INPUT` rather than disappearing.
+#[test]
+fn a_trailing_word_keeps_the_reading_and_is_reported() {
+    for (input, expected_text, expected_value, residue) in [
+        ("幅3640 and 2", "3640", 3640.0, "and"),
+        ("幅3640 x 2", "3640", 3640.0, "x"),
+        ("寸法3640 ok", "3640", 3640.0, "ok"),
+        // Digit-space-digit is the other guess the window makes, and it is
+        // dropped the same way: the 3640 survives the stray 2.
+        ("幅3640 2", "3640", 3640.0, "2"),
+        // The guesses are dropped widest first, so a space-grouped number is
+        // still read whole before anything falls back to its first digit.
+        ("幅1 234 567 apples", "1 234 567", 1_234_567.0, "apples"),
+    ] {
+        let matches = parse_dimensions_for_editor(
+            input,
+            Some(ParseCtx {
+                locale: Some(Locale::Ja),
+                ..ParseCtx::default()
+            }),
+        );
+        assert_eq!(texts(&matches), vec![expected_text], "{input:?}");
+
+        let found = &matches[0];
+        assert_eq!(
+            input.get(found.start..found.end),
+            Some(found.text.as_str()),
+            "{input:?}"
+        );
+        let best = found.parsed.best.as_ref().expect("reading");
+        assert_eq!(best.value, Some(expected_value), "{input:?}");
+
+        let trailing = found
+            .parsed
+            .findings
+            .skipped
+            .iter()
+            .find(|issue| issue.code == IssueCode::TrailingInput)
+            .unwrap_or_else(|| panic!("no TRAILING_INPUT for {input:?}"));
+        assert_eq!(trailing.span.text, residue, "{input:?}");
+        assert_eq!(
+            found
+                .parsed
+                .input
+                .get(trailing.span.start..trailing.span.end),
+            Some(residue),
+            "{input:?}"
+        );
+        // A value was read, but not the whole candidate, so nothing is accepted
+        // silently.
+        assert!(!accepts(&found.parsed), "{input:?}");
+    }
+}
+
+/// The reading that needs no guess dropped keeps every finding it always had.
+///
+/// The retry above must not fire where the window was right: `幅5 meterz` reads
+/// `5 m` through did-you-mean matching, and cutting the window back to `5` would
+/// turn a corrected unit into a bare number plus a residue.
+#[test]
+fn a_readable_window_is_not_cut_back() {
+    let matches = parse_dimensions_for_editor(
+        "幅5 meterz",
+        Some(ParseCtx {
+            locale: Some(Locale::Ja),
+            ..ParseCtx::default()
+        }),
+    );
+    assert_eq!(texts(&matches), vec!["5 meterz"]);
+    assert_quantity(&matches[0], 5.0, "m", Dimension::Length);
+    assert!(
+        matches[0]
+            .parsed
+            .findings
+            .skipped
+            .iter()
+            .all(|issue| issue.code != IssueCode::TrailingInput),
+        "{:?}",
+        matches[0].parsed.findings
+    );
 }
 
 fn texts(matches: &[unravel_nl::ParsedMatch]) -> Vec<&str> {

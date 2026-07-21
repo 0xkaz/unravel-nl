@@ -787,6 +787,14 @@ pub struct Parsed {
     pub input: String,
     /// Locale associated with this parse, when one was supplied.
     pub locale: Option<Locale>,
+    /// Strictness this parse ran under.
+    ///
+    /// Carried on the result because it is part of how severe a finding is —
+    /// see [`ranked_findings`] and [`accepts`]. Without it, a caller that
+    /// declared [`Strictness::Confirm`] and then rendered the result would have
+    /// to reapply the declaration itself, which is exactly how the crate came
+    /// to hold three different answers to "is this parse acceptable".
+    pub strictness: Strictness,
     /// Highest-ranked reading, or `None` when parsing produced no accepted reading.
     pub best: Option<Reading>,
     /// Other accepted interpretations of the input.

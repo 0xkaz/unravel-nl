@@ -251,20 +251,46 @@ pub(crate) fn note_unit_approximation(parsed: &mut Parsed, text: &str, reading: 
     ));
 }
 
+/// What a run of same-dimension quantities turned out to be.
+///
+/// A compound states a sum; a run that only looks like one states nothing, and
+/// the difference has to reach the caller rather than being collapsed into
+/// `None` alongside `3 yd 2 kg`, which is a different failure.
+pub(crate) enum CompoundOutcome {
+    /// Not a run of `<number> <unit>` pairs at all, or not one dimension.
+    NotCompound,
+    /// A run of pairs that does not descend into strictly smaller places.
+    Malformed(&'static str),
+    /// A compound whose sum the input states.
+    Reading(Reading),
+}
+
 pub(crate) fn parse_compound_registered_quantity_ctx(
     text: &str,
     ctx: &ParseCtx,
-) -> Option<Reading> {
+) -> CompoundOutcome {
     parse_compound_registered_quantity_with_format(text, ctx.number_format)
 }
 
+/// Reads `5 m 3 cm`, `2 lb 3 oz`, `4 stone 6 lb` — and refuses `3 m 5 m`.
+///
+/// A compound quantity states a sum because each part names a strictly smaller
+/// place of the same measurement and stays inside the place above it. Three
+/// shapes fail that and were previously added up anyway, reporting a total the
+/// text does not write:
+///
+/// - a repeated unit (`3 m 5 m`, `5 kg 3 kg`) — two separate measurements, not
+///   two places of one;
+/// - an ascending run (`3 cm 5 m`) — no notation writes the small place first;
+/// - a part that overflows its place (`1 m 300 cm`) — 300 cm is not a remainder
+///   of a metre.
 pub(crate) fn parse_compound_registered_quantity_with_format(
     text: &str,
     number_format: NumberFormat,
-) -> Option<Reading> {
+) -> CompoundOutcome {
     let parts: Vec<&str> = text.split_whitespace().collect();
     if parts.len() < 4 || !parts.len().is_multiple_of(2) {
-        return None;
+        return CompoundOutcome::NotCompound;
     }
 
     let mut total = 0.0;
@@ -272,27 +298,48 @@ pub(crate) fn parse_compound_registered_quantity_with_format(
     let mut canonical_unit = None;
     let mut provenance = Provenance::SiMultiple;
     let mut approximate = false;
+    let mut previous_factor: Option<f64> = None;
 
     for pair in parts.chunks_exact(2) {
-        let value = parse_number_with_format(pair[0], number_format)?;
-        let unit = unit_by_alias(pair[1])?;
+        let Some(value) = parse_number_with_format(pair[0], number_format) else {
+            return CompoundOutcome::NotCompound;
+        };
+        let Some(unit) = unit_by_alias(pair[1]) else {
+            return CompoundOutcome::NotCompound;
+        };
         if let Some(current_dimension) = dimension {
             if current_dimension != unit.dimension || canonical_unit != Some(unit.canonical_unit) {
-                return None;
+                return CompoundOutcome::NotCompound;
             }
         } else {
             dimension = Some(unit.dimension);
             canonical_unit = Some(unit.canonical_unit);
             provenance = unit.provenance;
         }
+        if let Some(previous) = previous_factor {
+            if unit.factor >= previous {
+                return CompoundOutcome::Malformed(
+                    "a compound has to descend into smaller units; this run repeats or climbs",
+                );
+            }
+            if (value * unit.factor).abs() >= previous {
+                return CompoundOutcome::Malformed(
+                    "a compound part has to stay inside the place above it",
+                );
+            }
+        }
+        previous_factor = Some(unit.factor);
         total += value * unit.factor;
         approximate |= unit.approximate;
     }
 
-    Some(Reading::quantity(
+    let (Some(canonical_unit), Some(dimension)) = (canonical_unit, dimension) else {
+        return CompoundOutcome::NotCompound;
+    };
+    CompoundOutcome::Reading(Reading::quantity(
         total,
-        canonical_unit?,
-        dimension?,
+        canonical_unit,
+        dimension,
         provenance,
         approximate,
         0.94,
@@ -407,8 +454,29 @@ pub(crate) fn closed_compound_alternative(text: &str) -> Option<Reading> {
     })
 }
 
+/// Whether a closed-up compound's second part is written as a count of the
+/// smaller unit — the `80` of `1m80`, the `11` of `5ft 11`.
+///
+/// These idioms do not write the smaller unit; the idiom supplies it. That only
+/// works for a count, and a signed number is not one. `3m-20` used to read as
+/// 2.8 m — the `-20` taken as minus twenty centimetres, inventing the unit and
+/// the subtraction at once — while the explicit `3m-20cm` was refused, so the
+/// asymmetry punished writing the unit down. Neither reads now: a sign puts the
+/// text outside the idiom, and it has to find another reading or none.
+pub(crate) fn unsigned_lower_place(text: &str) -> bool {
+    !text
+        .chars()
+        .any(|ch| matches!(ch, '-' | '+' | '−' | '－' | '＋' | '–' | '—' | '‐' | '±'))
+}
+
 /// The shape of the metres-and-centimetres idiom: a `m` with something on each
 /// side of it, and no whitespace after it.
+///
+/// Deliberately structural, and deliberately wider than what
+/// [`metric_compound_reading`] will actually read: text of this shape belongs to
+/// this grammar whether or not the grammar can read it, so `5 mM` — millimolar,
+/// which lowercases into the same shape — is not handed to the suffix table
+/// below to be read as millimetres.
 fn metric_compound_shape(stripped: &str) -> bool {
     stripped
         .split_once('m')
@@ -426,6 +494,12 @@ pub(crate) fn metric_compound_reading(stripped: &str) -> Option<Reading> {
         return None;
     }
     let (meters, centimeters) = stripped.split_once('m')?;
+    // The centimetres are not written as centimetres — the idiom supplies the
+    // unit — so the part has to be an unsigned count for that to be a reading of
+    // the text rather than an invention on top of it.
+    if !unsigned_lower_place(centimeters.trim()) {
+        return None;
+    }
     let meters = parse_number(meters.trim())?;
     let centimeters = parse_number(centimeters.trim())?;
     Some(Reading::quantity(

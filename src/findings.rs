@@ -74,6 +74,27 @@ pub enum IssueCode {
     RejectedByPolicy,
     /// The value is approximate, e.g. `about 20kg` or a shakkanhō conversion.
     Approximation,
+    /// A run of same-dimension quantities is not a compound, so no sum was read.
+    ///
+    /// A compound — `5 m 3 cm`, `2 lb 3 oz`, `4 stone 6 lb` — states a sum
+    /// because each part names a strictly smaller place of the same measurement
+    /// and stays inside the place above it. A run that repeats a unit
+    /// (`3 m 5 m`), climbs (`3 cm 5 m`), or overflows its own place
+    /// (`1 m 300 cm`) states no sum, so adding the parts up would report a value
+    /// the input does not write.
+    CompoundOverflow,
+    /// A reading was found, and text the parser could not interpret follows it.
+    ///
+    /// The vocabulary that lets a partial read be reported as one. Without it a
+    /// scanner that could read `幅3640` but not `幅3640 and 2` had no way to say
+    /// "3640, and then something I do not understand", so it returned nothing at
+    /// all and the 3640 was lost with no finding to record the loss.
+    ///
+    /// The reading stays in [`Parsed::best`] and the residue is named in the
+    /// finding's span, so a caller can show the value it got and the text it did
+    /// not. Because the finding lands in [`Findings::skipped`], [`accepts`] is
+    /// false while the residue stands: a value was read, but not the whole input.
+    TrailingInput,
 }
 
 impl IssueCode {
@@ -99,6 +120,8 @@ impl IssueCode {
             Self::RecurrenceUnsupported => "RECURRENCE_UNSUPPORTED",
             Self::RejectedByPolicy => "REJECTED_BY_POLICY",
             Self::Approximation => "APPROXIMATION",
+            Self::CompoundOverflow => "COMPOUND_OVERFLOW",
+            Self::TrailingInput => "TRAILING_INPUT",
         }
     }
 }
@@ -325,6 +348,55 @@ pub fn ranked_findings(parsed: &Parsed) -> Vec<RankedIssue> {
     issues
 }
 
+/// The one definition of whether a parse is acceptable.
+///
+/// There used to be three, and they disagreed. The JSON summary called a parse
+/// `ok` whenever it had a `best`, so a value the adapter would refuse was
+/// serialized as accepted. The Rust adapter additionally required an empty
+/// skipped list and refused ambiguity and approximation outside
+/// [`Strictness::Forgiving`]. The browser adapter looked for an issue of
+/// `error` severity and never read the strictness at all, so a
+/// [`Strictness::Confirm`] field lit up green on an ambiguity the Rust adapter
+/// had already rejected.
+///
+/// A parse is refused when it carries any blocking issue, and an issue blocks
+/// when either of these holds:
+///
+/// - it is a skipped fragment. The parser declined to read something, so there
+///   is nothing there to accept. This covers a result with no reading at all,
+///   because a parse that read nothing always says so in `skipped` — see
+///   `a_result_with_no_reading_always_says_why`.
+/// - the caller declared a strictness above [`Strictness::Forgiving`] and the
+///   parse had to choose or approximate. That is what declaring it buys: being
+///   stopped by the ambiguity rather than told about it afterwards.
+///
+/// Severity is deliberately *not* the carrier of this decision. A strict
+/// refusal of `about 20kg` is reported as a skipped `APPROXIMATION`, which
+/// [`issue_severity`] keeps at [`IssueSeverity::Warning`] so a UI can offer to
+/// confirm it rather than present it as broken — see
+/// `recoverable_and_warning_do_not_promise_a_reading`. Reading acceptance off
+/// severity would have accepted exactly that parse.
+///
+/// ```
+/// use unravel_nl::{accepts, parse};
+///
+/// assert!(accepts(&parse("5 kg", None)));
+/// assert!(!accepts(&parse("", None)));
+/// ```
+pub fn accepts(parsed: &Parsed) -> bool {
+    if !parsed.findings.skipped.is_empty() {
+        return false;
+    }
+    if parsed.strictness != Strictness::Forgiving
+        && !(parsed.findings.ambiguities.is_empty() && parsed.findings.approximations.is_empty())
+    {
+        return false;
+    }
+    // Belt and braces: a reading is what acceptance is *for*, so a result
+    // without one is refused even if some future grammar forgets to say why.
+    parsed.best.is_some()
+}
+
 pub(crate) fn ranked_issue(
     code: IssueCode,
     ref_text: String,
@@ -342,6 +414,10 @@ pub(crate) fn ranked_issue(
     }
 }
 
+/// How severe an issue's code is, for display.
+///
+/// Not the acceptance rule — see [`accepts`], which is deliberately separate so
+/// that a blocking finding can still be shown as a warning a caller may confirm.
 pub(crate) fn issue_severity(code: IssueCode) -> IssueSeverity {
     match code {
         IssueCode::Empty
@@ -349,7 +425,9 @@ pub(crate) fn issue_severity(code: IssueCode) -> IssueSeverity {
         | IssueCode::UnknownUnit
         | IssueCode::TimezoneUnsupported
         | IssueCode::RecurrenceUnsupported
-        | IssueCode::RejectedByPolicy => IssueSeverity::Error,
+        | IssueCode::RejectedByPolicy
+        | IssueCode::CompoundOverflow
+        | IssueCode::TrailingInput => IssueSeverity::Error,
         IssueCode::TypoCorrected
         | IssueCode::AmbiguousNumber
         | IssueCode::AmbiguousDate
@@ -365,7 +443,9 @@ pub(crate) fn issue_rank(code: IssueCode) -> u16 {
         IssueCode::Empty | IssueCode::NoValue => 100,
         IssueCode::TimezoneUnsupported
         | IssueCode::RecurrenceUnsupported
-        | IssueCode::RejectedByPolicy => 90,
+        | IssueCode::RejectedByPolicy
+        | IssueCode::CompoundOverflow
+        | IssueCode::TrailingInput => 90,
         IssueCode::UnknownUnit => 80,
         IssueCode::TypoCorrected => 65,
         IssueCode::AmbiguousDate

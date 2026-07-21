@@ -60,18 +60,82 @@ pub(crate) fn push_editor_dimension_match(
     // refusal is reported rather than dropped. A candidate the label hint alone
     // filtered out refuses nothing the caller declared, and is dropped as it
     // always was.
+    let mut read = text;
     if !refused && !parsed_is_editor_dimension(&parsed, dimensions) {
-        return;
+        // The window guessed its way across a space, and what it swallowed made
+        // the whole thing unreadable. Retrying without the guess is what keeps
+        // `幅3640 and 2` from throwing away the 3640 the caller typed: the value
+        // is returned, and the part that beat the parser is named in the
+        // findings instead of vanishing with it.
+        let Some((shorter, shorter_parsed)) = read_without_the_guess(text, ctx, dimensions) else {
+            return;
+        };
+        read = shorter;
+        parsed = shorter_parsed;
+        note_trailing_input(&mut parsed, text, read.len());
     }
 
-    let leading = source[start..end].len() - source[start..end].trim_start().len();
-    let trailing = source[start..end].len() - source[start..end].trim_end().len();
+    let matched = &source[start..end];
+    let leading = matched.len() - matched.trim_start().len();
     matches.push(ParsedMatch {
         start: start + leading,
-        end: end - trailing,
-        text: text.to_owned(),
+        end: start + leading + read.len(),
+        text: read.to_owned(),
         parsed,
     });
+}
+
+/// Re-reads a candidate window that read as nothing, without its space guesses.
+///
+/// Returns the leading part that did read, and its result. The guesses are
+/// dropped one at a time and widest first, so `1 234 567 apples` still reads its
+/// grouped number before anything falls back to the bare `1`.
+fn read_without_the_guess<'a>(
+    text: &'a str,
+    ctx: &ParseCtx,
+    dimensions: EditorDimensions,
+) -> Option<(&'a str, Parsed)> {
+    let mut tried = text.len();
+    for guesses in [WindowGuesses::GroupingOnly, WindowGuesses::None] {
+        let cut = candidate_window_guessing(text, 0, text.len(), guesses);
+        if cut == 0 || cut >= tried {
+            continue;
+        }
+        tried = cut;
+        let shorter = &text[..cut];
+        let mut parsed = parsed_shell(shorter, ctx);
+        let refused = parse_editor_dimension_into(shorter, ctx, dimensions, &mut parsed);
+        retarget_findings_to_input(&mut parsed);
+        if refused || parsed_is_editor_dimension(&parsed, dimensions) {
+            return Some((shorter, parsed));
+        }
+    }
+    None
+}
+
+/// Records the part of a candidate window that no reading covers.
+///
+/// `parsed` was read from `text[..read_len]` alone, so its input is widened to
+/// the whole window first: a span may only address [`Parsed::input`], and the
+/// residue is outside the part that was read.
+fn note_trailing_input(parsed: &mut Parsed, text: &str, read_len: usize) {
+    parsed.input = text.to_owned();
+    let rest = &text[read_len..];
+    let residue_start = read_len + (rest.len() - rest.trim_start().len());
+    let residue = text[residue_start..].trim_end();
+    if residue.is_empty() {
+        return;
+    }
+    parsed.findings.skipped.push(skipped_with_span(
+        residue,
+        "text follows the reading and was not interpreted",
+        IssueCode::TrailingInput,
+        Span {
+            start: residue_start,
+            end: residue_start + residue.len(),
+            text: residue.to_owned(),
+        },
+    ));
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -423,11 +487,59 @@ pub(crate) fn is_candidate_number_start(ch: char) -> bool {
         || is_cjk_number_char(ch)
 }
 
-/// Returns the end of the candidate window starting at `start`.
+/// Which whitespace-crossing guesses a candidate window is allowed to make.
 ///
-/// The window may cross a single space on the guess that a unit follows, so
-/// `"3 m"` is one window rather than a bare `3`.
+/// A window is bounded by punctuation and by non-unit characters without
+/// guessing at anything. Whitespace is the one place it has to guess, because a
+/// space inside a candidate can mean two different things — a grouped number
+/// (`1 234 567`) or a number and its unit (`3 m`) — and neither is decidable
+/// from the space itself.
+///
+/// [`WindowGuesses::All`] is what the scanner offers first, and it is
+/// deliberately optimistic. The narrower settings exist so that a window that
+/// read as nothing can be retried without the guess that swallowed it, rather
+/// than the whole candidate being dropped: see
+/// [`push_editor_dimension_match`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowGuesses {
+    /// Cross a space for a grouped number, and for a unit that may follow.
+    All,
+    /// Cross a space only with digits on both sides of it.
+    GroupingOnly,
+    /// Never cross a space.
+    None,
+}
+
+impl WindowGuesses {
+    fn crosses_for_grouping(self) -> bool {
+        self != Self::None
+    }
+
+    fn crosses_for_unit(self) -> bool {
+        self == Self::All
+    }
+}
+
+/// Returns the widest candidate window starting at `start`.
+///
+/// The window crosses a space on the guess that a unit follows, so `"3 m"` is
+/// one window rather than a bare `3`, and on the guess that digits either side
+/// of a space are one grouped number. Both are guesses, and both are wrong
+/// often enough — `"3640 and"`, `"3640 2"` — that the widest window is only the
+/// scanner's *first* offer: [`push_editor_dimension_match`] retries with
+/// [`candidate_window_guessing`] when it reads as nothing, so being optimistic
+/// here costs a reading nothing.
 pub(crate) fn candidate_window(text: &str, start: usize, limit: usize) -> usize {
+    candidate_window_guessing(text, start, limit, WindowGuesses::All)
+}
+
+/// [`candidate_window`], with the whitespace guesses named rather than assumed.
+pub(crate) fn candidate_window_guessing(
+    text: &str,
+    start: usize,
+    limit: usize,
+    guesses: WindowGuesses,
+) -> usize {
     let mut end = start;
     let mut saw_unit = false;
     let mut saw_number = false;
@@ -466,14 +578,16 @@ pub(crate) fn candidate_window(text: &str, start: usize, limit: usize) -> usize 
             // consults it unless one of these two flags holds, and the original
             // short-circuited the same way, so a space that ends the candidate
             // still costs nothing.
-            if (previous_was_digit || (saw_number && !saw_unit)) && after > resolved_at {
+            let grouping = previous_was_digit && guesses.crosses_for_grouping();
+            let unit = saw_number && !saw_unit && guesses.crosses_for_unit();
+            if (grouping || unit) && after > resolved_at {
                 (resolved_at, resolved_char) = first_nonspace_from(text, after, limit);
             }
-            if previous_was_digit && resolved_char.is_some_and(is_digit_like) {
+            if grouping && resolved_char.is_some_and(is_digit_like) {
                 end = after;
                 continue;
             }
-            if saw_number && !saw_unit && resolved_char.is_some_and(is_candidate_unit_char) {
+            if unit && resolved_char.is_some_and(is_candidate_unit_char) {
                 after_number_gap = true;
                 end = after;
                 continue;
@@ -511,8 +625,16 @@ pub(crate) fn is_digit_like(ch: char) -> bool {
     ch.is_ascii_digit() || matches!(ch, '０'..='９') || is_cjk_number_char(ch)
 }
 
+/// Characters that continue a numeric candidate without being digits.
+///
+/// Grouping is not spelled out here: it comes from
+/// [`NON_SPACE_GROUP_SEPARATORS`], the same list the number parser groups by,
+/// so a scanner cannot stop a candidate at a character the parser would have
+/// read. The whitespace group separators are deliberately not included — this
+/// scanner resolves runs of whitespace itself, in `candidate_end`.
 pub(crate) fn is_numeric_body_char(ch: char) -> bool {
     is_digit_like(ch)
+        || NON_SPACE_GROUP_SEPARATORS.contains(&ch)
         || matches!(
             ch,
             '.' | ',' | '+' | '-' | '．' | '，' | '万' | '億' | '兆' | '/' | '／'
@@ -654,19 +776,16 @@ pub(crate) fn parse_editor_dimension_number_into(
 ) -> bool {
     let expected_dimension = dimensions.bare_number().unwrap_or(Dimension::Length);
     let mut number = parsed_shell(text, ctx);
-    if let Some(ambiguous) = parse_ambiguous_number(text, ctx) {
-        number.best = ambiguous.best;
-        number.alternatives = ambiguous.alternatives;
-        number.findings.ambiguities.push(ambiguous.ambiguity);
-    } else if let Some(reading) = parse_plain_number_ctx(text, ctx) {
-        set_editor_plain_number_result(text, expected_dimension, reading, &mut number);
-    } else {
-        number
-            .findings
-            .skipped
-            .push(skipped(text, "no supported number matched"));
-    }
-    finalize_parsed(text, &mut number);
+    // The same bare-number grammar `parse_number_fast` runs, in the same order,
+    // differing only in where the millimetre alternative's dimension comes
+    // from. Spelling the grammar out again here is how the editor came to drop
+    // `'234` from `幅1'234` while the other entry points read it.
+    parse_number_into(
+        PlainNumberSink::EditorDimension(expected_dimension),
+        text,
+        ctx,
+        &mut number,
+    );
 
     // Judged by what made this a dimension in the first place — the label, or
     // the declaration standing in for one. Whether the caller's declaration
@@ -747,25 +866,15 @@ pub(crate) fn is_editor_plain_number_candidate(text: &str) -> bool {
             saw_number = true;
             continue;
         }
-        if matches!(
-            ch,
-            '.' | ','
-                | '+'
-                | '-'
-                | '．'
-                | '，'
-                | '/'
-                | '／'
-                | '万'
-                | '億'
-                | '兆'
-                | ' '
-                | '_'
-                | '\''
-                | '\u{00A0}'
-                | '\u{202F}'
-                | '\u{2009}'
-        ) {
+        // Grouping comes from the one list of group separators, so this
+        // predicate and `is_numeric_body_char` cannot disagree about where a
+        // number ends.
+        if is_group_separator(ch)
+            || matches!(
+                ch,
+                '.' | ',' | '+' | '-' | '．' | '，' | '/' | '／' | '万' | '億' | '兆'
+            )
+        {
             continue;
         }
         return false;
@@ -962,6 +1071,41 @@ mod tests {
             ("5   ", 1),
         ] {
             assert_eq!(candidate_window(text, 0, text.len()), expected, "{text:?}");
+        }
+    }
+
+    /// Each whitespace guess can be switched off on its own.
+    ///
+    /// `All` is what the scanner offers first; the narrower settings are what a
+    /// window that read as nothing is retried with, so they must shorten the
+    /// window monotonically and must not change anything that never crossed a
+    /// space in the first place.
+    #[test]
+    fn dropping_a_guess_only_ever_shortens_the_window() {
+        for (text, all, grouping_only, none) in [
+            ("3640 and", 8usize, 4, 4),
+            ("1 234 567 apples", 16, 9, 1),
+            ("3 m", 3, 1, 1),
+            ("1 234 567", 9, 9, 1),
+            ("5 3", 3, 3, 1),
+            // No space anywhere, so no guess was ever made and all three agree.
+            ("3.5m", 4, 4, 4),
+            ("1,234", 5, 5, 5),
+            ("100㎡", 6, 6, 6),
+        ] {
+            assert_eq!(candidate_window(text, 0, text.len()), all, "{text:?} all");
+            for (guesses, expected) in [
+                (WindowGuesses::All, all),
+                (WindowGuesses::GroupingOnly, grouping_only),
+                (WindowGuesses::None, none),
+            ] {
+                assert_eq!(
+                    candidate_window_guessing(text, 0, text.len(), guesses),
+                    expected,
+                    "{text:?} {guesses:?}"
+                );
+            }
+            assert!(none <= grouping_only && grouping_only <= all, "{text:?}");
         }
     }
 

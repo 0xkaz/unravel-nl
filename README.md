@@ -167,6 +167,15 @@ extraction is out of scope"** records the five rounds of evidence behind that
 decision; it is kept with the project's design notes rather than in the
 published crate.
 
+Removing the scanner did not settle the wider question, and this section should
+not be read as saying it did. A sixth round found that the same class of defect
+— a value reported that the input does not hold — was present in single-value
+parsing too, and that the property tests meant to forbid it had three blind
+spots of their own. One premise behind the five rounds has therefore been
+withdrawn: the rounds establish that sentence scanning was the *worse* of the
+two, not that what remains is finished. What that round changed is recorded
+with the design notes, and the crate is not published while it is open.
+
 The one scanner that remains is narrow by construction: it reads only building
 dimensions, out of editor fields, against a label it can name.
 

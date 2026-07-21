@@ -86,7 +86,9 @@ fn approximate_registry_unit_is_reported_in_findings() {
     }
 
     // Compound quantities inherit the flag from any part, and report once.
-    let text = "3 months 2 years";
+    // Written large place first: `3 months 2 years` climbs, so it states no sum
+    // and is refused rather than added up.
+    let text = "2 years 3 months";
     assert_reported_approximate(&parse(text, None), text);
     assert_reported_approximate(&parse_quantity_fast(text, None), text);
 }

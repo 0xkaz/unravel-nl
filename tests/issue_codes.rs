@@ -188,12 +188,12 @@ fn unknown_unit_sweep_corpus() -> Vec<String> {
 /// block on, what to sort to the top, and whether a usable reading survives.
 /// Moving a code to a different severity class, a different rank tier, or
 /// flipping its recoverability changes what callers render, so every one of the
-/// thirteen codes is pinned here rather than only the handful a live parse
+/// fifteen codes is pinned here rather than only the handful a live parse
 /// happens to produce today.
 #[test]
 fn every_issue_code_keeps_its_severity_rank_and_recoverability() {
     // code, severity, rank, recoverable
-    let table: [(IssueCode, IssueSeverity, u16, bool); 13] = [
+    let table: [(IssueCode, IssueSeverity, u16, bool); 15] = [
         (IssueCode::Empty, IssueSeverity::Error, 100, false),
         (IssueCode::NoValue, IssueSeverity::Error, 100, false),
         (IssueCode::UnknownUnit, IssueSeverity::Error, 80, true),
@@ -222,6 +222,8 @@ fn every_issue_code_keeps_its_severity_rank_and_recoverability() {
         ),
         (IssueCode::UnitAssumed, IssueSeverity::Info, 40, true),
         (IssueCode::Approximation, IssueSeverity::Warning, 30, true),
+        (IssueCode::CompoundOverflow, IssueSeverity::Error, 90, true),
+        (IssueCode::TrailingInput, IssueSeverity::Error, 90, true),
     ];
 
     // No code is listed twice, so a row cannot be pinned twice and leave
@@ -233,7 +235,7 @@ fn every_issue_code_keeps_its_severity_rank_and_recoverability() {
 
     for (code, severity, rank, recoverable) in table {
         // The table above is a literal, so on its own it cannot notice a
-        // fourteenth variant. `pinned_classification` is an exhaustive match
+        // sixteenth variant. `pinned_classification` is an exhaustive match
         // over `IssueCode` itself: a new variant stops this test compiling
         // until it is classified there, and the assertion below then forces the
         // table row to agree with it.
@@ -291,5 +293,7 @@ fn pinned_classification(code: IssueCode) -> (IssueSeverity, u16, bool) {
         IssueCode::AmbiguousCurrency => (IssueSeverity::Warning, 55, true),
         IssueCode::UnitAssumed => (IssueSeverity::Info, 40, true),
         IssueCode::Approximation => (IssueSeverity::Warning, 30, true),
+        IssueCode::CompoundOverflow => (IssueSeverity::Error, 90, true),
+        IssueCode::TrailingInput => (IssueSeverity::Error, 90, true),
     }
 }

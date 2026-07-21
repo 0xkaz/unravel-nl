@@ -103,6 +103,7 @@ mod duration;
 mod entry;
 mod findings;
 mod fuzzy;
+mod grammar;
 mod json_out;
 mod normalize;
 mod number;
@@ -135,9 +136,10 @@ pub use entry::{
 pub(crate) use findings::*;
 pub use findings::{
     Ambiguity, Approximation, Findings, IssueCode, IssueSeverity, RankedIssue, Skipped, Span,
-    ranked_findings,
+    accepts, ranked_findings,
 };
 pub(crate) use fuzzy::*;
+pub(crate) use grammar::*;
 pub(crate) use json_out::*;
 pub(crate) use normalize::*;
 pub(crate) use number::*;

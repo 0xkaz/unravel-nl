@@ -123,10 +123,91 @@ pub(crate) fn normalize_locale_number(text: &str, number_format: NumberFormat) -
     Some(compact)
 }
 
+/// The group separators that are not whitespace: the Swiss apostrophe (`1'234`)
+/// and the underscore.
+///
+/// Split out because a scanner has to treat the whitespace ones as spacing
+/// while it walks a candidate, and cannot simply accept them as body
+/// characters. Everything that needs "is this character grouping digits" reads
+/// this or [`SPACE_STYLE_SEPARATORS`] — nothing spells the set out again. The
+/// two lists disagreeing is what made `is_numeric_body_char` stop a candidate
+/// at the apostrophe while `is_editor_plain_number_candidate` accepted it, so
+/// the editor scanned `幅1'234` down to `1` and dropped `'234` in silence.
+pub(crate) const NON_SPACE_GROUP_SEPARATORS: [char; 2] = ['_', '\''];
+
 /// Separators that group digits without being a decimal separator anywhere: the
 /// space family (`1 200`), the Swiss apostrophe (`1'234`), and the underscore.
-pub(crate) const SPACE_STYLE_SEPARATORS: [char; 6] =
-    [' ', '_', '\'', '\u{00A0}', '\u{202F}', '\u{2009}'];
+pub(crate) const SPACE_STYLE_SEPARATORS: [char; 6] = [
+    ' ',
+    NON_SPACE_GROUP_SEPARATORS[0],
+    NON_SPACE_GROUP_SEPARATORS[1],
+    '\u{00A0}',
+    '\u{202F}',
+    '\u{2009}',
+];
+
+/// Whether `ch` groups digits. The one answer, for every caller that asks.
+pub(crate) fn is_group_separator(ch: char) -> bool {
+    SPACE_STYLE_SEPARATORS.contains(&ch)
+}
+
+/// The two readings an apostrophe has, when the text really has both.
+///
+/// `'` is a foot mark (`5'11"`) and a Swiss digit group separator (`1'234`),
+/// and nothing in the character settles which. The parser used to settle it per
+/// entry point and say nothing: `parse("1'234")` returned 6.2484 m, one foot
+/// and 234 inches, while `parse_number_fast("1'234")` returned 1234, both with
+/// an empty findings channel. Now one function reads both, and every entry
+/// point reports the choice it made along with the reading it did not take.
+pub(crate) struct ApostropheReadings {
+    number: Reading,
+    feet: Reading,
+}
+
+/// Which reading an entry point ranks first, given the grammars it reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ApostropheBest {
+    /// A bare-number entry point, which does not read feet and inches at all.
+    Number,
+    /// An entry point that reads the foot mark.
+    Feet,
+}
+
+/// The single definition of what an apostrophe means in `text`.
+///
+/// `Some` only when the text reads *both* ways; a text only one of them
+/// accepts — `5'11"` as feet, `1 234` as a number — has nothing to report and
+/// is left to the ordinary grammars.
+pub(crate) fn apostrophe_readings(text: &str, ctx: &ParseCtx) -> Option<ApostropheReadings> {
+    if !text.contains('\'') {
+        return None;
+    }
+    let number = parse_plain_number_ctx(text, ctx)?;
+    let feet = parse_feet_inches(text)?;
+    Some(ApostropheReadings { number, feet })
+}
+
+impl ApostropheReadings {
+    /// Writes both readings onto `parsed`, ranked, with the choice reported.
+    pub(crate) fn report(self, best: ApostropheBest, text: &str, parsed: &mut Parsed) {
+        let (best, alternative) = match best {
+            ApostropheBest::Number => (self.number, self.feet),
+            ApostropheBest::Feet => (self.feet, self.number),
+        };
+        parsed.best = Some(best);
+        parsed.alternatives.push(alternative);
+        parsed.findings.ambiguities.push(ambiguity(
+            text,
+            APOSTROPHE_REASON,
+            Some(2),
+            IssueCode::AmbiguousNumber,
+        ));
+    }
+}
+
+/// Stated once so the entry points cannot describe the same choice differently.
+pub(crate) const APOSTROPHE_REASON: &str =
+    "Apostrophe could be a Swiss digit group separator or a foot mark.";
 
 /// Removes space-style grouping, but only where it really is grouping.
 ///
@@ -375,62 +456,129 @@ pub(crate) fn small_number_word(word: &str) -> Option<i64> {
     }
 }
 
-pub(crate) fn parse_cjk_number(text: &str) -> Option<i64> {
-    let mut total = 0_i64;
-    let mut section = 0_i64;
-    let mut number = 0_i64;
-    let mut saw = false;
-
-    for ch in text.chars() {
-        if let Some(value) = cjk_digit(ch) {
-            number = value;
-            saw = true;
-            continue;
-        }
-        let unit = match ch {
-            '十' => 10,
-            '百' => 100,
-            '千' => 1000,
-            '万' => {
-                section = section.checked_add(number)?;
-                total = total.checked_add(section.checked_mul(10_000)?)?;
-                section = 0;
-                number = 0;
-                saw = true;
-                continue;
-            }
-            '億' => {
-                section = section.checked_add(number)?;
-                total = total.checked_add(section.checked_mul(100_000_000)?)?;
-                section = 0;
-                number = 0;
-                saw = true;
-                continue;
-            }
-            '兆' => {
-                section = section.checked_add(number)?;
-                total = total.checked_add(section.checked_mul(1_000_000_000_000)?)?;
-                section = 0;
-                number = 0;
-                saw = true;
-                continue;
-            }
-            _ => return None,
-        };
-        let addend = if number == 0 {
-            unit
-        } else {
-            number.checked_mul(unit)?
-        };
-        section = section.checked_add(addend)?;
-        number = 0;
-        saw = true;
+/// The magnitude a `十`/`百`/`千` character multiplies its digit by.
+fn cjk_place(ch: char) -> Option<i64> {
+    match ch {
+        '十' => Some(10),
+        '百' => Some(100),
+        '千' => Some(1000),
+        _ => None,
     }
+}
 
-    if !saw {
+/// The magnitude a `万`/`億`/`兆` character multiplies its whole section by.
+fn cjk_myriad(ch: char) -> Option<i64> {
+    match ch {
+        '万' => Some(10_000),
+        '億' => Some(100_000_000),
+        '兆' => Some(1_000_000_000_000),
+        _ => None,
+    }
+}
+
+/// One myriad section of a multiplicative numeral, e.g. the `二千三百` of
+/// `二千三百万`.
+///
+/// Strict on purpose. A place character may carry at most one digit, the places
+/// must descend (`千` before `百` before `十`), none may repeat, and a zero digit
+/// never multiplies a place. That is what refuses `十十`, `百百` and `二四十`,
+/// none of which is a numeral, rather than summing them into a value the text
+/// does not spell.
+fn parse_cjk_section(chars: &[char]) -> Option<i64> {
+    if chars.is_empty() {
         return None;
     }
-    total.checked_add(section)?.checked_add(number)
+    let mut total = 0_i64;
+    let mut pending: Option<i64> = None;
+    let mut last_place = i64::MAX;
+
+    for &ch in chars {
+        if let Some(digit) = cjk_digit(ch) {
+            // Two digits in a row spell a positional number, which cannot be
+            // mixed with places; a zero never multiplies a place.
+            if pending.is_some() || digit == 0 {
+                return None;
+            }
+            pending = Some(digit);
+            continue;
+        }
+        let place = cjk_place(ch)?;
+        if place >= last_place {
+            return None;
+        }
+        last_place = place;
+        let digit = pending.take().unwrap_or(1);
+        total = total.checked_add(digit.checked_mul(place)?)?;
+    }
+
+    if let Some(digit) = pending {
+        total = total.checked_add(digit)?;
+    }
+    Some(total)
+}
+
+/// Reads a run of CJK numerals, in either of the two ways they are written.
+///
+/// Positional (`二〇二四`) spells one digit per place, exactly as `2024` does.
+/// Multiplicative (`百二十`) spells magnitudes. The two forms cannot be mixed,
+/// and a bare run of digit characters with no `〇` to mark it positional —
+/// `二四`, which is 24 to one reader and nothing at all to another — has no
+/// single reading, so this declines to state one rather than returning the last
+/// digit it happened to see.
+pub(crate) fn parse_cjk_number(text: &str) -> Option<i64> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return None;
+    }
+    let has_magnitude = chars
+        .iter()
+        .any(|&ch| cjk_place(ch).is_some() || cjk_myriad(ch).is_some());
+
+    if !has_magnitude {
+        let digits: Vec<i64> = chars
+            .iter()
+            .copied()
+            .map(cjk_digit)
+            .collect::<Option<_>>()?;
+        if digits.len() == 1 {
+            return Some(digits[0]);
+        }
+        // Positional only when the run marks itself as positional.
+        if !chars.iter().any(|&ch| matches!(ch, '〇' | '零')) {
+            return None;
+        }
+        let mut value = 0_i64;
+        for digit in digits {
+            value = value.checked_mul(10)?.checked_add(digit)?;
+        }
+        return Some(value);
+    }
+
+    // Multiplicative form: a zero digit has no place in it.
+    if chars.iter().any(|&ch| matches!(ch, '〇' | '零')) {
+        return None;
+    }
+
+    let mut total = 0_i64;
+    let mut last_myriad = i64::MAX;
+    let mut start = 0_usize;
+    for (index, &ch) in chars.iter().enumerate() {
+        let Some(myriad) = cjk_myriad(ch) else {
+            continue;
+        };
+        // `一万万` and `億万億` are not numerals: the myriads must descend.
+        if myriad >= last_myriad {
+            return None;
+        }
+        last_myriad = myriad;
+        let section = parse_cjk_section(&chars[start..index])?;
+        total = total.checked_add(section.checked_mul(myriad)?)?;
+        start = index + 1;
+    }
+    if start < chars.len() {
+        total = total.checked_add(parse_cjk_section(&chars[start..])?)?;
+    }
+    Some(total)
 }
 
 pub(crate) fn cjk_digit(ch: char) -> Option<i64> {
@@ -695,14 +843,32 @@ mod tests {
     }
 
     #[test]
-    fn cjk_number_just_below_overflow_still_parses() {
-        // Each `九千兆` adds 9_000 * 10^12; 1024 repeats is the largest count
-        // that fits in i64 (1025 overflows), so the fix must not reject 1024.
-        assert_eq!(
-            parse_cjk_number(&"九千兆".repeat(1024)),
-            Some(9_216_000_000_000_000_000)
-        );
-        assert_eq!(parse_cjk_number(&"九千兆".repeat(1025)), None);
+    fn repeated_myriads_are_refused_rather_than_summed() {
+        // A repeated `兆` is not a numeral, so no count of it reads. This used
+        // to sum the repeats — which is where the overflow it had to be guarded
+        // against came from; the grammar now caps a valid numeral below 10^16
+        // and the checked arithmetic stays as a second line of defence.
+        assert_eq!(parse_cjk_number("九千兆"), Some(9_000_000_000_000_000));
+        assert_eq!(parse_cjk_number(&"九千兆".repeat(2)), None);
+        assert_eq!(parse_cjk_number(&"九千兆".repeat(1024)), None);
+    }
+
+    #[test]
+    fn malformed_cjk_numerals_are_refused_rather_than_composed() {
+        for text in ["十十", "百百", "一万万", "二四十", "十百", "〇十"] {
+            assert_eq!(parse_cjk_number(text), None, "{text}");
+        }
+    }
+
+    #[test]
+    fn positional_cjk_numerals_read_digit_for_digit() {
+        assert_eq!(parse_cjk_number("二〇二四"), Some(2024));
+        assert_eq!(parse_cjk_number("一〇"), Some(10));
+        assert_eq!(parse_cjk_number("一〇〇"), Some(100));
+        assert_eq!(parse_cjk_number("三〇"), Some(30));
+        // No `〇` to mark it positional, so it has no single reading.
+        assert_eq!(parse_cjk_number("二四"), None);
+        assert_eq!(parse_cjk_number("五"), Some(5));
     }
 
     #[test]
@@ -851,5 +1017,112 @@ mod tests {
         assert_eq!(best.kind, Kind::Number);
         assert_close(best.value.unwrap(), 1234.0);
         assert_eq!(parsed.alternatives.len(), 1);
+    }
+
+    /// What a digit group separator is has one definition, and everything that
+    /// asks — the number parser, the free-text scanner, the editor candidate
+    /// filter — asks it.
+    ///
+    /// They used to disagree. `is_numeric_body_char` stopped a candidate at the
+    /// apostrophe while `is_editor_plain_number_candidate` accepted it, so
+    /// `parse_dimensions_for_editor("幅1'234")` scanned `1` and dropped `'234`
+    /// with nothing in the findings to say so.
+    #[test]
+    fn one_definition_says_what_groups_digits() {
+        for separator in NON_SPACE_GROUP_SEPARATORS {
+            assert!(
+                SPACE_STYLE_SEPARATORS.contains(&separator),
+                "{separator:?} groups digits but the number parser does not strip it"
+            );
+            assert!(
+                is_numeric_body_char(separator),
+                "{separator:?} groups digits but the scanner stops a candidate at it"
+            );
+        }
+        for separator in SPACE_STYLE_SEPARATORS {
+            assert!(
+                is_group_separator(separator),
+                "{separator:?} is stripped as grouping but is not a group separator"
+            );
+            assert!(
+                is_editor_plain_number_candidate(&format!("1{separator}234")),
+                "{separator:?} groups digits but the editor refuses the candidate"
+            );
+        }
+    }
+
+    /// An apostrophe is a foot mark and a Swiss group separator, and every
+    /// entry point that reads `1'234` says so rather than picking one.
+    ///
+    /// `parse` used to answer 6.2484 m and `parse_number_fast` 1234, both with
+    /// an empty findings channel — a 5000-fold disagreement no caller could
+    /// detect. The two readings are now the same pair everywhere; only which
+    /// one is ranked first differs, and that is reported.
+    #[test]
+    fn an_apostrophe_is_read_by_one_definition_at_every_entry_point() {
+        let readings_of = |parsed: &Parsed| {
+            let mut values: Vec<String> = parsed
+                .best
+                .iter()
+                .chain(parsed.alternatives.iter())
+                .map(|reading| format!("{:?}{:?}", reading.value, reading.unit))
+                .collect();
+            values.sort();
+            values
+        };
+
+        let entry_points: Vec<(&str, Parsed)> = vec![
+            ("parse", parse("1'234", None)),
+            ("parse_quantity_fast", parse_quantity_fast("1'234", None)),
+            ("parse_number_fast", parse_number_fast("1'234", None)),
+        ];
+
+        let expected = readings_of(&entry_points[0].1);
+        assert_eq!(expected.len(), 2, "both readings are on the table");
+        for (name, parsed) in &entry_points {
+            assert_eq!(
+                readings_of(parsed),
+                expected,
+                "{name} reads a different pair"
+            );
+            let ambiguity = parsed
+                .findings
+                .ambiguities
+                .iter()
+                .find(|issue| issue.reason == APOSTROPHE_REASON)
+                .unwrap_or_else(|| panic!("{name} chose silently"));
+            assert_eq!(ambiguity.code, IssueCode::AmbiguousNumber, "{name}");
+            assert_eq!(ambiguity.candidate_count, Some(2), "{name}");
+        }
+
+        // The editor scanner reads the whole number rather than stopping at the
+        // apostrophe, and reports the same choice.
+        let matches = parse_dimensions_for_editor("幅1'234", None);
+        assert_eq!(matches.len(), 1);
+        assert_close(
+            matches[0]
+                .parsed
+                .best
+                .as_ref()
+                .expect("a reading")
+                .value
+                .unwrap(),
+            1234.0,
+        );
+        assert!(
+            matches[0]
+                .parsed
+                .findings
+                .ambiguities
+                .iter()
+                .any(|issue| issue.reason == APOSTROPHE_REASON),
+            "the editor chose silently"
+        );
+
+        // A text only one of the two grammars accepts is not ambiguous, and is
+        // still read: `5'11"` is feet and inches and nothing else.
+        let feet = parse("5'11\"", None);
+        assert_close(feet.best.expect("feet and inches").value.unwrap(), 1.8034);
+        assert!(feet.findings.ambiguities.is_empty());
     }
 }

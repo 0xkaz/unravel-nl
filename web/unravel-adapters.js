@@ -6,7 +6,7 @@ export function parseForUi(parser, text, ctx = undefined) {
   const best = parsed && parsed.best ? parsed.best : null;
 
   return {
-    ok: Boolean(best) && !issues.some((issue) => issue.severity === "error"),
+    ok: acceptsParsed(parsed, issues),
     parsed,
     best,
     issues,
@@ -25,7 +25,7 @@ export function parseAllForUi(parser, text, ctx = undefined) {
     const parsed = match.parsed || match;
     const issues = rankIssues(parsed);
     const best = parsed && parsed.best ? parsed.best : null;
-    const ok = Boolean(best) && !issues.some((issue) => issue.severity === "error");
+    const ok = acceptsParsed(parsed, issues);
     return {
       ...match,
       ok,
@@ -249,6 +249,38 @@ function compareRefText(left, right) {
   return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
 }
 
+/**
+ * Whether a parse is acceptable.
+ *
+ * The Rust core owns this decision — `accepts` in `findings.rs` — and puts the
+ * answer in `ok` on every result it serializes, so that answer is used whenever
+ * it is present. This module deliberately does not re-derive it: deriving it
+ * here from `error` severity alone, with no view of the strictness, is what made
+ * a `confirm` field show green on an ambiguity the Rust adapter had refused.
+ *
+ * The remaining branch is only for a caller that hands in a hand-built result
+ * the core never decided. It applies the same rule the core states — a skipped
+ * fragment blocks, and so does any finding once a strictness above `forgiving`
+ * is declared — and it can only ever be stricter, never more permissive.
+ */
+export function acceptsParsed(parsed, issues = rankIssues(parsed)) {
+  if (parsed && typeof parsed.ok === "boolean") {
+    return parsed.ok;
+  }
+  const findings = (parsed && parsed.findings) || {};
+  if ((findings.skipped || []).length > 0) {
+    return false;
+  }
+  if (issues.some((issue) => issue.severity === "error")) {
+    return false;
+  }
+  const strictness = parsed && parsed.strictness;
+  if (strictness && strictness !== "forgiving" && issues.length > 0) {
+    return false;
+  }
+  return Boolean(parsed && parsed.best);
+}
+
 export function rankIssues(parsed) {
   if (parsed && Array.isArray(parsed.issues)) {
     return parsed.issues
@@ -292,6 +324,8 @@ function issueSeverity(code) {
     case "TIMEZONE_UNSUPPORTED":
     case "RECURRENCE_UNSUPPORTED":
     case "REJECTED_BY_POLICY":
+    case "COMPOUND_OVERFLOW":
+    case "TRAILING_INPUT":
       return "error";
     case "UNIT_ASSUMED":
       return "info";
@@ -308,6 +342,8 @@ function issueRank(code) {
     case "TIMEZONE_UNSUPPORTED":
     case "RECURRENCE_UNSUPPORTED":
     case "REJECTED_BY_POLICY":
+    case "COMPOUND_OVERFLOW":
+    case "TRAILING_INPUT":
       return 90;
     case "UNKNOWN_UNIT":
       return 80;

@@ -83,6 +83,28 @@ fn corpus() -> Vec<String> {
         "",
         "   ",
         "hello",
+        // Positional CJK numerals: a place-value spelling, not a sum of the
+        // characters. These used to be exempt from every digit check.
+        "二〇二四",
+        "一〇",
+        "一〇〇",
+        "二〇二四年",
+        "幅二〇二四",
+        "三〇",
+        // The same unit repeated, and a compound written in ascending order.
+        // Neither states a sum, so a sum is a guess.
+        "3 m 5 m",
+        "5 kg 3 kg",
+        "3 cm 5 m",
+        "3 mm 5 mm",
+        // Descending compounds, which do state one. These must keep reading.
+        "5 m 3 cm",
+        "2 lb 3 oz",
+        "5尺3寸",
+        "1h30",
+        "1 23 456",
+        "1'234",
+        "5 €",
     ]
     .iter()
     .map(|text| (*text).to_owned())
@@ -237,29 +259,272 @@ fn fraction_is_written(fraction: &str, folded_input: &str) -> bool {
     })
 }
 
-fn assert_not_fabricated(reading: &Reading, findings: &Findings, input: &str, entry: &str) {
-    let folded_input = folded(input);
+/// Reads a run of CJK numerals the two ways CJK numerals are written.
+///
+/// Positional (`二〇二四`) spells one digit per place, exactly as `2024` does.
+/// Multiplicative (`百二十`) spells magnitudes. A run that mixes the two, or one
+/// that is a bare string of digit characters with no zero to mark it positional,
+/// has no single agreed reading, so this declines to state one rather than
+/// asserting against a reading of its own invention.
+fn cjk_numeral(run: &str) -> Option<f64> {
+    fn digit(ch: char) -> Option<u32> {
+        "〇一二三四五六七八九"
+            .chars()
+            .position(|c| c == ch)
+            .map(|d| d as u32)
+    }
+    fn place(ch: char) -> Option<f64> {
+        match ch {
+            '十' => Some(10.0),
+            '百' => Some(100.0),
+            '千' => Some(1000.0),
+            _ => None,
+        }
+    }
+    fn big(ch: char) -> Option<f64> {
+        match ch {
+            '万' => Some(1e4),
+            '億' => Some(1e8),
+            '兆' => Some(1e12),
+            _ => None,
+        }
+    }
 
-    if reading.kind == Kind::Range {
-        assert!(
-            RANGE_TOKENS
-                .iter()
-                .any(|token| folded_input.contains(token)),
+    if run.is_empty() {
+        return None;
+    }
+    let has_magnitude = run
+        .chars()
+        .any(|ch| place(ch).is_some() || big(ch).is_some());
+    let has_zero = run.contains('〇');
+
+    if has_zero && !has_magnitude {
+        // Positional: the run is the number, digit for digit.
+        let mut value = 0.0f64;
+        for ch in run.chars() {
+            value = value * 10.0 + f64::from(digit(ch)?);
+        }
+        return Some(value);
+    }
+    if has_zero {
+        return None;
+    }
+    if !has_magnitude {
+        // A single digit character is unambiguous; `二四` is not.
+        return if run.chars().count() == 1 {
+            digit(run.chars().next()?).map(f64::from)
+        } else {
+            None
+        };
+    }
+
+    let (mut total, mut section, mut current) = (0.0f64, 0.0f64, 0.0f64);
+    for ch in run.chars() {
+        if let Some(d) = digit(ch) {
+            current = f64::from(d);
+        } else if let Some(p) = place(ch) {
+            if current == 0.0 {
+                current = 1.0;
+            }
+            section += current * p;
+            current = 0.0;
+        } else if let Some(b) = big(ch) {
+            total += (section + current) * b;
+            section = 0.0;
+            current = 0.0;
+        } else {
+            return None;
+        }
+    }
+    Some(total + section + current)
+}
+
+const CJK_NUMERALS: &str = "〇一二三四五六七八九十百千万億兆";
+
+/// The maximal runs of CJK numeral characters in the input.
+fn cjk_runs(input: &str) -> Vec<String> {
+    let mut runs = Vec::new();
+    let mut current = String::new();
+    for ch in input.chars() {
+        if CJK_NUMERALS.contains(ch) {
+            current.push(ch);
+        } else if !current.is_empty() {
+            runs.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        runs.push(current);
+    }
+    runs
+}
+
+/// Whether `unit` is written in the input as its own token.
+///
+/// `m` is written in `5 m 3 cm` and in `3m`, but not in `3mm` or `5 min`: a
+/// canonical unit that only appears inside a longer word was not read from
+/// there, it came out of a conversion, and a converted value cannot be checked
+/// digit for digit.
+fn unit_written_verbatim(unit: &str, input: &str) -> bool {
+    let text = folded(input);
+    let unit = unit.to_lowercase();
+    if unit.is_empty() {
+        return false;
+    }
+    let bytes: Vec<char> = text.chars().collect();
+    let needle: Vec<char> = unit.chars().collect();
+    (0..bytes.len().saturating_sub(needle.len() - 1)).any(|start| {
+        bytes[start..start + needle.len()] == needle[..]
+            && !bytes
+                .get(start.wrapping_sub(1))
+                .is_some_and(|ch| ch.is_alphabetic())
+            && !bytes
+                .get(start + needle.len())
+                .is_some_and(|ch| ch.is_alphabetic())
+    })
+}
+
+type Entry = fn(&str, Option<ParseCtx>) -> Parsed;
+
+/// Splits the input into the `<number><unit>` pieces a compound is written as.
+fn compound_pieces(input: &str) -> Vec<String> {
+    let chars: Vec<char> = input.chars().collect();
+    let is_digit = |ch: char| ch.is_ascii_digit() || ('０'..='９').contains(&ch);
+    let mut pieces = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if !is_digit(chars[index]) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < chars.len()
+            && (is_digit(chars[index]) || matches!(chars[index], '.' | '，' | '．'))
+        {
+            index += 1;
+        }
+        let mut cursor = index;
+        while cursor < chars.len() && chars[cursor] == ' ' {
+            cursor += 1;
+        }
+        let unit_start = cursor;
+        while cursor < chars.len() && !is_digit(chars[cursor]) && chars[cursor] != ' ' {
+            cursor += 1;
+        }
+        if cursor > unit_start {
+            index = cursor;
+        }
+        pieces.push(chars[start..index].iter().collect());
+    }
+    pieces
+}
+
+/// Whether the reading is the sum of a compound the input actually writes.
+///
+/// A compound quantity — `5 m 3 cm`, `2 lb 3 oz`, `5尺3寸`, `1h30` — states a
+/// sum because its units descend in magnitude and never repeat: each piece is a
+/// smaller place of the same measurement. `3 m 5 m`, `5 kg 3 kg` and
+/// `3 cm 5 m` write no such thing, so a sum read out of them is the parser's
+/// guess and not the text's statement.
+fn is_written_compound(
+    reading: &Reading,
+    input: &str,
+    entry: Entry,
+    ctx: &Option<ParseCtx>,
+) -> bool {
+    let Some(value) = reading.value else {
+        return false;
+    };
+    let pieces = compound_pieces(input);
+    if pieces.len() < 2 {
+        return false;
+    }
+    let mut parts = Vec::new();
+    for piece in &pieces {
+        let parsed = entry(piece, ctx.clone());
+        let Some(best) = parsed.best else {
+            return false;
+        };
+        match (best.value, best.unit.clone()) {
+            (Some(part), Some(unit)) if best.unit == reading.unit => parts.push((part, unit)),
+            _ => return false,
+        }
+    }
+    let sum: f64 = parts.iter().map(|(part, _)| part).sum();
+    if (sum - value).abs() > 1e-9 * value.abs().max(1.0) {
+        return false;
+    }
+    // Strictly descending magnitude, no unit written twice.
+    parts.windows(2).all(|pair| pair[0].0 > pair[1].0)
+        && pieces
+            .iter()
+            .map(|piece| {
+                piece.trim_start_matches(|ch: char| {
+                    ch.is_ascii_digit() || ('０'..='９').contains(&ch) || matches!(ch, '.' | ' ')
+                })
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == pieces.len()
+}
+
+fn check_not_fabricated(
+    reading: &Reading,
+    findings: &Findings,
+    input: &str,
+    entry: &str,
+    reader: Entry,
+    ctx: &Option<ParseCtx>,
+    out: &mut Vec<String>,
+) {
+    let folded_input = folded(input);
+    let mut fail = |message: String| out.push(message);
+
+    if reading.kind == Kind::Range
+        && !RANGE_TOKENS
+            .iter()
+            .any(|token| folded_input.contains(token))
+    {
+        fail(format!(
             "{entry}({input:?}) invented a range: nothing in the input states one"
-        );
+        ));
+    }
+
+    // A run of CJK numerals is a written number like any other. Exempting it
+    // from every check is what let `二〇二四` read as 4: the reading is not the
+    // number the run spells, and nothing said so.
+    if reading.kind == Kind::Number
+        && reading.unit.is_none()
+        && ascii_digits(input).is_empty()
+        && silent(findings)
+        && let Some(value) = reading.value
+    {
+        let runs = cjk_runs(input);
+        if runs.len() == 1
+            && let Some(expected) = cjk_numeral(&runs[0])
+            && (expected - value).abs() > 1e-9
+        {
+            fail(format!(
+                "{entry}({input:?}) read {value}, but {:?} spells {expected}",
+                runs[0]
+            ));
+        }
     }
 
     // Only bare numbers are checked digit for digit. A quantity is converted to
-    // its canonical unit, so `5cm` legitimately reads as `0.05`, and CJK
-    // numerals and exponents legitimately carry digits the text does not spell.
+    // its canonical unit, so `5cm` legitimately reads as `0.05`, and exponents
+    // legitimately carry digits the text does not spell. A quantity whose
+    // canonical unit is written verbatim was *not* converted, so it is held to
+    // the same rule as a bare number — unless the input writes a compound, whose
+    // sum is stated rather than guessed.
     let digits = ascii_digits(input);
-    let cjk = input
-        .chars()
-        .any(|ch| "〇一二三四五六七八九十百千万億兆".contains(ch));
     let exponent = folded_input.contains('e');
-    if reading.kind == Kind::Number
-        && reading.unit.is_none()
-        && !cjk
+    let verbatim_unit = reading.kind == Kind::Quantity
+        && reading
+            .unit
+            .as_deref()
+            .is_some_and(|unit| unit_written_verbatim(unit, input))
+        && !is_written_compound(reading, input, reader, ctx);
+    if (reading.kind == Kind::Number && reading.unit.is_none() || verbatim_unit)
         && !exponent
         && !digits.is_empty()
         && let Some(value) = reading.value
@@ -271,30 +536,33 @@ fn assert_not_fabricated(reading: &Reading, findings: &Findings, input: &str, en
         // `1.2 3` read as 1.23, which no reading of the input spells; that is
         // now refused, so the property can be stated as written.
         let written = format!("{}", value.abs());
-        assert!(
-            !written.contains('e'),
-            "{entry}({input:?}) read {value}, which is not written in any form"
-        );
+        if written.contains('e') {
+            fail(format!(
+                "{entry}({input:?}) read {value}, which is not written in any form"
+            ));
+        }
         let (whole, fraction) = written.split_once('.').unwrap_or((written.as_str(), ""));
         // `,12` reads as `0.12`; the leading zero is notation, not a digit
         // taken from the input.
         let whole_digits = whole.trim_start_matches('0');
-        assert!(
-            whole_digits.is_empty() || digits.contains(whole_digits),
-            "{entry}({input:?}) read {value}, whose whole part is not written in the input"
-        );
-        assert!(
-            fraction.is_empty() || fraction_is_written(fraction, &folded_input),
-            "{entry}({input:?}) read {value}, whose fraction is not written in the input"
-        );
+        if !whole_digits.is_empty() && !digits.contains(whole_digits) {
+            fail(format!(
+                "{entry}({input:?}) read {value}, whose whole part is not written in the input"
+            ));
+        }
+        if !fraction.is_empty() && !fraction_is_written(fraction, &folded_input) {
+            fail(format!(
+                "{entry}({input:?}) read {value}, whose fraction is not written in the input"
+            ));
+        }
     }
 
     // An endpoint is a reading like any other, and is held to the same rule:
     // `parse("1.2 3-4 kg")` reporting an interval from 1.23 is the fabrication
     // this whole file is about.
     if let Some(range) = reading.range.as_ref() {
-        assert_not_fabricated(&range.from, findings, input, entry);
-        assert_not_fabricated(&range.to, findings, input, entry);
+        check_not_fabricated(&range.from, findings, input, entry, reader, ctx, out);
+        check_not_fabricated(&range.to, findings, input, entry, reader, ctx, out);
     }
 
     // A unit reported for a string of nothing but digits was not read from the
@@ -304,11 +572,32 @@ fn assert_not_fabricated(reading: &Reading, findings: &Findings, input: &str, en
         let only_digits = input.chars().all(|ch| {
             ch.is_whitespace() || folded(&ch.to_string()).chars().all(|c| c.is_ascii_digit())
         });
-        assert!(
-            !only_digits || !silent(findings),
-            "{entry}({input:?}) reported unit {unit} with nothing in the input to read it from"
-        );
+        if only_digits && silent(findings) {
+            out.push(format!(
+                "{entry}({input:?}) reported unit {unit} with nothing in the input to read it from"
+            ));
+        }
     }
+}
+
+/// Fails once with every violation listed, so one broken shape does not hide
+/// the rest.
+fn report(name: &str, violations: Vec<String>) {
+    if violations.is_empty() {
+        return;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let unique: Vec<&String> = violations.iter().filter(|v| seen.insert(*v)).collect();
+    panic!(
+        "{name}: {} violations ({} distinct)\n{}",
+        violations.len(),
+        unique.len(),
+        unique
+            .iter()
+            .map(|line| format!("  - {line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
 }
 
 /// A reading has to come from the text it was read out of.
@@ -320,29 +609,228 @@ fn assert_not_fabricated(reading: &Reading, findings: &Findings, input: &str, en
 /// arrives indistinguishable from a real one.
 #[test]
 fn no_reading_is_invented_from_text_that_does_not_hold_it() {
+    let mut violations = Vec::new();
     for input in corpus() {
         for ctx in contexts() {
-            let named: [(&str, Parsed); 3] = [
-                ("parse", parse(&input, ctx.clone())),
+            let named: [(&str, Entry, Parsed); 3] = [
+                ("parse", parse as Entry, parse(&input, ctx.clone())),
+                (
+                    "parse_quantity_fast",
+                    parse_quantity_fast as Entry,
+                    parse_quantity_fast(&input, ctx.clone()),
+                ),
+                (
+                    "parse_number_fast",
+                    parse_number_fast as Entry,
+                    parse_number_fast(&input, ctx.clone()),
+                ),
+            ];
+            for (entry, reader, parsed) in named {
+                if let Some(best) = parsed.best.as_ref() {
+                    check_not_fabricated(
+                        best,
+                        &parsed.findings,
+                        &input,
+                        entry,
+                        reader,
+                        &ctx,
+                        &mut violations,
+                    );
+                }
+            }
+
+            for found in parse_dimensions_for_editor(&input, ctx.clone()) {
+                if let Some(best) = found.parsed.best.as_ref() {
+                    check_not_fabricated(
+                        best,
+                        &found.parsed.findings,
+                        &found.text,
+                        "editor",
+                        parse as Entry,
+                        &ctx,
+                        &mut violations,
+                    );
+                }
+            }
+        }
+    }
+    report("fabricated readings", violations);
+}
+
+/// Extending a readable input with more text never silently empties the result.
+///
+/// [`parse_dimensions_for_editor`] returns a bare `Vec`: an empty one carries no
+/// reading *and no channel to say why*, which is the exact shape the removed
+/// scanner was deleted for. So the empty vector is only honest when there was
+/// nothing to read. If `幅3640` yields a match and `幅3640 and 2` yields none,
+/// a value the extractor can demonstrably read was dropped without a word —
+/// the parser guessed that the longer string held nothing, silently.
+#[test]
+fn a_longer_context_never_silently_empties_a_readable_input() {
+    let bases = [
+        "幅3640",
+        "3640",
+        "3 m",
+        "寸法3640",
+        "100㎡",
+        "3.5m",
+        "幅１．５ｍ",
+        "3m×4m",
+        "高さ2.9m",
+        "壁厚105mm",
+        "6帖",
+        "width 3.5m",
+    ];
+    let tails = [
+        " and 2", " and 4", "、2", " x 2", " 2", " ok", "です", " and 4m", "。", " のLDK",
+    ];
+
+    let mut violations = Vec::new();
+    for base in bases {
+        for ctx in contexts() {
+            let before = parse_dimensions_for_editor(base, ctx.clone());
+            if before.is_empty() {
+                continue;
+            }
+            for tail in tails {
+                let longer = format!("{base}{tail}");
+                if parse_dimensions_for_editor(&longer, ctx.clone()).is_empty() {
+                    violations.push(format!(
+                        "parse_dimensions_for_editor({longer:?}) is empty, but {base:?} reads {:?} \
+                         — the loss is reported nowhere",
+                        before
+                            .iter()
+                            .map(|found| found.text.clone())
+                            .collect::<Vec<_>>()
+                    ));
+                }
+            }
+        }
+    }
+    report("silently emptied results", violations);
+}
+
+/// The net above must not call a valid notation a fabrication.
+///
+/// A test that rejects everything proves nothing. These are the shapes the crate
+/// is documented to read — Indian grouping, and compounds whose units descend
+/// without repeating — and each must still read, silently, and pass the
+/// fabrication check.
+#[test]
+fn valid_notation_is_not_mistaken_for_fabrication() {
+    let mut violations = Vec::new();
+    for input in [
+        "1 23 456",
+        "1 234 567",
+        "5 m 3 cm",
+        "2 lb 3 oz",
+        "5尺3寸",
+        "1h30",
+        "1,234",
+        "3.5m",
+        "1 200",
+        "5 W",
+        "0",
+    ] {
+        for ctx in contexts() {
+            let parsed = parse(input, ctx.clone());
+            let Some(best) = parsed.best.as_ref() else {
+                violations.push(format!("parse({input:?}) refused a valid notation"));
+                continue;
+            };
+            check_not_fabricated(
+                best,
+                &parsed.findings,
+                input,
+                "parse",
+                parse as Entry,
+                &ctx,
+                &mut violations,
+            );
+        }
+    }
+    report("valid notation rejected", violations);
+}
+
+/// A short description of what a reading says, for comparing two entry points.
+fn shape(reading: &Reading) -> String {
+    format!(
+        "{:?} value={:?} unit={:?} date={:?} recurrence={:?}",
+        reading.kind, reading.value, reading.unit, reading.date, reading.recurrence
+    )
+}
+
+/// Two entry points that both read the same input agree, or one of them says so.
+///
+/// A narrow entry point declining to read is not a disagreement — that is what
+/// narrow means. But when the broad [`parse`] and a narrow entry point both
+/// return a reading of the *same string* and the readings differ, one of them is
+/// wrong about what the text says, and the caller has no way to tell which. Two
+/// silent, contradictory answers are two guesses; at most one of them can be the
+/// deterministic best reading the crate promises.
+///
+/// `parse` and the numeric entry points are compared whatever kind they land on,
+/// because `Number`, `Quantity` and `Range` are three answers to one question:
+/// what number does this string hold. `parse_date_fast` and
+/// `parse_recurrence_fast` are compared only where `parse` also read a date or a
+/// recurrence, since reading a string as a date rather than a quantity is the
+/// caller's declaration, not a contradiction.
+#[test]
+fn entry_points_that_both_read_an_input_do_not_contradict_each_other() {
+    let mut violations = Vec::new();
+    for input in corpus() {
+        for ctx in contexts() {
+            let broad = parse(&input, ctx.clone());
+            let Some(best) = broad.best.as_ref() else {
+                continue;
+            };
+
+            let numeric: [(&str, Parsed); 2] = [
                 (
                     "parse_quantity_fast",
                     parse_quantity_fast(&input, ctx.clone()),
                 ),
                 ("parse_number_fast", parse_number_fast(&input, ctx.clone())),
             ];
-            for (entry, parsed) in named {
-                if let Some(best) = parsed.best.as_ref() {
-                    assert_not_fabricated(best, &parsed.findings, &input, entry);
-                }
-            }
+            let kinded: [(&str, Kind, Parsed); 2] = [
+                (
+                    "parse_date_fast",
+                    Kind::Date,
+                    parse_date_fast(&input, ctx.clone()),
+                ),
+                (
+                    "parse_recurrence_fast",
+                    Kind::Recurrence,
+                    parse_recurrence_fast(&input, ctx.clone()),
+                ),
+            ];
 
-            for found in parse_dimensions_for_editor(&input, ctx.clone()) {
-                if let Some(best) = found.parsed.best.as_ref() {
-                    assert_not_fabricated(best, &found.parsed.findings, &found.text, "editor");
+            let mut compare = |entry: &str, parsed: &Parsed| {
+                let Some(other) = parsed.best.as_ref() else {
+                    return;
+                };
+                if shape(best) != shape(other)
+                    && silent(&broad.findings)
+                    && silent(&parsed.findings)
+                {
+                    violations.push(format!(
+                        "{input:?}: parse says [{}] but {entry} says [{}], both with no finding",
+                        shape(best),
+                        shape(other)
+                    ));
+                }
+            };
+            for (entry, parsed) in &numeric {
+                compare(entry, parsed);
+            }
+            for (entry, kind, parsed) in &kinded {
+                if best.kind == *kind {
+                    compare(entry, parsed);
                 }
             }
         }
     }
+    report("contradicting entry points", violations);
 }
 
 /// The instance of the fabrication class that used to live in `parse`.

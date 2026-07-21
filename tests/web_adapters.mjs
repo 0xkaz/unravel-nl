@@ -7,6 +7,7 @@ import {
   parseAllForUi,
   parseForUi,
   rankIssues,
+  acceptsParsed,
 } from "../web/unravel-adapters.js";
 
 const cleanParsed = {
@@ -73,6 +74,25 @@ assert.deepEqual(
   issues.map((issue) => issue.code),
   ["AMBIGUOUS_UNIT", "APPROXIMATION"],
 );
+
+// The adapter classifies codes itself rather than trusting the envelope, so
+// every code the core can emit has to be listed here too. A code this file has
+// never heard of falls through to warning/10, which is how COMPOUND_OVERFLOW
+// and TRAILING_INPUT — both errors the core ranks at 90 — would silently sort
+// below an approximation in a UI.
+for (const code of ["COMPOUND_OVERFLOW", "TRAILING_INPUT"]) {
+  const [issue] = rankIssues({
+    findings: {
+      skipped: [{ code, ref_text: "x", reason: "pinned", span: {} }],
+      ambiguities: [],
+      approximations: [],
+    },
+  });
+  assert.equal(issue.code, code);
+  assert.equal(issue.severity, "error", code);
+  assert.equal(issue.rank, 90, code);
+  assert.equal(issue.recoverable, true, code);
+}
 
 const parsedMatches = parseAllForUi(
   () =>
@@ -175,6 +195,63 @@ assert.equal(values[0].issues[0].code, "UNIT_ASSUMED");
   assert.deepEqual(byRank.map((entry) => entry.rank), [90, 30]);
 }
 
+
+// The browser adapter does not decide acceptance; the Rust core does, and this
+// module reports its answer verbatim. It used to derive `ok` from `error`
+// severity with no view of the strictness, so a `confirm` field showed green on
+// an ambiguity `canonicalize_values` had already refused. Whatever the core
+// says — including when it contradicts what the issue list looks like from
+// here — is what comes back.
+for (const decided of [true, false]) {
+  const fromCore = {
+    ok: decided,
+    best: { kind: "number", value: 1234 },
+    issues: [
+      {
+        code: "AMBIGUOUS_NUMBER",
+        severity: "warning",
+        rank: 55,
+        ref_text: "1,234",
+        reason: "grouping",
+        span: { start: 0, end: 5, text: "1,234" },
+      },
+    ],
+  };
+  assert.equal(acceptsParsed(fromCore), decided);
+  assert.equal(parseForUi(() => fromCore, "1,234").ok, decided);
+  assert.equal(parseForUi(() => JSON.stringify(fromCore), "1,234").ok, decided);
+  assert.equal(
+    parseAllForUi(() => [{ start: 0, end: 5, text: "1,234", parsed: fromCore }], "1,234")[0].ok,
+    decided,
+  );
+  assert.equal(canonicalizeFieldsForUi(() => fromCore, [{ field: "w", text: "1,234" }])[0].ok, decided);
+}
+
+// A result the core never decided still goes through the one fallback, and the
+// fallback can only be stricter: a skipped fragment blocks, and so does any
+// finding once a strictness above `forgiving` is declared.
+assert.equal(acceptsParsed(cleanParsed), true);
+assert.equal(acceptsParsed(timezoneParsed), false);
+assert.equal(
+  acceptsParsed({
+    best: { kind: "number", value: 1234 },
+    strictness: "confirm",
+    findings: {
+      skipped: [],
+      ambiguities: [
+        {
+          code: "AMBIGUOUS_NUMBER",
+          ref_text: "1,234",
+          reason: "grouping",
+          span: { start: 0, end: 5, text: "1,234" },
+        },
+      ],
+      approximations: [],
+    },
+  }),
+  false,
+);
+assert.equal(acceptsParsed({ best: null, findings: { skipped: [], ambiguities: [], approximations: [] } }), false);
 
 function mockElement(value) {
   const listeners = new Map();

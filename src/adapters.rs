@@ -74,7 +74,7 @@ pub fn canonicalize_values(requests: &[CanonicalizeRequest]) -> Vec<Canonicalize
         .iter()
         .map(|request| {
             let parsed = parse(&request.text, request.ctx.clone());
-            let ok = adapter_accepts(&parsed, request.ctx.as_ref());
+            let ok = accepts(&parsed);
             let canonical = ok.then(|| parsed.best.clone()).flatten();
             let message = (!ok).then(|| adapter_message(&request.field, &parsed));
             CanonicalizedValue {
@@ -100,19 +100,6 @@ pub fn repair_tool_call_message(field: &str, text: &str, ctx: Option<ParseCtx>) 
         .into_iter()
         .next()
         .and_then(|value| value.message)
-}
-
-pub(crate) fn adapter_accepts(parsed: &Parsed, ctx: Option<&ParseCtx>) -> bool {
-    if parsed.best.is_none() || !parsed.findings.skipped.is_empty() {
-        return false;
-    }
-    let strictness = ctx.map_or(Strictness::Forgiving, |ctx| ctx.strictness);
-    if strictness != Strictness::Forgiving
-        && (!parsed.findings.ambiguities.is_empty() || !parsed.findings.approximations.is_empty())
-    {
-        return false;
-    }
-    true
 }
 
 pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {

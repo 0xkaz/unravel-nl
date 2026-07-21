@@ -240,6 +240,7 @@ pub(crate) fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
     Parsed {
         input: text.to_owned(),
         locale: ctx.locale.clone(),
+        strictness: ctx.strictness,
         best: None,
         alternatives: Vec::new(),
         suggestions: Vec::new(),
@@ -275,6 +276,15 @@ pub(crate) fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
 /// The label is this crate's own inference, so it never produces a refusal of
 /// its own: with nothing declared, every result is exactly what it was before
 /// the field existed.
+///
+/// Text the scanner cannot interpret never takes a reading down with it. The
+/// scanner bounds each candidate optimistically — a space may be a grouped
+/// number or a unit about to follow — so `幅3640 and 2` is first offered as
+/// `3640 and`, which reads as nothing. Rather than drop the candidate, the
+/// guesses are retried away until something reads: the match is `3640`, and the
+/// `and` it could not use is reported as [`IssueCode::TrailingInput`]. A
+/// non-empty result whose findings hold that code is a *partial* read, so
+/// [`accepts`] is false for it.
 ///
 /// ```
 /// use unravel_nl::{parse_dimensions_for_editor, Locale, ParseCtx};
@@ -316,369 +326,13 @@ pub(crate) fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut 
 }
 
 pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
-    let features = InputFeatures::new(trimmed);
-
-    if let Some(result) = parse_qualified_reading(trimmed, ctx) {
-        if ctx.strictness == Strictness::Strict {
-            parsed.findings.skipped.push(skipped_with_span(
-                trimmed,
-                "approximate qualifier requires confirmation in strict mode",
-                IssueCode::Approximation,
-                span(trimmed),
-            ));
-        } else {
-            parsed.best = Some(result.reading);
-            parsed.findings.approximations = result.approximations;
-        }
-        return;
-    }
-
-    if let Some(result) = parse_fuzzy_reading(trimmed, ctx) {
-        if ctx.strictness == Strictness::Strict {
-            parsed.findings.skipped.push(skipped_with_span(
-                trimmed,
-                "fuzzy reading requires confirmation in strict mode",
-                IssueCode::Approximation,
-                span(trimmed),
-            ));
-        } else if !ctx.accept.fuzzy {
-            reject_candidate(
-                parsed,
-                trimmed,
-                result.reading,
-                "fuzzy readings are disabled by acceptance policy",
-            );
-        } else {
-            parsed.best = Some(result.reading);
-            parsed.findings.approximations = result.approximations;
-        }
-        return;
-    }
-
-    if features.has_slash
-        && let Some(ambiguous) = parse_ambiguous_slash_date_or_fraction(trimmed, ctx)
-    {
-        parsed.best = ambiguous.best;
-        parsed.alternatives = ambiguous.alternatives;
-        parsed.findings.ambiguities.push(ambiguous.ambiguity);
-        return;
-    }
-
-    // A three-part slash date has the same day-first/month-first question the
-    // two-part form has, so it is answered the same way: both readings stay on
-    // the table and the choice is reported.
-    if features.maybe_date
-        && let Some(ambiguous) = parse_ambiguous_numeric_slash_date(trimmed, ctx)
-    {
-        parsed.best = ambiguous.best;
-        parsed.alternatives = ambiguous.alternatives;
-        parsed.findings.ambiguities.push(ambiguous.ambiguity);
-        return;
-    }
-
-    if features.maybe_date
-        && let Some(reading) = parse_relative_date(trimmed, ctx)
-    {
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_recurrence
-        && let Some(reading) = parse_recurrence(trimmed)
-    {
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_range
-        && let Some(reading) = parse_plus_minus_range(trimmed, ctx)
-    {
-        if !ctx.accept.ranges {
-            reject_candidate(
-                parsed,
-                trimmed,
-                reading,
-                "range readings are disabled by acceptance policy",
-            );
-            return;
-        }
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_range
-        && let Some(reading) = parse_upper_bound_range(trimmed, ctx)
-    {
-        if !ctx.accept.ranges {
-            reject_candidate(
-                parsed,
-                trimmed,
-                reading,
-                "range readings are disabled by acceptance policy",
-            );
-            return;
-        }
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_range
-        && let Some(reading) = parse_range(trimmed, ctx)
-    {
-        if !ctx.accept.ranges {
-            reject_candidate(
-                parsed,
-                trimmed,
-                reading,
-                "range readings are disabled by acceptance policy",
-            );
-            return;
-        }
-        // An endpoint that is a three-part slash date has two readings, and the
-        // range collapsed it to one. Report the choice rather than let it vanish.
-        parsed
-            .findings
-            .ambiguities
-            .extend(range_endpoint_ambiguities(trimmed, ctx));
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_conversion
-        && let Some(reading) = parse_conversion_request(trimmed, ctx)
-    {
-        if !ctx.accept.conversions {
-            reject_candidate(
-                parsed,
-                trimmed,
-                reading,
-                "conversion readings are disabled by acceptance policy",
-            );
-            return;
-        }
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_japanese_length
-        && let Some(reading) = parse_japanese_length(trimmed)
-    {
-        parsed.findings.approximations.push(approximation(
-            trimmed,
-            "Japanese customary length converted to SI meters.",
-        ));
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_tatami
-        && let Some(reading) = parse_tatami_area(trimmed)
-    {
-        parsed.findings.approximations.push(approximation(
-            trimmed,
-            "Tatami area uses a trade-custom regional approximation of 1.62 m2.",
-        ));
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_tsubo
-        && let Some(reading) = parse_tsubo_area(trimmed)
-    {
-        parsed.findings.approximations.push(approximation(
-            trimmed,
-            "Tsubo area converted through Japanese customary area.",
-        ));
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_area
-        && let Some(reading) = parse_square_meter(trimmed)
-    {
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_temperature
-        && let Some(reading) = parse_temperature(trimmed)
-    {
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_compound_quantity
-        && let Some(reading) = parse_compound_registered_quantity_ctx(trimmed, ctx)
-    {
-        if !ctx.accept.compounds {
-            reject_candidate(
-                parsed,
-                trimmed,
-                reading,
-                "compound quantity readings are disabled by acceptance policy",
-            );
-            return;
-        }
-        note_unit_approximation(parsed, trimmed, &reading);
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_quantity
-        && let Some(reading) = parse_registered_quantity(trimmed, ctx)
-    {
-        note_unit_approximation(parsed, trimmed, &reading);
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_metric_length
-        && let Some(reading) = parse_metric_length(trimmed)
-    {
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_mass
-        && let Some(reading) = parse_mass(trimmed)
-    {
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_timezone_clock
-        && let Some((reading, day_shift)) = parse_timezone_clock_time(trimmed, ctx)
-    {
-        if day_shift != 0 {
-            let direction = if day_shift < 0 { "previous" } else { "next" };
-            parsed.findings.approximations.push(approximation_with_span(
-                trimmed,
-                &format!(
-                    "time of day only; converting to UTC moves it to the {direction} civil day"
-                ),
-                span(trimmed),
-            ));
-        }
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_clock
-        && let Some(reading) = parse_clock_time(trimmed)
-    {
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_duration
-        && let Some(reading) = parse_duration(trimmed)
-    {
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_feet_inches
-        && let Some(reading) = parse_feet_inches(trimmed)
-    {
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if features.maybe_cups
-        && let Some((best, alternatives, ambiguity)) = parse_cups(trimmed, ctx)
-    {
-        parsed.best = Some(best);
-        parsed.alternatives = alternatives;
-        parsed.findings.ambiguities.push(ambiguity);
-        return;
-    }
-
-    if features.maybe_currency
-        && let Some((best, alternatives, ambiguity)) = parse_currency(trimmed, ctx)
-    {
-        parsed.best = Some(best);
-        parsed.alternatives = alternatives;
-        if let Some(ambiguity) = ambiguity {
-            parsed.findings.ambiguities.push(ambiguity);
-        }
-        return;
-    }
-
-    if features.maybe_number
-        && let Some(ambiguous) = parse_ambiguous_number(trimmed, ctx)
-    {
-        parsed.best = ambiguous.best;
-        parsed.alternatives = ambiguous.alternatives;
-        parsed.findings.ambiguities.push(ambiguous.ambiguity);
-        return;
-    }
-
-    if features.maybe_number
-        && let Some(reading) = parse_plain_number_ctx(trimmed, ctx)
-    {
-        set_plain_number_result(trimmed, ctx, reading, parsed);
-        return;
-    }
-
-    if features.maybe_quantity
-        && let Some((reading, suggestion, unit_text)) =
-            parse_typo_corrected_quantity_ctx(trimmed, ctx)
-    {
-        parsed.suggestions.push(suggestion);
-        match ctx.strictness {
-            Strictness::Forgiving => {
-                parsed.findings.ambiguities.push(ambiguity_with_span(
-                    &unit_text,
-                    "Unit spelling was corrected by did-you-mean matching.",
-                    Some(1),
-                    IssueCode::TypoCorrected,
-                    span_token_in(trimmed, &unit_text),
-                ));
-                parsed.best = Some(reading);
-            }
-            Strictness::Confirm | Strictness::Strict => {
-                parsed.findings.skipped.push(skipped_with_span(
-                    &unit_text,
-                    "unit spelling correction requires confirmation",
-                    IssueCode::TypoCorrected,
-                    span_token_in(trimmed, &unit_text),
-                ));
-            }
-        }
-        return;
-    }
-
-    if features.maybe_timezone_clock
-        && let Some(timezone) = unsupported_timezone_suffix(trimmed)
-    {
-        parsed.findings.skipped.push(skipped_with_span(
-            timezone,
-            "unsupported timezone conversion requires an explicit adapter policy",
-            IssueCode::TimezoneUnsupported,
-            span_token_in(trimmed, timezone),
-        ));
-        return;
-    }
-
-    if features.maybe_recurrence
-        && let Some(recurrence) = unsupported_recurrence_phrase(trimmed)
-    {
-        parsed.findings.skipped.push(skipped_with_span(
-            recurrence,
-            "recurring date/time expressions require a recurrence adapter and are not interpreted by the core parser",
-            IssueCode::RecurrenceUnsupported,
-            span_token_in(trimmed, recurrence),
-        ));
-        return;
-    }
-
-    if features.maybe_suggestion {
-        parsed.suggestions = suggestions_for(trimmed);
-    }
-    parsed
-        .findings
-        .skipped
-        .push(skipped(trimmed, "no supported reading matched"));
+    dispatch(
+        Entry::General,
+        PlainNumberSink::Contextual,
+        trimmed,
+        ctx,
+        parsed,
+    );
 }
 
 pub(crate) fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
@@ -689,176 +343,51 @@ pub(crate) fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &m
 }
 
 pub(crate) fn parse_quantity_fast_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
-    if let Some(result) = parse_qualified_reading(trimmed, ctx) {
-        if ctx.strictness == Strictness::Strict {
-            parsed.findings.skipped.push(skipped_with_span(
-                trimmed,
-                "approximate qualifier requires confirmation in strict mode",
-                IssueCode::Approximation,
-                span(trimmed),
-            ));
-        } else {
-            parsed.best = Some(result.reading);
-            parsed.findings.approximations = result.approximations;
-        }
-        return;
-    }
-
-    if let Some(result) = parse_fuzzy_reading(trimmed, ctx) {
-        if !ctx.accept.fuzzy {
-            reject_candidate(
-                parsed,
-                trimmed,
-                result.reading,
-                "fuzzy readings are disabled by acceptance policy",
-            );
-        } else {
-            parsed.best = Some(result.reading);
-            parsed.findings.approximations = result.approximations;
-        }
-        return;
-    }
-
-    for parser in [
-        parse_japanese_length as fn(&str) -> Option<Reading>,
-        parse_tatami_area,
-        parse_tsubo_area,
-        parse_square_meter,
-        parse_temperature,
-        parse_metric_length,
-        parse_mass,
-        parse_clock_time,
-        parse_duration,
-        parse_feet_inches,
-    ] {
-        if let Some(reading) = parser(trimmed) {
-            if reading.approximate == Some(true) {
-                parsed
-                    .findings
-                    .approximations
-                    .push(approximation(trimmed, "Approximate quantity conversion."));
-            }
-            parsed.best = Some(reading);
-            return;
-        }
-    }
-
-    if let Some(reading) = parse_compound_registered_quantity_ctx(trimmed, ctx) {
-        if !ctx.accept.compounds {
-            reject_candidate(
-                parsed,
-                trimmed,
-                reading,
-                "compound quantity readings are disabled by acceptance policy",
-            );
-        } else {
-            note_unit_approximation(parsed, trimmed, &reading);
-            parsed.best = Some(reading);
-        }
-        return;
-    }
-
-    if let Some(reading) = parse_registered_quantity(trimmed, ctx) {
-        note_unit_approximation(parsed, trimmed, &reading);
-        parsed.best = Some(reading);
-        return;
-    }
-
-    if let Some((best, alternatives, ambiguity)) = parse_cups(trimmed, ctx) {
-        parsed.best = Some(best);
-        parsed.alternatives = alternatives;
-        parsed.findings.ambiguities.push(ambiguity);
-        return;
-    }
-
-    if let Some((best, alternatives, ambiguity)) = parse_currency(trimmed, ctx) {
-        parsed.best = Some(best);
-        parsed.alternatives = alternatives;
-        if let Some(ambiguity) = ambiguity {
-            parsed.findings.ambiguities.push(ambiguity);
-        }
-        return;
-    }
-
-    if let Some((reading, suggestion, unit_text)) = parse_typo_corrected_quantity_ctx(trimmed, ctx)
-    {
-        parsed.suggestions.push(suggestion);
-        match ctx.strictness {
-            Strictness::Forgiving => {
-                parsed.findings.ambiguities.push(ambiguity_with_span(
-                    &unit_text,
-                    "Unit spelling was corrected by did-you-mean matching.",
-                    Some(1),
-                    IssueCode::TypoCorrected,
-                    span_token_in(trimmed, &unit_text),
-                ));
-                parsed.best = Some(reading);
-            }
-            Strictness::Confirm | Strictness::Strict => {
-                parsed.findings.skipped.push(skipped_with_span(
-                    &unit_text,
-                    "unit spelling correction requires confirmation",
-                    IssueCode::TypoCorrected,
-                    span_token_in(trimmed, &unit_text),
-                ));
-            }
-        }
-        return;
-    }
-
-    parsed
-        .findings
-        .skipped
-        .push(skipped(trimmed, "no supported quantity matched"));
+    dispatch(
+        Entry::Quantity,
+        PlainNumberSink::Contextual,
+        trimmed,
+        ctx,
+        parsed,
+    );
 }
 
 pub(crate) fn parse_number_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
-    if let Some(ambiguous) = parse_ambiguous_number(trimmed, ctx) {
-        parsed.best = ambiguous.best;
-        parsed.alternatives = ambiguous.alternatives;
-        parsed.findings.ambiguities.push(ambiguous.ambiguity);
-    } else if let Some(reading) = parse_plain_number_ctx(trimmed, ctx) {
-        set_plain_number_result(trimmed, ctx, reading, parsed);
-    } else {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "no supported number matched"));
-    }
+    parse_number_into(PlainNumberSink::Contextual, trimmed, ctx, parsed);
+}
+
+/// The bare-number grammar, for the broad entry point and the editor alike.
+///
+/// Only the sink for a plain number differs between them, so they share the
+/// grammar rather than each keeping a copy of it.
+pub(crate) fn parse_number_into(
+    sink: PlainNumberSink,
+    trimmed: &str,
+    ctx: &ParseCtx,
+    parsed: &mut Parsed,
+) {
+    dispatch(Entry::Number, sink, trimmed, ctx, parsed);
     finalize_parsed(trimmed, parsed);
 }
 
 pub(crate) fn parse_date_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
-    if let Some(ambiguous) = parse_ambiguous_numeric_slash_date(trimmed, ctx) {
-        parsed.best = ambiguous.best;
-        parsed.alternatives = ambiguous.alternatives;
-        parsed.findings.ambiguities.push(ambiguous.ambiguity);
-    } else if let Some(reading) = parse_relative_date(trimmed, ctx) {
-        parsed.best = Some(reading);
-    } else {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "no supported date matched"));
-    }
+    dispatch(
+        Entry::Date,
+        PlainNumberSink::Contextual,
+        trimmed,
+        ctx,
+        parsed,
+    );
 }
 
 pub(crate) fn parse_recurrence_fast_into(trimmed: &str, parsed: &mut Parsed) {
-    if let Some(reading) = parse_recurrence(trimmed) {
-        parsed.best = Some(reading);
-    } else if let Some(recurrence) = unsupported_recurrence_phrase(trimmed) {
-        parsed.findings.skipped.push(skipped_with_span(
-            recurrence,
-            "recurring date/time expressions require a recurrence adapter and are not interpreted by the core parser",
-            IssueCode::RecurrenceUnsupported,
-            span_token_in(trimmed, recurrence),
-        ));
-    } else {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "no supported recurrence matched"));
-    }
+    dispatch(
+        Entry::Recurrence,
+        PlainNumberSink::Contextual,
+        trimmed,
+        &ParseCtx::default(),
+        parsed,
+    );
 }
 
 pub(crate) fn set_plain_number_result(
@@ -1253,6 +782,96 @@ pub(crate) fn reject_candidate(parsed: &mut Parsed, text: &str, reading: Reading
         text,
         reason,
         IssueCode::RejectedByPolicy,
+        span(text),
+    ));
+}
+
+/// Which of the two approximate grammars produced a reading.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Approximate {
+    /// An explicit qualifier in the text, such as `about` or `約`.
+    Qualified,
+    /// A caller-supplied fuzzy profile term.
+    Fuzzy,
+}
+
+impl Approximate {
+    fn confirmation_reason(self) -> &'static str {
+        match self {
+            Approximate::Qualified => "approximate qualifier requires confirmation in strict mode",
+            Approximate::Fuzzy => "fuzzy reading requires confirmation in strict mode",
+        }
+    }
+}
+
+/// What the gate decided about an approximate reading.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Admission {
+    /// The reading stands, with its approximations reported.
+    Accept,
+    /// Strict mode refuses it until a human confirms.
+    RequireConfirmation,
+    /// The acceptance policy switched this grammar off.
+    RefusedByPolicy,
+}
+
+/// The single gate on approximate readings.
+///
+/// It used to be written twice, and the copy in the quantity entry point read
+/// only `ctx.accept.fuzzy`: under [`Strictness::Strict`], `parse` refused a
+/// fuzzy term while `parse_quantity_fast` returned it, so declaring strictness
+/// bought nothing on the narrower entry point. Both now ask this function, and
+/// so does anything added later.
+pub(crate) fn approximate_admission(kind: Approximate, ctx: &ParseCtx) -> Admission {
+    if ctx.strictness == Strictness::Strict {
+        return Admission::RequireConfirmation;
+    }
+    if kind == Approximate::Fuzzy && !ctx.accept.fuzzy {
+        return Admission::RefusedByPolicy;
+    }
+    Admission::Accept
+}
+
+/// Applies [`approximate_admission`] to one candidate reading.
+pub(crate) fn admit_approximate(
+    kind: Approximate,
+    ctx: &ParseCtx,
+    trimmed: &str,
+    reading: Reading,
+    approximations: Vec<Approximation>,
+    parsed: &mut Parsed,
+) {
+    match approximate_admission(kind, ctx) {
+        Admission::Accept => {
+            parsed.best = Some(reading);
+            parsed.findings.approximations = approximations;
+        }
+        Admission::RequireConfirmation => parsed.findings.skipped.push(skipped_with_span(
+            trimmed,
+            kind.confirmation_reason(),
+            IssueCode::Approximation,
+            span(trimmed),
+        )),
+        Admission::RefusedByPolicy => reject_candidate(
+            parsed,
+            trimmed,
+            reading,
+            "fuzzy readings are disabled by acceptance policy",
+        ),
+    }
+}
+
+/// Reports a run of same-dimension quantities that states no sum.
+///
+/// The run was recognized — every part is a number and a unit of one dimension
+/// — so it is not `NoValue`: what failed is the claim that the parts are places
+/// of a single measurement. Summing them anyway is how `3 m 5 m` used to read
+/// as 8 m with nothing in the findings to say the 8 was the parser's.
+pub(crate) fn note_malformed_compound(parsed: &mut Parsed, text: &str, reason: &str) {
+    parsed.findings.skipped.push(skipped_with_span(
+        text,
+        reason,
+        IssueCode::CompoundOverflow,
         span(text),
     ));
 }

@@ -4,11 +4,8 @@ use crate::*;
 pub(crate) fn parsed_summary_json(parsed: &Parsed) -> String {
     let mut json = String::new();
     json.push_str("{\"ok\":");
-    json.push_str(if parsed.best.is_some() {
-        "true"
-    } else {
-        "false"
-    });
+    // The one acceptance rule, not a fourth copy of it.
+    json.push_str(if accepts(parsed) { "true" } else { "false" });
     json.push_str(",\"input\":");
     push_json_string(&mut json, &parsed.input);
     json.push_str(",\"best\":");
@@ -516,5 +513,83 @@ mod tests {
         }
         *rest = tail;
         true
+    }
+
+    /// Every surface that answers "is this parse acceptable" answers with the
+    /// same function.
+    ///
+    /// There were three answers and they disagreed: the JSON summary said `ok`
+    /// whenever there was a `best`, the Rust adapter also demanded an empty
+    /// skipped list and refused ambiguity outside `Forgiving`, and the browser
+    /// adapter read `error` severity without ever looking at the strictness. A
+    /// fourth surface added later fails here unless it delegates too.
+    #[test]
+    fn every_surface_agrees_on_whether_a_parse_is_acceptable() {
+        let corpus = [
+            "5 kg",
+            "",
+            "1,234",
+            "about 20kg",
+            "3 m 5 m",
+            "1'234",
+            "5 meterz",
+            "180cm",
+            "3pm Europe/Paris",
+            "next friday",
+            "qqqq",
+        ];
+
+        for strictness in [
+            Strictness::Forgiving,
+            Strictness::Confirm,
+            Strictness::Strict,
+        ] {
+            for text in corpus {
+                let ctx = ParseCtx {
+                    strictness,
+                    ..ParseCtx::default()
+                };
+                let parsed = parse(text, Some(ctx.clone()));
+                let decided = accepts(&parsed);
+                let label = format!("{text:?} under {strictness:?}");
+
+                // The JSON summary the wasm and browser adapters read.
+                let json = parsed_summary_json(&parsed);
+                let serialized = json.starts_with("{\"ok\":true,");
+                assert_eq!(serialized, decided, "{label}: JSON `ok` disagrees");
+
+                // The Rust adapter that canonicalizes a field.
+                let values = canonicalize_values(&[CanonicalizeRequest::new(
+                    "field",
+                    text,
+                    Some(ctx.clone()),
+                )]);
+                assert_eq!(values[0].ok, decided, "{label}: the adapter disagrees");
+                assert_eq!(
+                    values[0].canonical.is_some(),
+                    decided,
+                    "{label}: a refused field still carries a canonical value"
+                );
+                assert_eq!(
+                    values[0].message.is_some(),
+                    !decided,
+                    "{label}: a refusal with nothing to say"
+                );
+
+                // And the narrow entry points reach the same function, so a
+                // field parsed by kind is not judged by a different rule.
+                for narrow in [
+                    parse_quantity_fast(text, Some(ctx.clone())),
+                    parse_number_fast(text, Some(ctx.clone())),
+                ] {
+                    let narrow_json = parsed_summary_json(&narrow);
+                    assert_eq!(
+                        narrow_json.starts_with("{\"ok\":true,"),
+                        accepts(&narrow),
+                        "{label}: a narrow entry point serializes a different `ok`"
+                    );
+                }
+            }
+        }
     }
 }
