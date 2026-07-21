@@ -39,10 +39,6 @@ The first slice focuses on:
 - Forgiving, confirm, and strict parse modes for correction policy
 - Compact and ISO-style durations such as `1h30`, `2d4h`, and `PT1H30M`
 - Clock times and slots such as `3pm`, `14:30`, and `3pm-4pm`
-- Recurrence readings such as `every monday`, `every 2 weeks`,
-  `every other monday`, `monthly on the second monday`, `毎週月曜日`,
-  `毎月第2月曜日`, `every third business day`, and `毎日`, normalized to
-  RRULE-style strings
 - Approximate, tolerance, and bounded input such as `about 20C`, `約20kg`,
   `10 ± 0.5 mm`, `a few minutes`, `under 10 minutes`, `10mm以下`, and
   temperature phrases like `it's hot`
@@ -61,9 +57,8 @@ The first slice focuses on:
   feature
 - Static parse input, parsed output, and MCP tool schemas for AI/tool adapters
 - Split API entry points: broad `parse()`, narrower `parse_quantity_fast()`,
-  `parse_number_fast()`, `parse_date_fast()`, `parse_recurrence_fast()`,
-  editor-focused `parse_dimensions_for_editor()`, and reading-level
-  `complete_readings()`
+  `parse_number_fast()`, `parse_date_fast()`, editor-focused
+  `parse_dimensions_for_editor()`, and reading-level `complete_readings()`
 - Building-dimension extraction with byte spans via
   `parse_dimensions_for_editor()`
 - Explicit `NumberFormat` and `AcceptOptions` policies for callers that need
@@ -131,7 +126,7 @@ assert_eq!(
 ## API Entry Points
 
 Use `parse()` as the broad compatibility entry point when the input can be a
-quantity, date, range, recurrence, conversion, or plain number. Use narrower
+quantity, date, range, conversion, or plain number. Use narrower
 entry points when the UI already knows the field type:
 
 ```rust
@@ -149,7 +144,7 @@ assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("kg"));
 ```
 
 Available specialized entries are `parse_quantity_fast()`,
-`parse_number_fast()`, `parse_date_fast()`, and `parse_recurrence_fast()`.
+`parse_number_fast()`, and `parse_date_fast()`.
 Use `ParseCtx::purpose` when a single `parse()` call should avoid broad
 grammar dispatch. `parse_dimensions_for_editor()` scans free text for building
 dimensions and unitless dimension fields, and `complete_readings()` returns
@@ -284,18 +279,6 @@ conversion such as `3pm Europe/Paris` uses bundled timezone data and remains
 independent of the Rust host environment. IANA-zone input without an explicit
 date fails loudly.
 
-Simple recurring expressions are canonicalized as RRULE-style strings:
-
-```rust
-use unravel_nl::{parse, Kind};
-
-let parsed = parse("every monday", None);
-let best = parsed.best.unwrap();
-
-assert_eq!(best.kind, Kind::Recurrence);
-assert_eq!(best.recurrence.as_deref(), Some("FREQ=WEEKLY;BYDAY=MO"));
-```
-
 UI adapters can turn parser findings into stable severity and rank metadata:
 
 ```rust
@@ -309,13 +292,51 @@ assert_eq!(issues[0].rank, 90);
 ```
 
 Browser-facing adapters live in `web/unravel-adapters.js`. They are dependency
-free ESM helpers for DOM inputs, span-preserving `parseAllForUi()`,
-field-list `canonicalizeFieldsForUi()`, canonicalizer-result normalization,
-React integration by injection, and a custom element wrapper; parser functions
-are injected so the same code can sit on top of a WASM bundle or a server
-bridge. TypeScript definitions live in `web/unravel-adapters.d.ts`. The React
-adapter is covered by an actual React server-render runtime smoke test under
+free ESM helpers for DOM inputs, span-preserving `parseAllForUi()`, field-list
+`canonicalizeFieldsForUi()`, canonicalizer-result normalization, and React
+integration by injection; parser functions are injected so the same code can sit
+on top of a WASM bundle or a server bridge. TypeScript definitions live in
+`web/unravel-adapters.d.ts`, and a test compares the two export lists so the
+declarations cannot fall behind the module. The React adapter is covered by an
+actual React server-render runtime smoke test under
 `tests/react_adapter_runtime.mjs`.
+
+There is no custom element — no `defineUnravelElement()`, no `<unravel-input>`,
+and no plan for either. It was the one export in this file that nothing in the
+repository ever called: no test, no example, no other adapter, only the line
+that defined it. An untested wrapper around `createUnravelFieldController()` is
+not a feature, it is a second way to reach one, and the controller is the way
+that is exercised. Callers who want a custom element can write one over
+`createUnravelFieldController()` in a dozen lines and own the registration
+policy — the tag name, the registry, and the shadow-DOM question — themselves,
+rather than inheriting three defaults this crate never tested.
+
+## Recurrence
+
+There is no recurrence entry point — no `parse_recurrence_fast()`, no
+`Kind::Recurrence`, no `Reading::recurrence`, no `ParsePurpose::Recurrence`, and
+no plan for any of them. `every monday`, `毎週月曜`, `every third business day`
+and raw `FREQ=…` strings are not read; they come back with `best: None` and an
+`IssueCode::NoValue` finding that says so, on the same channel every other
+unreadable input uses.
+
+The removal has two reasons, and both are about the surface rather than the
+code. The reference library this crate follows the API shape of —
+`pascalorg/lingo` — documents no recurrence API at all: neither its root README
+nor `packages/lingo` mentions `recurrence`, `RRULE`, or `every …` (measured at
+commit `8507914c476026afbbc2f4f9fe84b31f2713c6a2`). So the entry point was an
+extension of this crate's own invention, held to no external contract. And its
+own surface could not say what it refused: it shipped an
+`IssueCode::RecurrenceUnsupported` — a code whose whole job was to admit that
+the grammar recognized a phrase it could not express — which is the shape of a
+feature that never settled where its boundary was. A repeating schedule is a
+calendar concern with a real specification (RFC 5545) behind it; a partial
+RRULE subset bolted onto a value parser is not that, and callers who need one
+are better served by a library that implements the specification.
+
+Dates, times, durations and clock slots are a different question and are
+unaffected: `3pm-4pm`, `1h30`, `PT1H30M`, `明日`, and `来週金曜日` read exactly
+as they did.
 
 ## WASM
 

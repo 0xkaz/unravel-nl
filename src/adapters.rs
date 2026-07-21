@@ -168,7 +168,7 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
 ///
 /// A reading that carries no usable value still renders as a word rather than
 /// an empty string, so the output is always displayable: `unknown date`,
-/// `unknown recurrence`, `unresolved range`, `unresolved`, and — for a value
+/// `unresolved range`, `unresolved`, and — for a value
 /// that is infinite or `NaN` — `unrepresentable` in place of the number, so a
 /// quantity keeps its unit and renders as `unrepresentable m`. No library entry
 /// point hands back such a value: [`parse`] reports it as a loss and
@@ -222,10 +222,6 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
             .date
             .clone()
             .unwrap_or_else(|| "unknown date".to_owned()),
-        (_, Kind::Recurrence, _, _) => value
-            .recurrence
-            .clone()
-            .unwrap_or_else(|| "unknown recurrence".to_owned()),
         // The endpoints are rendered with the caller's context, not with `None`:
         // a range is still the same reading it would be on its own, so dropping
         // the context here would have silently turned off locale-sensitive
@@ -266,7 +262,6 @@ pub fn describe_reading(reading: &Reading) -> ResourceView {
         Kind::Date => "unravel.date",
         Kind::Range => "unravel.range",
         Kind::Number => "unravel.number",
-        Kind::Recurrence => "unravel.recurrence",
     }
     .to_owned();
     let mut fields = Vec::new();
@@ -303,9 +298,6 @@ fn push_reading_fields(fields: &mut Vec<ResourceField>, prefix: &str, reading: &
     }
     if let Some(date) = &reading.date {
         push_resource_field(fields, &named("date"), date);
-    }
-    if let Some(recurrence) = &reading.recurrence {
-        push_resource_field(fields, &named("recurrence"), recurrence);
     }
     if let Some(timezone) = &reading.timezone {
         push_resource_field(fields, &named("timezone"), timezone);

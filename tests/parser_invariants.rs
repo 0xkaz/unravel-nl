@@ -16,7 +16,7 @@
 
 use unravel_nl::{
     Findings, Kind, Locale, ParseCtx, Parsed, Reading, parse, parse_date_fast,
-    parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast, parse_recurrence_fast,
+    parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
 };
 
 /// Inputs the removed scanner tests used, plus the shapes that broke it, plus a
@@ -181,7 +181,7 @@ fn silent(findings: &Findings) -> bool {
 fn a_result_with_no_reading_always_says_why() {
     for input in corpus() {
         for ctx in contexts() {
-            let named: [(&str, Parsed); 5] = [
+            let named: [(&str, Parsed); 4] = [
                 ("parse", parse(&input, ctx.clone())),
                 (
                     "parse_quantity_fast",
@@ -189,10 +189,6 @@ fn a_result_with_no_reading_always_says_why() {
                 ),
                 ("parse_number_fast", parse_number_fast(&input, ctx.clone())),
                 ("parse_date_fast", parse_date_fast(&input, ctx.clone())),
-                (
-                    "parse_recurrence_fast",
-                    parse_recurrence_fast(&input, ctx.clone()),
-                ),
             ];
             for (entry, parsed) in named {
                 assert!(
@@ -755,8 +751,8 @@ fn valid_notation_is_not_mistaken_for_fabrication() {
 /// A short description of what a reading says, for comparing two entry points.
 fn shape(reading: &Reading) -> String {
     format!(
-        "{:?} value={:?} unit={:?} date={:?} recurrence={:?}",
-        reading.kind, reading.value, reading.unit, reading.date, reading.recurrence
+        "{:?} value={:?} unit={:?} date={:?}",
+        reading.kind, reading.value, reading.unit, reading.date
     )
 }
 
@@ -771,10 +767,9 @@ fn shape(reading: &Reading) -> String {
 ///
 /// `parse` and the numeric entry points are compared whatever kind they land on,
 /// because `Number`, `Quantity` and `Range` are three answers to one question:
-/// what number does this string hold. `parse_date_fast` and
-/// `parse_recurrence_fast` are compared only where `parse` also read a date or a
-/// recurrence, since reading a string as a date rather than a quantity is the
-/// caller's declaration, not a contradiction.
+/// what number does this string hold. `parse_date_fast` is compared only where
+/// `parse` also read a date, since reading a string as a date rather than a
+/// quantity is the caller's declaration, not a contradiction.
 #[test]
 fn entry_points_that_both_read_an_input_do_not_contradict_each_other() {
     let mut violations = Vec::new();
@@ -792,18 +787,11 @@ fn entry_points_that_both_read_an_input_do_not_contradict_each_other() {
                 ),
                 ("parse_number_fast", parse_number_fast(&input, ctx.clone())),
             ];
-            let kinded: [(&str, Kind, Parsed); 2] = [
-                (
-                    "parse_date_fast",
-                    Kind::Date,
-                    parse_date_fast(&input, ctx.clone()),
-                ),
-                (
-                    "parse_recurrence_fast",
-                    Kind::Recurrence,
-                    parse_recurrence_fast(&input, ctx.clone()),
-                ),
-            ];
+            let kinded: [(&str, Kind, Parsed); 1] = [(
+                "parse_date_fast",
+                Kind::Date,
+                parse_date_fast(&input, ctx.clone()),
+            )];
 
             let mut compare = |entry: &str, parsed: &Parsed| {
                 let Some(other) = parsed.best.as_ref() else {

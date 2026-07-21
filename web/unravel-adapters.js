@@ -74,7 +74,6 @@ export function applyParseState(element, state) {
   setDatasetValue(element, "unravelUnit", best.unit);
   setDatasetValue(element, "unravelValue", best.value);
   setDatasetValue(element, "unravelDate", best.date);
-  setDatasetValue(element, "unravelRecurrence", best.recurrence);
   setDatasetValue(element, "unravelIssueCode", topIssue && topIssue.code);
   setDatasetValue(element, "unravelIssueSeverity", topIssue && topIssue.severity);
 
@@ -176,58 +175,6 @@ export function createUnravelReactAdapter(React, parser) {
   return { useUnravelValue, UnravelInput };
 }
 
-export function defineUnravelElement(parser, options = {}) {
-  const registry = options.customElements || globalThis.customElements;
-  const BaseHTMLElement = options.HTMLElement || globalThis.HTMLElement;
-  const tagName = options.tagName || "unravel-input";
-
-  if (!registry || !BaseHTMLElement) {
-    return null;
-  }
-  if (registry.get(tagName)) {
-    return registry.get(tagName);
-  }
-
-  class UnravelInputElement extends BaseHTMLElement {
-    connectedCallback() {
-      if (!this.input) {
-        this.input = document.createElement("input");
-        this.appendChild(this.input);
-      }
-      this.controller = createUnravelFieldController(this.input, parser, {
-        ctx: options.ctx,
-        onChange: (state) => {
-          this.dispatchEvent(new CustomEvent("unravel-parse", { detail: state }));
-        },
-      });
-    }
-
-    disconnectedCallback() {
-      if (this.controller) {
-        this.controller.disconnect();
-      }
-    }
-
-    get value() {
-      return this.input ? this.input.value : "";
-    }
-
-    set value(nextValue) {
-      if (!this.input) {
-        this.input = document.createElement("input");
-        this.appendChild(this.input);
-      }
-      this.input.value = nextValue;
-      if (this.controller) {
-        this.controller.parse();
-      }
-    }
-  }
-
-  registry.define(tagName, UnravelInputElement);
-  return UnravelInputElement;
-}
-
 /**
  * Orders two reference texts the way the Rust core does.
  *
@@ -322,7 +269,6 @@ function issueSeverity(code) {
     case "NO_VALUE":
     case "UNKNOWN_UNIT":
     case "TIMEZONE_UNSUPPORTED":
-    case "RECURRENCE_UNSUPPORTED":
     case "REJECTED_BY_POLICY":
     case "COMPOUND_OVERFLOW":
     case "TRAILING_INPUT":
@@ -340,7 +286,6 @@ function issueRank(code) {
     case "NO_VALUE":
       return 100;
     case "TIMEZONE_UNSUPPORTED":
-    case "RECURRENCE_UNSUPPORTED":
     case "REJECTED_BY_POLICY":
     case "COMPOUND_OVERFLOW":
     case "TRAILING_INPUT":

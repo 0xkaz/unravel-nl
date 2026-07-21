@@ -110,10 +110,6 @@ pub(crate) fn push_reading_json(json: &mut String, reading: &Reading) {
         json.push_str(",\"date\":");
         push_json_string(json, date);
     }
-    if let Some(recurrence) = &reading.recurrence {
-        json.push_str(",\"recurrence\":");
-        push_json_string(json, recurrence);
-    }
     if let Some(timezone) = &reading.timezone {
         json.push_str(",\"timezone\":");
         push_json_string(json, timezone);
@@ -152,7 +148,6 @@ pub(crate) fn kind_str(kind: Kind) -> &'static str {
         Kind::Date => "date",
         Kind::Range => "range",
         Kind::Number => "number",
-        Kind::Recurrence => "recurrence",
     }
 }
 

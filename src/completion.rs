@@ -445,7 +445,6 @@ pub(crate) fn completion_allowed(
 
     match ctx.expect {
         Some(Kind::Date) => kind == CompletionKind::Date,
-        Some(Kind::Recurrence) => false,
         Some(Kind::Number) => false,
         Some(Kind::Quantity) => matches!(
             kind,

@@ -17,13 +17,13 @@ pub(crate) const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
     },
     "expect": {
       "type": "string",
-      "enum": ["quantity", "date", "range", "number", "recurrence"],
+      "enum": ["quantity", "date", "range", "number"],
       "description": "Optional expected top-level reading kind. This does not constrain parsing; it only filters completion candidates and adds a millimeter length alternative for a bare number when set to quantity. Use purpose to restrict what is parsed."
     },
     "expected_dimensions": {
       "type": "string",
       "pattern": "^(length|area|mass|time|volume|currency|temperature|speed|data|data_rate|flow_rate|concentration|acceleration|force|torque|pressure|power|charge|voltage|current|resistance|illuminance|radiation_equivalent_dose|radioactivity)( *, *(length|area|mass|time|volume|currency|temperature|speed|data|data_rate|flow_rate|concentration|acceleration|force|torque|pressure|power|charge|voltage|current|resistance|illuminance|radiation_equivalent_dose|radioactivity))*$",
-      "description": "Optional measurement domains the field accepts, as one name or a comma-separated list such as \"length,area\". This is a hard filter, not a hint: a reading from any other measurement domain is refused with REJECTED_BY_POLICY rather than returned. Readings that carry no dimension at all — a bare number, a date, a recurrence — are not refused. Omit it to accept every dimension; a name that is not on this list is refused rather than ignored."
+      "description": "Optional measurement domains the field accepts, as one name or a comma-separated list such as \"length,area\". This is a hard filter, not a hint: a reading from any other measurement domain is refused with REJECTED_BY_POLICY rather than returned. Readings that carry no dimension at all — a bare number, a date — are not refused. Omit it to accept every dimension; a name that is not on this list is refused rather than ignored."
     },
     "number_format": {
       "type": "string",
@@ -33,9 +33,9 @@ pub(crate) const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
     },
     "purpose": {
       "type": "string",
-      "enum": ["general", "quantity", "number", "date", "recurrence", "dimension_editor"],
+      "enum": ["general", "quantity", "number", "date", "dimension_editor"],
       "default": "general",
-      "description": "Selects the parser grammar. This is a hard filter, not a hint: input the selected grammar does not read is refused with NO_VALUE. quantity, number, date, and recurrence parse exactly as the matching narrow entry point would. dimension_editor is for UI fields that only accept building dimensions; it runs the editor grammar over the whole input and is not equivalent to the parse_dimensions_for_editor extractor, which additionally scans free text for candidates and infers the expected dimension from a neighbouring label."
+      "description": "Selects the parser grammar. This is a hard filter, not a hint: input the selected grammar does not read is refused with NO_VALUE. quantity, number, and date parse exactly as the matching narrow entry point would. dimension_editor is for UI fields that only accept building dimensions; it runs the editor grammar over the whole input and is not equivalent to the parse_dimensions_for_editor extractor, which additionally scans free text for candidates and infers the expected dimension from a neighbouring label."
     },
     "accept": {
       "type": "object",
@@ -92,7 +92,7 @@ pub(crate) const PARSED_OUTPUT_SCHEMA_JSON: &str = r##"{
     "findings": { "$ref": "#/$defs/findings" }
   },
   "$defs": {
-    "kind": { "type": "string", "enum": ["quantity", "date", "range", "number", "recurrence"] },
+    "kind": { "type": "string", "enum": ["quantity", "date", "range", "number"] },
     "dimension": {
       "type": "string",
       "enum": ["length", "area", "mass", "time", "volume", "currency", "temperature", "speed", "data", "data_rate", "flow_rate", "concentration", "acceleration", "force", "torque", "pressure", "power", "charge", "voltage", "current", "resistance", "illuminance", "radiation_equivalent_dose", "radioactivity"]
@@ -117,7 +117,6 @@ pub(crate) const PARSED_OUTPUT_SCHEMA_JSON: &str = r##"{
           ]
         },
         "date": { "type": ["string", "null"], "format": "date" },
-        "recurrence": { "type": ["string", "null"], "description": "RRULE-style recurrence string for recurring expressions." },
         "timezone": { "type": ["string", "null"], "description": "Canonical timezone for timezone-normalized readings." },
         "range": {
           "anyOf": [

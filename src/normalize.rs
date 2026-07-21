@@ -22,7 +22,6 @@ pub(crate) struct InputFeatures {
     pub(crate) maybe_conversion: bool,
     pub(crate) maybe_range: bool,
     pub(crate) maybe_date: bool,
-    pub(crate) maybe_recurrence: bool,
     pub(crate) maybe_suggestion: bool,
     pub(crate) has_slash: bool,
 }
@@ -75,12 +74,6 @@ impl InputFeatures {
                 trimmed,
                 "今日" | "明日" | "昨日" | "一昨日" | "明天" | "昨天" | "前天"
             );
-        let maybe_recurrence = lower.starts_with("every ")
-            || lower.starts_with("monthly")
-            || lower.starts_with("daily")
-            || lower.starts_with("freq=")
-            || trimmed.starts_with("毎")
-            || trimmed.starts_with("每");
         let maybe_clock = lower.contains("am")
             || lower.contains("pm")
             || lower == "noon"
@@ -190,7 +183,6 @@ impl InputFeatures {
             maybe_conversion: lower.contains(" to "),
             maybe_range,
             maybe_date,
-            maybe_recurrence,
             maybe_suggestion: has_ascii_alpha && trimmed.len() <= 160,
             has_slash: trimmed.contains('/'),
         }

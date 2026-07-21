@@ -30,8 +30,6 @@ pub(crate) enum Grammar {
     NumericSlashDate,
     /// `next friday`, `来週金曜日`.
     RelativeDate,
-    /// `every monday`.
-    Recurrence,
     /// `10 ± 3 mm`.
     PlusMinusRange,
     /// `under 5 kg`, `5kg以下`.
@@ -78,20 +76,17 @@ pub(crate) enum Grammar {
     TypoCorrectedQuantity,
     /// A timezone suffix this build cannot resolve — reported, not guessed.
     UnsupportedTimezone,
-    /// A recurrence phrase with no supported RRULE — reported, not guessed.
-    UnsupportedRecurrence,
 }
 
 /// The single definition of the order the grammars are tried in.
 ///
 /// Every entry point walks this slice. None of them keeps an order of its own.
-pub(crate) const GRAMMAR_ORDER: [Grammar; 30] = [
+pub(crate) const GRAMMAR_ORDER: [Grammar; 28] = [
     Grammar::Qualified,
     Grammar::Fuzzy,
     Grammar::SlashDateOrFraction,
     Grammar::NumericSlashDate,
     Grammar::RelativeDate,
-    Grammar::Recurrence,
     Grammar::PlusMinusRange,
     Grammar::UpperBoundRange,
     Grammar::Range,
@@ -115,7 +110,6 @@ pub(crate) const GRAMMAR_ORDER: [Grammar; 30] = [
     Grammar::PlainNumber,
     Grammar::TypoCorrectedQuantity,
     Grammar::UnsupportedTimezone,
-    Grammar::UnsupportedRecurrence,
 ];
 
 /// An entry point, named by the subset of grammars it reads.
@@ -129,20 +123,13 @@ pub(crate) enum Entry {
     Number,
     /// [`parse_date_fast`].
     Date,
-    /// [`parse_recurrence_fast`].
-    Recurrence,
 }
 
 impl Entry {
     /// Every entry point, so a test can enumerate them without a second list.
     #[cfg(test)]
-    pub(crate) const ALL: [Entry; 5] = [
-        Entry::General,
-        Entry::Quantity,
-        Entry::Number,
-        Entry::Date,
-        Entry::Recurrence,
-    ];
+    pub(crate) const ALL: [Entry; 4] =
+        [Entry::General, Entry::Quantity, Entry::Number, Entry::Date];
 
     /// Whether this entry point reads `grammar` at all.
     ///
@@ -173,12 +160,6 @@ impl Entry {
             ),
             Entry::Number => matches!(grammar, Grammar::AmbiguousNumber | Grammar::PlainNumber),
             Entry::Date => matches!(grammar, Grammar::NumericSlashDate | Grammar::RelativeDate),
-            Entry::Recurrence => {
-                matches!(
-                    grammar,
-                    Grammar::Recurrence | Grammar::UnsupportedRecurrence
-                )
-            }
         }
     }
 
@@ -189,7 +170,6 @@ impl Entry {
             Entry::Quantity => "no supported quantity matched",
             Entry::Number => "no supported number matched",
             Entry::Date => "no supported date matched",
-            Entry::Recurrence => "no supported recurrence matched",
         }
     }
 }
@@ -357,7 +337,6 @@ fn try_grammar(
             true
         }
         Grammar::RelativeDate => set_if_read(parse_relative_date(trimmed, ctx), parsed),
-        Grammar::Recurrence => set_if_read(parse_recurrence(trimmed), parsed),
         Grammar::PlusMinusRange => {
             accept_range(parse_plus_minus_range(trimmed, ctx), trimmed, ctx, parsed)
         }
@@ -561,18 +540,6 @@ fn try_grammar(
             ));
             true
         }
-        Grammar::UnsupportedRecurrence => {
-            let Some(recurrence) = unsupported_recurrence_phrase(trimmed) else {
-                return false;
-            };
-            parsed.findings.skipped.push(skipped_with_span(
-                recurrence,
-                "recurring date/time expressions require a recurrence adapter and are not interpreted by the core parser",
-                IssueCode::RecurrenceUnsupported,
-                span_token_in(trimmed, recurrence),
-            ));
-            true
-        }
     }
 }
 
@@ -644,7 +611,6 @@ impl InputFeatures {
             Grammar::Qualified | Grammar::Fuzzy => true,
             Grammar::SlashDateOrFraction => self.has_slash,
             Grammar::NumericSlashDate | Grammar::RelativeDate => self.maybe_date,
-            Grammar::Recurrence | Grammar::UnsupportedRecurrence => self.maybe_recurrence,
             Grammar::PlusMinusRange | Grammar::UpperBoundRange | Grammar::Range => self.maybe_range,
             Grammar::Conversion => self.maybe_conversion,
             Grammar::JapaneseLength => self.maybe_japanese_length,
@@ -673,7 +639,7 @@ mod tests {
 
     /// Inputs chosen to reach as many grammars as possible from every entry
     /// point, including the ones that used to disagree.
-    const CORPUS: [&str; 24] = [
+    const CORPUS: [&str; 23] = [
         "3 m 5 m",
         "1'234",
         "5'11\"",
@@ -694,7 +660,6 @@ mod tests {
         "20°C",
         "$5",
         "1.5 cups",
-        "every monday",
         "next friday",
         "3pm Europe/Paris",
         "meters meters meters",
@@ -706,7 +671,6 @@ mod tests {
             parse_quantity_fast(text, None),
             parse_number_fast(text, None),
             parse_date_fast(text, None),
-            parse_recurrence_fast(text, None),
         ]
     }
 

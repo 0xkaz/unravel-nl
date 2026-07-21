@@ -55,8 +55,6 @@ pub enum IssueCode {
     AmbiguousCurrency,
     /// A timezone was recognized but cannot be resolved in this configuration.
     TimezoneUnsupported,
-    /// A recurrence phrase was recognized but is not expressible as a rule.
-    RecurrenceUnsupported,
     /// A reading was found and then refused by a policy the caller set.
     ///
     /// Two policies emit this, and [`Strictness`] is neither of them — a strict
@@ -117,7 +115,6 @@ impl IssueCode {
             Self::AmbiguousUnit => "AMBIGUOUS_UNIT",
             Self::AmbiguousCurrency => "AMBIGUOUS_CURRENCY",
             Self::TimezoneUnsupported => "TIMEZONE_UNSUPPORTED",
-            Self::RecurrenceUnsupported => "RECURRENCE_UNSUPPORTED",
             Self::RejectedByPolicy => "REJECTED_BY_POLICY",
             Self::Approximation => "APPROXIMATION",
             Self::CompoundOverflow => "COMPOUND_OVERFLOW",
@@ -424,7 +421,6 @@ pub(crate) fn issue_severity(code: IssueCode) -> IssueSeverity {
         | IssueCode::NoValue
         | IssueCode::UnknownUnit
         | IssueCode::TimezoneUnsupported
-        | IssueCode::RecurrenceUnsupported
         | IssueCode::RejectedByPolicy
         | IssueCode::CompoundOverflow
         | IssueCode::TrailingInput => IssueSeverity::Error,
@@ -442,7 +438,6 @@ pub(crate) fn issue_rank(code: IssueCode) -> u16 {
     match code {
         IssueCode::Empty | IssueCode::NoValue => 100,
         IssueCode::TimezoneUnsupported
-        | IssueCode::RecurrenceUnsupported
         | IssueCode::RejectedByPolicy
         | IssueCode::CompoundOverflow
         | IssueCode::TrailingInput => 90,
@@ -744,7 +739,6 @@ mod tests {
             ("about 20kg", strict()),
             ("5 meterz", strict()),
             ("3pm Europe/Paris", ParseCtx::default()),
-            ("every blue moon", ParseCtx::default()),
             ("3 yd 2 ft", no_compounds()),
         ] {
             let parsed = parse(text, Some(ctx));

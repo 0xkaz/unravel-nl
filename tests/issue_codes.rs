@@ -193,18 +193,12 @@ fn unknown_unit_sweep_corpus() -> Vec<String> {
 #[test]
 fn every_issue_code_keeps_its_severity_rank_and_recoverability() {
     // code, severity, rank, recoverable
-    let table: [(IssueCode, IssueSeverity, u16, bool); 15] = [
+    let table: [(IssueCode, IssueSeverity, u16, bool); 14] = [
         (IssueCode::Empty, IssueSeverity::Error, 100, false),
         (IssueCode::NoValue, IssueSeverity::Error, 100, false),
         (IssueCode::UnknownUnit, IssueSeverity::Error, 80, true),
         (
             IssueCode::TimezoneUnsupported,
-            IssueSeverity::Error,
-            90,
-            true,
-        ),
-        (
-            IssueCode::RecurrenceUnsupported,
             IssueSeverity::Error,
             90,
             true,
@@ -284,7 +278,6 @@ fn pinned_classification(code: IssueCode) -> (IssueSeverity, u16, bool) {
         IssueCode::NoValue => (IssueSeverity::Error, 100, false),
         IssueCode::UnknownUnit => (IssueSeverity::Error, 80, true),
         IssueCode::TimezoneUnsupported => (IssueSeverity::Error, 90, true),
-        IssueCode::RecurrenceUnsupported => (IssueSeverity::Error, 90, true),
         IssueCode::RejectedByPolicy => (IssueSeverity::Error, 90, true),
         IssueCode::TypoCorrected => (IssueSeverity::Warning, 65, true),
         IssueCode::AmbiguousNumber => (IssueSeverity::Warning, 55, true),

@@ -832,7 +832,6 @@ mod tests {
         assert!(parsed_output_schema_json().contains("\"findings\""));
         assert!(parsed_output_schema_json().contains("\"currency\""));
         assert!(parsed_output_schema_json().contains("\"temperature\""));
-        assert!(parsed_output_schema_json().contains("\"recurrence\""));
         assert!(parsed_output_schema_json().contains("\"timezone\""));
         assert!(mcp_tool_schema_json().contains("unravel_nl_parse"));
         assert!(mcp_tool_schema_json().contains("inputSchema"));

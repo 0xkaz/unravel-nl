@@ -410,21 +410,6 @@ pub(crate) fn is_iana_timezone_name(text: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '+'))
 }
 
-pub(crate) fn unsupported_recurrence_phrase(text: &str) -> Option<&str> {
-    let trimmed = text.trim();
-    let lowered = trimmed.to_ascii_lowercase();
-    if let Some(rest) = lowered.strip_prefix("every ")
-        && !rest.trim().is_empty()
-    {
-        return trimmed.get(.."every".len());
-    }
-    if trimmed.starts_with("毎週") || trimmed.starts_with("毎日") || trimmed.starts_with("毎月")
-    {
-        return trimmed.get(.."毎".len());
-    }
-    None
-}
-
 pub(crate) fn parse_clock_seconds(text: &str) -> Option<f64> {
     if let Some(seconds) = parse_japanese_clock_seconds(text) {
         return Some(seconds);

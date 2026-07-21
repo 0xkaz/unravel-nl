@@ -1,6 +1,6 @@
 export type LocaleTag = "ja" | "en" | "en-US" | "en-GB" | string;
 
-export type ReadingKind = "quantity" | "date" | "range" | "number" | "recurrence";
+export type ReadingKind = "quantity" | "date" | "range" | "number";
 
 export type Dimension =
   | "length"
@@ -42,7 +42,7 @@ export interface ParseContext {
    */
   expected_dimensions?: Dimension | `${Dimension},${string}` | null;
   number_format?: "auto" | "comma_decimal" | "dot_decimal";
-  purpose?: "general" | "quantity" | "number" | "date" | "recurrence" | "dimension_editor";
+  purpose?: "general" | "quantity" | "number" | "date" | "dimension_editor";
   strictness?: "forgiving" | "confirm" | "strict";
 }
 
@@ -53,7 +53,6 @@ export interface Reading {
   unit?: string | null;
   dimension?: Dimension | null;
   date?: string | null;
-  recurrence?: string | null;
   timezone?: string | null;
   range?: { from: Reading; to: Reading } | null;
   provenance?: string | null;
@@ -163,16 +162,6 @@ export function createUnravelReactAdapter(
   useUnravelValue(initialValue?: string, options?: { ctx?: ParseContext }): unknown;
   UnravelInput(props: Record<string, unknown>): unknown;
 };
-
-export function defineUnravelElement(
-  parser: Parser,
-  options?: {
-    ctx?: ParseContext;
-    customElements?: CustomElementRegistry;
-    HTMLElement?: typeof HTMLElement;
-    tagName?: string;
-  },
-): CustomElementConstructor | null;
 
 export function rankIssues(parsed: Parsed | null | undefined): Issue[];
 

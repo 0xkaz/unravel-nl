@@ -56,7 +56,6 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
         ParsePurpose::Quantity => parse_quantity_fast_into(trimmed, &ctx, &mut parsed),
         ParsePurpose::Number => parse_number_fast_into(trimmed, &ctx, &mut parsed),
         ParsePurpose::Date => parse_date_fast_into(trimmed, &ctx, &mut parsed),
-        ParsePurpose::Recurrence => parse_recurrence_fast_into(trimmed, &mut parsed),
         ParsePurpose::DimensionEditor => {
             // The refusal it reports is already on `parsed`; only the editor
             // extractor needs the answer as a value. There is no neighbouring
@@ -75,7 +74,7 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     parsed
 }
 
-/// Parses `text` as a measurement, skipping date and recurrence grammars.
+/// Parses `text` as a measurement, skipping the date grammars.
 ///
 /// [`ParseCtx::expected_dimensions`] is a hard filter here. A non-empty set
 /// refuses any reading from a measurement domain outside it: `5 kg` under
@@ -166,44 +165,6 @@ pub(crate) fn parse_number_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
     }
     parse_number_fast_into(trimmed, ctx, &mut parsed);
     enforce_expected_dimensions(trimmed, ctx, &mut parsed);
-    retarget_findings_to_input(&mut parsed);
-    parsed
-}
-
-/// Parses `text` as a repeating schedule, canonicalized to an RRULE string.
-///
-/// The rule lands in [`Reading::recurrence`]. Phrases that are recognized as
-/// recurrences but cannot be expressed as a supported rule are reported as
-/// [`IssueCode::RecurrenceUnsupported`] instead of being approximated.
-///
-/// [`ParseCtx::expected_dimensions`] is enforced here as everywhere else, and
-/// as with a date it never bites: a schedule has no measurement domain, so no
-/// declared set can refuse one.
-///
-/// ```
-/// use unravel_nl::{parse_recurrence_fast, Kind};
-///
-/// let parsed = parse_recurrence_fast("every monday", None);
-/// let best = parsed.best.unwrap();
-///
-/// assert_eq!(best.kind, Kind::Recurrence);
-/// assert_eq!(best.recurrence.as_deref(), Some("FREQ=WEEKLY;BYDAY=MO"));
-/// ```
-pub fn parse_recurrence_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
-    let ctx = ctx.unwrap_or_default();
-    let normalized_input = normalize_input_cow(text);
-    let trimmed = normalized_input.trim();
-    let mut parsed = parsed_shell(text, &ctx);
-    if trimmed.is_empty() {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "empty input"));
-        retarget_findings_to_input(&mut parsed);
-        return parsed;
-    }
-    parse_recurrence_fast_into(trimmed, &mut parsed);
-    enforce_expected_dimensions(trimmed, &ctx, &mut parsed);
     retarget_findings_to_input(&mut parsed);
     parsed
 }
@@ -376,16 +337,6 @@ pub(crate) fn parse_date_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut P
         PlainNumberSink::Contextual,
         trimmed,
         ctx,
-        parsed,
-    );
-}
-
-pub(crate) fn parse_recurrence_fast_into(trimmed: &str, parsed: &mut Parsed) {
-    dispatch(
-        Entry::Recurrence,
-        PlainNumberSink::Contextual,
-        trimmed,
-        &ParseCtx::default(),
         parsed,
     );
 }
@@ -649,7 +600,7 @@ pub(crate) fn range_is_descending(reading: &Reading) -> bool {
 ///
 /// Three rules, each of which the field documentation states:
 ///
-/// - A reading with **no** dimension — a bare number, a date, a recurrence — is
+/// - A reading with **no** dimension — a bare number, a date — is
 ///   never refused. It has no measurement domain to be outside of, and the
 ///   collisions this exists to remove were all unit against unit.
 /// - A [`Kind::Range`] is judged by its endpoints, which is where a range keeps

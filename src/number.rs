@@ -597,6 +597,11 @@ pub(crate) fn cjk_digit(ch: char) -> Option<i64> {
     }
 }
 
+// Only the calendar grammars read a bare whole number as an `i64`; the
+// recurrence grammar was the other caller, and it is gone. Without
+// `dates-jiff` there is nothing left to call this, so the gate keeps a default
+// build from carrying a function no configuration of it can reach.
+#[cfg(feature = "dates-jiff")]
 pub(crate) fn parse_whole_i64(text: &str) -> Option<i64> {
     if text.is_empty() || !text.chars().all(|ch| ch.is_ascii_digit()) {
         return None;

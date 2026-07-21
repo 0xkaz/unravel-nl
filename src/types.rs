@@ -64,8 +64,6 @@ pub enum Kind {
     Range,
     /// A unitless number.
     Number,
-    /// A recurring schedule.
-    Recurrence,
 }
 
 /// Identifies the dimension associated with a quantity.
@@ -394,8 +392,6 @@ pub enum ParsePurpose {
     Number,
     /// Date-oriented parsing.
     Date,
-    /// Recurrence-oriented parsing.
-    Recurrence,
     /// Parsing restricted to dimensions accepted by an editor field.
     DimensionEditor,
 }
@@ -408,7 +404,6 @@ impl ParsePurpose {
             Self::Quantity => "quantity",
             Self::Number => "number",
             Self::Date => "date",
-            Self::Recurrence => "recurrence",
             Self::DimensionEditor => "dimension_editor",
         }
     }
@@ -532,12 +527,12 @@ pub struct ParseCtx {
     /// Expected top-level reading kind. This does **not** constrain parsing.
     ///
     /// [`parse`] ignores it when choosing a grammar: `parse("5 kg", ..)` with
-    /// `expect: Some(Kind::Date)` or `Some(Kind::Recurrence)` still returns the
-    /// `5 kg` quantity. Only two places read it:
+    /// `expect: Some(Kind::Date)` still returns the `5 kg` quantity. Only two
+    /// places read it:
     ///
     /// - [`complete`] and [`complete_readings`] filter candidates by it, so
     ///   `Some(Kind::Date)` keeps date completions only and
-    ///   `Some(Kind::Number)` or `Some(Kind::Recurrence)` drops every candidate.
+    ///   `Some(Kind::Number)` drops every candidate.
     /// - A bare number parsed with `Some(Kind::Quantity)` gains a millimetre
     ///   length alternative and a [`IssueCode::UnitAssumed`] ambiguity.
     ///
@@ -548,7 +543,7 @@ pub struct ParseCtx {
     ///
     /// The empty set — the default — places no restriction. A non-empty set
     /// binds on every entry point: [`parse`], [`parse_quantity_fast`],
-    /// [`parse_number_fast`], [`parse_date_fast`], [`parse_recurrence_fast`],
+    /// [`parse_number_fast`], [`parse_date_fast`],
     /// [`parse_dimensions_for_editor`], [`complete`],
     /// [`complete_readings`], and [`canonicalize_values`]. A reading whose
     /// dimension is outside the set never comes back as [`Parsed::best`]; it is
@@ -563,7 +558,7 @@ pub struct ParseCtx {
     /// itself carries no dimension.
     ///
     /// **Readings that have no dimension at all are not refused.** A bare
-    /// number, a date, and a recurrence have no measurement domain, so they
+    /// number and a date have no measurement domain, so they
     /// cannot collide with one; restricting the domains a unit may come from
     /// says nothing about whether the field may hold `3640`. This is what lets
     /// [`parse_number_fast`] stay useful under a restriction.
@@ -600,11 +595,11 @@ pub struct ParseCtx {
     /// `purpose: ParsePurpose::Quantity` both return `best: None` and report
     /// [`IssueCode::NoValue`].
     ///
-    /// For the four whole-string purposes this is exactly the corresponding
+    /// For the three whole-string purposes this is exactly the corresponding
     /// narrow entry point: [`ParsePurpose::Quantity`] is
     /// [`parse_quantity_fast`], [`ParsePurpose::Number`] is
-    /// [`parse_number_fast`], [`ParsePurpose::Date`] is [`parse_date_fast`],
-    /// and [`ParsePurpose::Recurrence`] is [`parse_recurrence_fast`].
+    /// [`parse_number_fast`], and [`ParsePurpose::Date`] is
+    /// [`parse_date_fast`].
     ///
     /// [`ParsePurpose::DimensionEditor`] is the exception, and is **not**
     /// equivalent to [`parse_dimensions_for_editor`]. That function is an
@@ -833,8 +828,6 @@ pub struct Reading {
     pub dimension: Option<Dimension>,
     /// ISO-formatted date for a date reading.
     pub date: Option<String>,
-    /// RRULE-style value for a recurrence reading.
-    pub recurrence: Option<String>,
     /// Canonical timezone associated with a timezone-normalized reading.
     pub timezone: Option<String>,
     /// Endpoints for a range reading.
@@ -864,7 +857,6 @@ impl Reading {
             unit: Some(unit.to_owned()),
             dimension: Some(dimension),
             date: None,
-            recurrence: None,
             timezone: None,
             range: None,
             provenance: Some(provenance),
@@ -882,7 +874,6 @@ impl Reading {
             unit: None,
             dimension: None,
             date: None,
-            recurrence: None,
             timezone: None,
             range: None,
             provenance: None,
@@ -900,7 +891,6 @@ impl Reading {
             unit: None,
             dimension: None,
             date: Some(date.iso()),
-            recurrence: None,
             timezone: None,
             range: None,
             provenance: None,
@@ -918,27 +908,8 @@ impl Reading {
             unit: None,
             dimension: None,
             date: None,
-            recurrence: None,
             timezone: None,
             range: Some(Box::new(RangeReading { from, to })),
-            provenance: None,
-            approximate: Some(false),
-            confidence: Some(confidence),
-        }
-    }
-
-    /// Creates a recurrence reading from an RRULE-style string.
-    pub fn recurrence(rrule: &str, confidence: f64) -> Self {
-        Self {
-            kind: Kind::Recurrence,
-            custom_kind: None,
-            value: None,
-            unit: None,
-            dimension: None,
-            date: None,
-            recurrence: Some(rrule.to_owned()),
-            timezone: None,
-            range: None,
             provenance: None,
             approximate: Some(false),
             confidence: Some(confidence),
@@ -1131,10 +1102,6 @@ mod tests {
             with_purpose(ParsePurpose::Date)("2026-05-06"),
             parse_date_fast("2026-05-06", None)
         );
-        assert_eq!(
-            with_purpose(ParsePurpose::Recurrence)("every monday"),
-            parse_recurrence_fast("every monday", None)
-        );
     }
 
     /// `ParsePurpose::DimensionEditor` is *not* `parse_dimensions_for_editor`.
@@ -1251,7 +1218,7 @@ mod tests {
     /// `ParseCtx::expect` does not constrain which grammar `parse` runs.
     #[test]
     fn expect_does_not_constrain_parsing() {
-        for kind in [Kind::Date, Kind::Recurrence, Kind::Number, Kind::Range] {
+        for kind in [Kind::Date, Kind::Number, Kind::Range] {
             let parsed = parse(
                 "5 kg",
                 Some(ParseCtx {
@@ -1295,10 +1262,9 @@ mod tests {
                 .all(|candidate| candidate.kind == CompletionKind::Date)
         );
 
-        // `Number` and `Recurrence` drop every candidate.
+        // `Number` drops every candidate.
         assert!(!complete("me", None).is_empty());
         assert!(expecting(Kind::Number)("me").is_empty());
-        assert!(expecting(Kind::Recurrence)("me").is_empty());
 
         assert!(parse("42", None).alternatives.is_empty());
         let parsed = parse(

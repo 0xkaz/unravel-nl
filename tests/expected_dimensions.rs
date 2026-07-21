@@ -15,7 +15,7 @@
 use unravel_nl::{
     CanonicalizeRequest, Dimension, DimensionSet, IssueCode, Kind, Locale, ParseCtx, Parsed,
     canonicalize_values, complete, complete_readings, parse, parse_date_fast,
-    parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast, parse_recurrence_fast,
+    parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
 };
 
 fn assert_close(actual: f64, expected: f64) {
@@ -154,7 +154,6 @@ fn every_entry_point_enforces_the_declared_domains() {
     for parsed in [
         parse_number_fast(input, dimensions.clone()),
         parse_date_fast(input, dimensions.clone()),
-        parse_recurrence_fast(input, dimensions.clone()),
     ] {
         assert!(parsed.best.is_none());
         assert_eq!(rejection(&parsed), None);
@@ -189,15 +188,7 @@ fn every_entry_point_enforces_the_declared_domains() {
 /// An empty set is exactly the absence of the field, everywhere.
 #[test]
 fn an_empty_set_is_no_restriction_at_all() {
-    for input in [
-        "5 mM",
-        "5 W",
-        "5 mA",
-        "5 m3",
-        "5 kg",
-        "3640",
-        "every monday",
-    ] {
+    for input in ["5 mM", "5 W", "5 mA", "5 m3", "5 kg", "3640"] {
         let empty = Some(ParseCtx::default());
         assert_eq!(parse(input, empty.clone()), parse(input, None), "{input}");
         assert_eq!(
@@ -215,7 +206,7 @@ fn an_empty_set_is_no_restriction_at_all() {
 
 /// A reading with no measurement domain is not refused by one.
 ///
-/// A bare number, a date, and a schedule have no dimension to be outside the
+/// A bare number and a date have no dimension to be outside the
 /// declared set, and refusing them would say something the declaration does not
 /// say. It is also what keeps `parse_number_fast` usable in a dimensioned
 /// field, and what keeps a labelled bare number readable by the editor.
@@ -230,13 +221,6 @@ fn dimensionless_readings_survive_a_declared_set() {
     assert_eq!(rejection(&number), None);
     // Length among the declared domains is what offers the millimetre reading.
     assert_eq!(number.alternatives[0].unit.as_deref(), Some("mm"));
-
-    let recurrence = parse_recurrence_fast("every monday", dimensions.clone());
-    assert_eq!(
-        recurrence.best.as_ref().expect("a rule").kind,
-        Kind::Recurrence
-    );
-    assert_eq!(rejection(&recurrence), None);
 
     let broad = parse("3640", ctx(&[Dimension::Area]));
     assert_eq!(broad.best.as_ref().expect("a number").kind, Kind::Number);

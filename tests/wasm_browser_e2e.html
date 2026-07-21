@@ -60,11 +60,9 @@
         if (strictApproximation.issues[0].code !== "APPROXIMATION") {
           throw new Error("strict approximation issue missing");
         }
-        if (
-          recurrence.best.recurrence !==
-          "FREQ=MONTHLY;BYSETPOS=3;BYDAY=MO,TU,WE,TH,FR"
-        ) {
-          throw new Error("business recurrence parse failed");
+        // No recurrence surface: the phrase is refused, not canonicalized.
+        if (recurrence.best !== null || recurrence.issues[0].code !== "NO_VALUE") {
+          throw new Error("recurrence phrase was not refused loudly");
         }
         if (failure.issues[0].code !== "TIMEZONE_UNSUPPORTED") {
           throw new Error("timezone failure metadata missing");
@@ -77,7 +75,7 @@
           plainLength,
           editorDimensions,
           strictApproximation,
-          recurrence: recurrence.best,
+          recurrence: recurrence.issues[0],
           issue: failure.issues[0],
         });
       } catch (error) {

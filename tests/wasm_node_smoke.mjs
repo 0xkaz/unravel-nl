@@ -12,12 +12,14 @@ assert.equal(length.best.kind, "quantity");
 assert.equal(length.best.unit, "m");
 assert.equal(length.best.dimension, "length");
 
+// There is no recurrence surface. `every third business day` used to come back
+// as an RRULE string; it now comes back refused, over the same findings channel
+// any other unreadable input uses. The removal is only honest if it is loud.
 const recurrence = JSON.parse(parse_json("every third business day"));
-assert.equal(recurrence.ok, true);
-assert.equal(
-  recurrence.best.recurrence,
-  "FREQ=MONTHLY;BYSETPOS=3;BYDAY=MO,TU,WE,TH,FR",
-);
+assert.equal(recurrence.ok, false);
+assert.equal(recurrence.best, null);
+assert.equal(recurrence.issues[0].code, "NO_VALUE");
+assert.equal(recurrence.best?.recurrence, undefined);
 
 const unsupportedTimezone = JSON.parse(parse_json("3pm Europe/Paris"));
 assert.equal(unsupportedTimezone.ok, false);

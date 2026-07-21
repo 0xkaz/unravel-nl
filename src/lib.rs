@@ -20,8 +20,7 @@
 //! # Choosing an entry point
 //!
 //! [`parse`] is the broad entry point: use it when the input could be any of a
-//! quantity, date, time, range, recurrence, conversion request, or plain
-//! number. Every other entry point is narrower, and narrower is better whenever
+//! quantity, date, time, range, conversion request, or plain number. Every other entry point is narrower, and narrower is better whenever
 //! the caller already knows what the field holds — a dedicated entry point does
 //! less grammar dispatch, so it is faster and, more importantly, it cannot
 //! misread the input as some other kind of value. A date field parsed with
@@ -33,7 +32,6 @@
 //! | [`parse_quantity_fast`] | The field holds a measurement. |
 //! | [`parse_number_fast`] | The field holds a bare number. |
 //! | [`parse_date_fast`] | The field holds a date. |
-//! | [`parse_recurrence_fast`] | The field holds a repeating schedule. |
 //! | [`parse_dimensions_for_editor`] | Free text where only lengths and areas count. |
 //!
 //! # Reading the result
@@ -108,7 +106,6 @@ mod json_out;
 mod normalize;
 mod number;
 mod quantity;
-mod recurrence;
 mod scan;
 mod schema;
 mod suggest;
@@ -131,7 +128,6 @@ pub(crate) use duration::*;
 pub(crate) use entry::*;
 pub use entry::{
     parse, parse_date_fast, parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
-    parse_recurrence_fast,
 };
 pub(crate) use findings::*;
 pub use findings::{
@@ -144,7 +140,6 @@ pub(crate) use json_out::*;
 pub(crate) use normalize::*;
 pub(crate) use number::*;
 pub(crate) use quantity::*;
-pub(crate) use recurrence::*;
 pub(crate) use scan::*;
 pub(crate) use schema::*;
 pub(crate) use suggest::*;

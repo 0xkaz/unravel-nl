@@ -17,7 +17,7 @@ strictness)` for building-dimension-only editor scans.
 The `expected_dimension` argument is a hard filter, not a hint: a reading from
 any other measurement domain is refused with `REJECTED_BY_POLICY` instead of
 being returned. Readings that carry no dimension at all — a bare number, a
-date, a recurrence — are not refused by it. Several domains are written as a
+date — are not refused by it. Several domains are written as a
 comma-separated list (`"length,area"`); an empty string accepts every domain,
 and an unrecognized name is dropped without taking the rest of the list with
 it. If *every* name in the tag is unrecognized — a bare `"lenght"` — the call
@@ -68,5 +68,5 @@ open http://127.0.0.1:8765/tests/wasm_browser_e2e.html
 ```
 
 The page loads `pkg/unravel_nl.js`, initializes the `.wasm` module, parses a
-Japanese length, room dimension extraction, a business-day recurrence, and an
+Japanese length, room dimension extraction, a refused recurrence phrase, and an
 unsupported timezone case, then writes a JSON status object into `#status`.

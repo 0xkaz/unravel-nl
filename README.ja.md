@@ -26,7 +26,6 @@
 - 全角・互換文字の正規化（`５尺３寸`、`１．５ｍ`、`２㎞`、`百二十平米`）
 - 長さ・質量・面積・時間・体積・速度・データ量・圧力・電力・照度など多数の単位
 - 期間・時刻・スロット（`1h30`、`PT1H30M`、`3pm`、`14:30`、`3pm-4pm`）
-- 繰り返し表現（`every monday`、`毎週月曜日`、`毎月第2月曜日`）を RRULE 形式へ正規化
 - 近似・公差・上下限（`約20kg`、`10 ± 0.5 mm`、`10mm以下`、`a few minutes`）
 - 通貨（`USD 12.34`、`¥1,234`、曖昧な `$12`）
 - 温度（`20°C`、`68 F`、`摂氏20度`）
@@ -79,14 +78,13 @@ assert_eq!(
 
 ### エントリポイントの使い分け
 
-`parse()` は総合入口です。入力が数量・日付・範囲・繰り返し・単位換算・素の数値の
+`parse()` は総合入口です。入力が数量・日付・範囲・単位換算・素の数値の
 どれになるか分からない場合に使います。UI 側でフィールドの型が既に分かっている場合は、
 より狭い入口を使うと速く、誤検出も減ります。
 
 - `parse_quantity_fast()` — 数量のみ
 - `parse_number_fast()` — 素の数値のみ
 - `parse_date_fast()` — 日付のみ
-- `parse_recurrence_fast()` — 繰り返し表現のみ
 - `parse_dimensions_for_editor()` — 寸法・面積のみを対象とするエディタ向けスキャナ（バイトスパン付き）
 - `complete_readings()` — 補完 UI 向けの順位付き候補
 
@@ -170,8 +168,44 @@ node tests/wasm_node_smoke.mjs
 ```
 
 `web/unravel-adapters.js` に、依存ゼロの ESM アダプタ（DOM 入力、スパン保持の
-`parseAllForUi()`、React 連携、カスタム要素ラッパ）が入っています。TypeScript
-型定義は `web/unravel-adapters.d.ts` です。詳細は [docs/wasm.md](docs/wasm.md)。
+`parseAllForUi()`、フィールド一括の `canonicalizeFieldsForUi()`、React 連携）が
+入っています。TypeScript 型定義は `web/unravel-adapters.d.ts` で、両者の export
+一覧を突き合わせるテストがあるため型定義が実装から遅れることはありません。詳細は
+[docs/wasm.md](docs/wasm.md)。
+
+カスタム要素（Web Component）は**提供していません**。`defineUnravelElement()` も
+`<unravel-input>` もなく、追加する予定もありません。これはこのファイルの export の
+うち、**リポジトリ内のどこからも呼ばれていない唯一のもの**でした。テストからも例からも
+他のアダプタからも呼ばれておらず、定義行だけが存在していました。テストされていない
+`createUnravelFieldController()` のラッパは機能ではなく、同じ機能への2つ目の入口に
+すぎません。残したのは実際にテストで叩かれている側です。カスタム要素が必要な場合は
+`createUnravelFieldController()` の上に十数行で書けます。そのとき、タグ名・レジストリ・
+Shadow DOM をどうするかという登録ポリシーは、このクレートがテストしていない既定値を
+受け継ぐのではなく、呼び出し側が自分で決めることになります。
+
+### 繰り返し表現
+
+繰り返し表現の入口は**ありません**。`parse_recurrence_fast()` も `Kind::Recurrence` も
+`Reading::recurrence` も `ParsePurpose::Recurrence` もなく、追加する予定もありません。
+`every monday`、`毎週月曜`、`every third business day`、生の `FREQ=…` 文字列はいずれも
+読み取りません。これらは `best: None` と `IssueCode::NoValue` の finding を伴って返ります。
+読めないものが黙って消えるのではなく、他の読めない入力とまったく同じ経路で理由が出ます。
+
+削除の理由は 2 つあり、どちらもコードではなく API 表面の話です。第一に、このクレートが
+API 形状の参照元としている `pascalorg/lingo` は、繰り返し表現の公開 API を**一切
+記載していません**。root の README にも `packages/lingo` の README にも `recurrence` /
+`RRULE` / `every …` に相当する記述は 1 件もありません（固定 commit
+`8507914c476026afbbc2f4f9fe84b31f2713c6a2` で実測）。つまりこの入口は独自拡張であり、
+外部の契約に対して責任を負っていませんでした。第二に、その表面自身が「何を返さないか」を
+言い切れていませんでした。`IssueCode::RecurrenceUnsupported` ——「文法としては繰り返し
+表現だと認識したが、規則として表現できない」ことを認めるためだけに存在するコード —— を
+持っていたことが、境界が決まっていなかった証拠です。繰り返しスケジュールは RFC 5545 と
+いう実在の仕様を持つカレンダー領域の問題であり、値パーサに RRULE の部分集合を後付けした
+ものはその仕様ではありません。必要とする呼び出し側は、仕様を実装したライブラリを使う方が
+適切です。
+
+日付・時刻・期間・時刻スロットは別の問題であり、影響を受けません。`3pm-4pm`、`1h30`、
+`PT1H30M`、`明日`、`来週金曜日` は従来どおり読み取れます。
 
 ## 開発
 

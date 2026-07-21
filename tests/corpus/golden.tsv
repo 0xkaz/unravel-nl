@@ -169,16 +169,6 @@ under 10 minutes	en	range	time	s			0	600
 14 megabecquerels	en	quantity	radioactivity	Bq	14000000
 3pm EST	en	quantity	time	s	72000
 9:30 JST	en	quantity	time	s	1800
-every 2 weeks	en	recurrence
-monthly on the 15th	en	recurrence
-毎月15日	ja	recurrence
-every other monday	en	recurrence
-monthly on the second monday	en	recurrence
-every month on the last friday	en	recurrence
-毎月第2月曜日	ja	recurrence
-every third business day	en	recurrence
-monthly on the last business day	en	recurrence
-毎月第3営業日	ja	recurrence
 2 kilogramo	es	quantity	mass	kg	2
 3 quilogramas	pt	quantity	mass	kg	3
 4 千克	zh	quantity	mass	kg	4
