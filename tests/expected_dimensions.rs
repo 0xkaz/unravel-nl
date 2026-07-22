@@ -100,20 +100,17 @@ fn cross_domain_collisions_are_refused_under_a_length_field() {
     }
 }
 
-/// Written closed up, two of the four have a competing *length* reading, and
-/// declaring lengths is what promotes it.
+/// Written closed up, `5m3` has a competing *length* reading, and declaring
+/// lengths is what promotes it.
 ///
-/// `5mA` is the registry's milliamp and also `5 m` + `1 cm`-style compound;
 /// `5m3` is the cubic metre and also the `1m80` height idiom. The registry unit
 /// leads when nothing is declared; under a length field the compound is the
 /// only reading left, so it is promoted rather than refused along with the one
-/// the field cannot hold.
+/// the field cannot hold. `5mA` has no compound reading: `A` is a unit symbol,
+/// not a written lower-place count.
 #[test]
 fn an_in_domain_alternative_is_promoted_rather_than_refused_with_the_rest() {
-    for (input, metres, refused) in [
-        ("5mA", 5.01, Dimension::Current),
-        ("5m3", 5.03, Dimension::Volume),
-    ] {
+    for (input, metres, refused) in [("5m3", 5.03, Dimension::Volume)] {
         for parsed in [
             parse(input, ctx(&[Dimension::Length])),
             parse_quantity_fast(input, ctx(&[Dimension::Length])),
@@ -132,6 +129,15 @@ fn an_in_domain_alternative_is_promoted_rather_than_refused_with_the_rest() {
                 "{input}"
             );
         }
+    }
+
+    for parsed in [
+        parse("5mA", ctx(&[Dimension::Length])),
+        parse_quantity_fast("5mA", ctx(&[Dimension::Length])),
+    ] {
+        assert!(parsed.best.is_none());
+        assert_eq!(parsed.alternatives.len(), 1);
+        assert_eq!(parsed.alternatives[0].dimension, Some(Dimension::Current));
     }
 }
 
@@ -556,7 +562,7 @@ fn a_promoted_compound_is_described_as_the_reading_it_became() {
             .expect("an ambiguity")
     };
 
-    for (input, metres) in [("5m3", 5.03), ("5mA", 5.01), ("5ft2", 1.5748)] {
+    for (input, metres) in [("5m3", 5.03), ("5ft2", 1.5748)] {
         // Undeclared, the registry unit is read, and the finding says so.
         let free = parse(input, None);
         assert_ne!(free.best.as_ref().expect(input).unit.as_deref(), Some("m"));

@@ -50,7 +50,7 @@ unravel-nl = "0.1"
 
 | フィーチャー | 既定 | 内容 |
 | --- | --- | --- |
-| _(なし)_ | 有効 | コアのパースと humanize。I/O なし・実行時依存なし。 |
+| _(なし)_ | 有効 | コアのパースと、ゴールデン corpus 全件で往復検証する humanize。I/O なし・実行時依存なし。 |
 | `dates-jiff` | 無効 | `jiff` によるカレンダー演算と相対日付（`next friday`、`来週金曜日`）。 |
 | `timezones-jiff` | 無効 | IANA タイムゾーン対応。ただし解決には明示的な `reference_date` が必須です（日付なしにゾーンのオフセットは定まらないため）。指定がなければ `3pm Europe/Paris` は既定ビルドと同じく `IssueCode::TimezoneUnsupported` として報告され、`best` は `None` になります。`dates-jiff` を含みます。 |
 | `wasm` | 無効 | ブラウザ / Node 向けの `wasm-bindgen` エクスポート。詳細は [docs/wasm.md](docs/wasm.md)。 |

@@ -103,30 +103,15 @@ pub fn repair_tool_call_message(field: &str, text: &str, ctx: Option<ParseCtx>) 
 }
 
 pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
-    let (code, reason, ref_text) = parsed
-        .findings
-        .skipped
-        .first()
-        .map(|issue| (issue.code, issue.reason.as_str(), issue.ref_text.as_str()))
-        .or_else(|| {
-            parsed
-                .findings
-                .ambiguities
-                .first()
-                .map(|issue| (issue.code, issue.reason.as_str(), issue.ref_text.as_str()))
-        })
-        .or_else(|| {
-            parsed
-                .findings
-                .approximations
-                .first()
-                .map(|issue| (issue.code, issue.reason.as_str(), issue.ref_text.as_str()))
-        })
-        .unwrap_or((
+    let ranked = ranked_findings(parsed);
+    let (code, reason, ref_text) = ranked.first().map_or(
+        (
             IssueCode::NoValue,
             "no supported reading matched",
             parsed.input.as_str(),
-        ));
+        ),
+        |issue| (issue.code, issue.reason.as_str(), issue.ref_text.as_str()),
+    );
     let suggestion = parsed
         .suggestions
         .first()
@@ -149,8 +134,9 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
 /// [`Locale::Ja`] tatami or tsubo area (`6帖 (approx.)`) — and by nothing else.
 /// Every other rendering prints the number bare however the reading was
 /// obtained: `parse("5尺3寸", ..)` yields a reading with
-/// `approximate: Some(true)`, yet it humanizes to `1.606061 m` under both no
-/// locale and [`Locale::En`]; `1.5 cups` humanizes to `0.354882 L` and
+/// `approximate: Some(true)`, yet it humanizes to `1.606060606060606 m` under
+/// both no locale and [`Locale::En`]; `1.5 cups` humanizes to
+/// `0.35488235474999996 L` and
 /// `about 20kg` to `20 kg` even under [`Locale::Ja`]. Callers that need to know
 /// must read [`Reading::approximate`] rather than inspect this string. The same
 /// applies to [`ResourceView::summary`], which is this function called with no
@@ -202,22 +188,30 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
         (_, Kind::Quantity, Some(number), Some(unit))
             if value.dimension == Some(Dimension::Currency) =>
         {
-            format!("{unit} {}", format_number(number))
+            format!("{unit} {}", format_number_exact(number))
+        }
+        // `C` is also the temperature grammar's Celsius spelling. Humanize
+        // charge with an unambiguous registry alias so its own output does not
+        // change dimensions when fed back to the broad parser.
+        (_, Kind::Quantity, Some(number), Some("C"))
+            if value.dimension == Some(Dimension::Charge) =>
+        {
+            format!("{} coulombs", format_number_exact(number))
         }
         (Some(Locale::Ja), Kind::Quantity, Some(number), Some("C"))
             if value.dimension == Some(Dimension::Temperature) =>
         {
-            format!("摂氏{}度", format_number(number))
+            format!("摂氏{}度", format_number_exact(number))
         }
         (_, Kind::Quantity, Some(number), Some("C"))
             if value.dimension == Some(Dimension::Temperature) =>
         {
-            format!("{} °C", format_number(number))
+            format!("{} °C", format_number_exact(number))
         }
         (_, Kind::Quantity, Some(number), Some(unit)) => {
-            format!("{} {}", format_number(number), unit)
+            format!("{} {}", format_number_exact(number), unit)
         }
-        (_, Kind::Number, Some(number), _) => format_number(number),
+        (_, Kind::Number, Some(number), _) => format_number_exact(number),
         (_, Kind::Date, _, _) => value
             .date
             .clone()
@@ -252,10 +246,9 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
 /// the reading is left out of the machine-readable view.
 ///
 /// `value` is written at full precision, as the shortest decimal that reads
-/// back as the same `f64`: this list is what a tool layer acts on, so it must
-/// not lose data the way a display rendering may. The six-decimal rounding
-/// belongs to [`ResourceView::summary`], which is the human-readable
-/// [`humanize`] line and is locale-independent here.
+/// back as the same `f64`. [`ResourceView::summary`] uses the same lossless
+/// number rendering through [`humanize`], so either representation can safely
+/// be parsed back without changing a canonical value.
 pub fn describe_reading(reading: &Reading) -> ResourceView {
     let object = match reading.kind {
         Kind::Quantity => "unravel.quantity",
@@ -324,8 +317,8 @@ fn push_reading_fields(fields: &mut Vec<ResourceField>, prefix: &str, reading: &
 /// Flattens a whole parse, including finding counts, into a field list.
 ///
 /// Unlike [`describe_reading`], this reports the outcome as well as the value:
-/// the `ok` field is `true` only when a reading was found and nothing was
-/// skipped, and the finding counts show how much the parser had to guess.
+/// the `ok` field uses the same [`accepts`] decision as every other adapter,
+/// and the finding counts show how much the parser had to guess.
 pub fn describe_parsed(parsed: &Parsed) -> ResourceView {
     let mut fields = Vec::new();
     push_resource_field(&mut fields, "input", &parsed.input);
@@ -335,11 +328,7 @@ pub fn describe_parsed(parsed: &Parsed) -> ResourceView {
     push_resource_field(
         &mut fields,
         "ok",
-        if parsed.best.is_some() && parsed.findings.skipped.is_empty() {
-            "true"
-        } else {
-            "false"
-        },
+        if accepts(parsed) { "true" } else { "false" },
     );
     push_resource_field(
         &mut fields,
@@ -438,7 +427,7 @@ pub(crate) fn humanize_japanese_length(meters: f64) -> String {
             )
         }
     } else {
-        format!("{} m", format_number(meters))
+        format!("{} m", format_number_exact(meters))
     }
 }
 
@@ -451,7 +440,7 @@ pub(crate) fn humanize_japanese_area(area: f64) -> String {
     if (tsubo - tsubo.round()).abs() < 0.02 {
         return format!("{}坪 (approx.)", format_number(tsubo.round()));
     }
-    format!("{} m2", format_number(area))
+    format!("{} m2", format_number_exact(area))
 }
 
 /// Rendered in place of a value that has no finite decimal representation.
@@ -560,7 +549,7 @@ mod tests {
 
         let shaku = ja("5尺3寸");
         assert_eq!(shaku.approximate, Some(true));
-        assert_eq!(humanize(&shaku, None), "1.606061 m");
+        assert_eq!(humanize(&shaku, None), "1.606060606060606 m");
         assert_eq!(
             humanize(
                 &shaku,
@@ -568,9 +557,9 @@ mod tests {
                     locale: Some(Locale::En)
                 })
             ),
-            "1.606061 m"
+            "1.606060606060606 m"
         );
-        assert_eq!(describe_reading(&shaku).summary, "1.606061 m");
+        assert_eq!(describe_reading(&shaku).summary, "1.606060606060606 m");
 
         // The two renderings that do mark it.
         assert_eq!(
@@ -595,7 +584,10 @@ mod tests {
 
         // Approximate readings that are not Japanese length or area render bare
         // even under `Locale::Ja`.
-        for (text, rendered) in [("1.5 cups", "0.354882 L"), ("about 20kg", "20 kg")] {
+        for (text, rendered) in [
+            ("1.5 cups", "0.35488235474999996 L"),
+            ("about 20kg", "20 kg"),
+        ] {
             let reading = parse(text, None).best.expect("a reading");
             assert_eq!(reading.approximate, Some(true), "{text}");
             assert_eq!(
@@ -645,10 +637,9 @@ mod tests {
         assert_eq!(humanize(&reading, None), NON_FINITE_TEXT);
     }
 
-    /// The field list is the machine-readable side of this adapter, so it must
-    /// not lose data to the six-decimal display rounding the way the summary
-    /// does: `0.0000001 m` used to describe its value as `0`, and `2 cups` as
-    /// `0.473176` for a reading holding `0.473176473`.
+    /// The field list and summary both preserve the canonical value. Before
+    /// humanize became lossless, `0.0000001 m` described itself as `0 m` and
+    /// `2 cups` as `0.473176 L` for a reading holding `0.473176473`.
     #[test]
     fn describes_values_at_full_precision() {
         let tiny = parse("0.0000001 m", None).best.expect("quantity");
@@ -661,13 +652,12 @@ mod tests {
                 .expect("round trip"),
             tiny.value.expect("value")
         );
-        // The summary stays the human-readable `humanize` line.
-        assert_eq!(view.summary, "0 m");
+        assert_eq!(view.summary, "0.0000001 m");
 
         let cups = parse("2 cups", None).best.expect("quantity");
         let view = describe_reading(&cups);
         assert_eq!(field(&view, "value").as_deref(), Some("0.473176473"));
-        assert_eq!(view.summary, "0.473176 L");
+        assert_eq!(view.summary, "0.473176473 L");
 
         // No finite value may reach the field list as an exponent form.
         for value in [f64::MIN_POSITIVE, 5e-324, f64::MAX, -f64::MAX, 1e20, -0.0] {

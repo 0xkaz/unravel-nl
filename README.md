@@ -42,7 +42,7 @@ The first slice focuses on:
 - Approximate, tolerance, and bounded input such as `about 20C`, `約20kg`,
   `10 ± 0.5 mm`, `a few minutes`, `under 10 minutes`, `10mm以下`, and
   temperature phrases like `it's hot`
-- Golden corpus and round-trip tests for representative canonical readings,
+- Golden corpus and round-trip tests for every maintained canonical reading,
   including common examples from public natural-language parsing behavior
 - Locale alias slices for en-GB, Spanish, French, Portuguese, Chinese, and
   Japanese inputs such as `1,5 litros`, `2 mètres carrés`, `10 quilômetros`,

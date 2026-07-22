@@ -470,9 +470,15 @@ pub(crate) fn closed_compound_alternative(text: &str) -> Option<Reading> {
 /// asymmetry punished writing the unit down. Neither reads now: a sign puts the
 /// text outside the idiom, and it has to find another reading or none.
 pub(crate) fn unsigned_lower_place(text: &str) -> bool {
-    !text
-        .chars()
-        .any(|ch| matches!(ch, '-' | '+' | '−' | '－' | '＋' | '–' | '—' | '‐' | '±'))
+    let mut saw_digit = false;
+    text.chars().all(|ch| {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            true
+        } else {
+            matches!(ch, '.' | ',' | '_')
+        }
+    }) && saw_digit
 }
 
 /// The shape of the metres-and-centimetres idiom: a `m` with something on each
@@ -813,6 +819,43 @@ mod tests {
         assert!(confirm.best.is_none());
         assert_eq!(confirm.suggestions[0].to, "m2");
         assert_eq!(confirm.findings.skipped[0].code, IssueCode::TypoCorrected);
+    }
+
+    #[test]
+    fn one_non_ascii_mark_is_never_promoted_to_a_unit_typo() {
+        for input in ["5 €", "5 💡", "5 米"] {
+            let parsed = parse(input, None);
+            if input.ends_with('米') {
+                assert_eq!(
+                    parsed.best.as_ref().and_then(|best| best.unit.as_deref()),
+                    Some("m")
+                );
+            } else {
+                assert!(parsed.best.is_none(), "{input}: {:?}", parsed.best);
+                assert!(
+                    parsed.suggestions.is_empty(),
+                    "{input}: {:?}",
+                    parsed.suggestions
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_number_word_is_not_a_hidden_compound_place() {
+        let parsed = parse("5mA", None);
+        let best = parsed.best.as_ref().expect("milliamp reading");
+        assert_eq!(best.unit.as_deref(), Some("A"));
+        assert_eq!(best.dimension, Some(Dimension::Current));
+        assert!(parsed.alternatives.is_empty());
+
+        // The natural-language number remains supported where it is actually
+        // a separate number phrase rather than a suffix split guessed by the
+        // compound-height idiom.
+        assert_eq!(
+            parse_number_fast("a", None).best.and_then(|r| r.value),
+            Some(1.0)
+        );
     }
 
     #[test]

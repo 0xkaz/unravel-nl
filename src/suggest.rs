@@ -52,7 +52,12 @@ pub(crate) fn suggest_unit(token: &str) -> Option<Suggestion> {
 }
 
 pub(crate) fn suggest_non_ascii_unit(token: &str) -> Option<Suggestion> {
-    if token.is_ascii() || token.chars().count() > 8 {
+    let token_len = token.chars().count();
+    // A one-character typo has no useful evidence: every unrelated symbol is
+    // one edit away from every one-character unit. Accepting it made `5 €`
+    // a suggested metre because `米` is an alias. Keep typo correction for
+    // words such as `平目`, but do not manufacture a unit from one mark.
+    if token.is_ascii() || !(2..=8).contains(&token_len) {
         return None;
     }
     let mut best: Option<(&'static str, usize, usize)> = None;
@@ -62,7 +67,7 @@ pub(crate) fn suggest_non_ascii_unit(token: &str) -> Option<Suggestion> {
                 continue;
             }
             let alias_len = alias.chars().count();
-            if token.chars().count().abs_diff(alias_len) > 2 {
+            if token_len.abs_diff(alias_len) > 2 {
                 continue;
             }
             let distance = levenshtein_chars(token, alias);
@@ -74,7 +79,7 @@ pub(crate) fn suggest_non_ascii_unit(token: &str) -> Option<Suggestion> {
         }
     }
     best.map(|(to, distance, alias_len)| {
-        let max_len = token.chars().count().max(alias_len) as f64;
+        let max_len = token_len.max(alias_len) as f64;
         Suggestion {
             from: token.to_owned(),
             to: to.to_owned(),

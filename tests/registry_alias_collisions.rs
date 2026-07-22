@@ -231,10 +231,9 @@ fn case_sensitive_aliases_keep_their_own_reading() {
         ("5 mM", 5.0, "mol/m3", Dimension::Concentration, 0),
         ("5mM", 5.0, "mol/m3", Dimension::Concentration, 0),
         ("5 mA", 0.005, "A", Dimension::Current, 0),
-        // Written closed up, `5mA` has the shape of the compound idiom, and
-        // `a` reads as one: the 5.01 m reading is reported as the alternative
-        // both entry points already agreed on, not dropped.
-        ("5mA", 0.005, "A", Dimension::Current, 1),
+        // A unit symbol is not a lower-place count. Reading `A` as the number
+        // word `a = 1` invented a centimetre that was never written.
+        ("5mA", 0.005, "A", Dimension::Current, 0),
         // The lowercase neighbours these collide with are unchanged.
         ("5 mm", 0.005, "m", Dimension::Length, 0),
         ("5mm", 0.005, "m", Dimension::Length, 0),

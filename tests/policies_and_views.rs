@@ -281,6 +281,25 @@ fn describe_views_expose_stable_resource_fields() {
 }
 
 #[test]
+fn described_ok_uses_the_public_acceptance_rule() {
+    let parsed = parse(
+        "2 cups",
+        Some(ParseCtx {
+            strictness: unravel_nl::Strictness::Confirm,
+            ..ParseCtx::default()
+        }),
+    );
+    assert!(parsed.best.is_some());
+    let view = describe_parsed(&parsed);
+    assert!(!unravel_nl::accepts(&parsed));
+    assert!(
+        view.fields
+            .iter()
+            .any(|field| field.name == "ok" && field.value == "false")
+    );
+}
+
+#[test]
 fn prefix_completion_api_remains_available() {
     let completions = unravel_nl::complete("10 met", None);
     assert_eq!(completions[0].kind, CompletionKind::Unit);
