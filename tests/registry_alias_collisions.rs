@@ -258,20 +258,8 @@ fn case_sensitive_aliases_keep_their_own_reading() {
 /// reach the same reading through different grammars and rank it differently,
 /// which is a known and separate matter.
 ///
-/// Two inputs are knowingly excluded, both of which disagreed the same way
-/// before any of the guards existed:
-///
-/// * `5 ''` and `5''` — `parse` reads the registry's inch, the fast dispatch
-///   reads five feet, because the feet-and-inches grammar treats the doubled
-///   quote as an empty inches part and so never reaches the registry guard.
-/// * `5 w` and `5w` — the fast dispatch reads five weeks and `parse` reads
-///   nothing at all, because `InputFeatures::maybe_duration` does not list a
-///   bare `w`. The registry has no lowercase `w`, so this is a gate gap and not
-///   an alias collision.
 #[test]
 fn every_registry_alias_reads_the_same_through_both_entry_points() {
-    const KNOWN_DISAGREEMENTS: [&str; 4] = ["5 ''", "5''", "5 w", "5w"];
-
     let mut checked = 0_usize;
     let mut disagreements = Vec::new();
     for unit in unravel_nl::unit_definitions() {
@@ -292,9 +280,6 @@ fn every_registry_alias_reads_the_same_through_both_entry_points() {
                 capitalized,
             ] {
                 for input in [format!("5 {variant}"), format!("5{variant}")] {
-                    if KNOWN_DISAGREEMENTS.contains(&input.as_str()) {
-                        continue;
-                    }
                     checked += 1;
                     let broad = reading_of(&parse(&input, None));
                     let fast = reading_of(&parse_quantity_fast(&input, None));
@@ -313,4 +298,14 @@ fn every_registry_alias_reads_the_same_through_both_entry_points() {
     );
     // The registry is not empty and the sweep really ran over it.
     assert!(checked > 2_000, "only {checked} inputs swept");
+}
+
+#[test]
+fn compact_week_alias_reaches_both_quantity_entry_points() {
+    for input in ["5 w", "5w"] {
+        let broad = reading_of(&parse(input, None));
+        let fast = reading_of(&parse_quantity_fast(input, None));
+        assert_eq!(broad, fast, "{input:?}");
+        assert_eq!(broad.map(|reading| reading.0), Some(5.0 * 7.0 * 86_400.0));
+    }
 }

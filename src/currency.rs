@@ -101,6 +101,12 @@ pub(crate) fn feet_inches_reading(lowered: &str) -> Option<(Reading, bool)> {
         .find("ft")
         .or_else(|| lowered.find("feet"))
         .or_else(|| lowered.find('\''))?;
+    // Two apostrophes are a declared inch alias, not an empty inches part
+    // following a foot mark. Let the registry own that spelling instead of
+    // guessing five feet through this compound grammar.
+    if lowered[ft_pos..].starts_with("''") {
+        return None;
+    }
     let feet = parse_number(lowered[..ft_pos].trim())?;
     let rest = lowered[ft_pos..]
         .trim_start_matches("feet")

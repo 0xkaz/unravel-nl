@@ -122,7 +122,7 @@ impl InputFeatures {
             || lower.contains("an hour")
             || (has_number
                 && [
-                    "h", "hr", "hrs", "m", "min", "mins", "s", "sec", "secs", "d",
+                    "h", "hr", "hrs", "m", "min", "mins", "s", "sec", "secs", "d", "w",
                 ]
                 .iter()
                 .any(|unit| lower.contains(unit)))
