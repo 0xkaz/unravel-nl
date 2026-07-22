@@ -169,7 +169,9 @@ node tests/wasm_node_smoke.mjs
 
 `web/unravel-adapters.js` に、依存ゼロの ESM アダプタ（DOM 入力、スパン保持の
 `parseAllForUi()`、フィールド一括の `canonicalizeFieldsForUi()`、React 連携）が
-入っています。TypeScript 型定義は `web/unravel-adapters.d.ts` で、両者の export
+入っています。注入する parser は core の `ok` と rank 済み `issues` を返す必要があり、
+アダプタ側で受理判定や issue 分類を再実装しません。TypeScript 型定義は
+`web/unravel-adapters.d.ts` で、両者の export
 一覧を突き合わせるテストがあるため型定義が実装から遅れることはありません。詳細は
 [docs/wasm.md](docs/wasm.md)。
 

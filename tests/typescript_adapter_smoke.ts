@@ -4,6 +4,7 @@ import { parseAllForUi, parseForUi } from "../web/unravel-adapters.js";
 const dimension: Dimension = "length";
 
 const parser: Parser = () => ({
+  ok: true,
   best: {
     kind: "quantity",
     value: 3,
@@ -23,6 +24,7 @@ const scanner: Scanner = () => [
     charEnd: 2,
     text: "3m",
     parsed: {
+      ok: true,
       best: {
         kind: "quantity",
         value: 3,

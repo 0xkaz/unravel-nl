@@ -418,6 +418,51 @@ pub(crate) fn parse_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     Some(Reading::range(from, to, 0.94))
 }
 
+#[cfg(test)]
+mod range_approximation_tests {
+    use super::*;
+
+    #[test]
+    fn a_range_inherits_approximation_from_either_endpoint() {
+        let exact = Reading::quantity(
+            1.0,
+            "m",
+            Dimension::Length,
+            Provenance::SiMultiple,
+            false,
+            1.0,
+        );
+        let approximate = Reading::quantity(
+            2.0,
+            "m",
+            Dimension::Length,
+            Provenance::TradeCustom,
+            true,
+            0.8,
+        );
+
+        assert_eq!(
+            Reading::range(exact.clone(), approximate.clone(), 0.8).approximate,
+            Some(true)
+        );
+        assert_eq!(
+            Reading::range(approximate, exact, 0.8).approximate,
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn parsed_range_does_not_hide_an_approximate_endpoint() {
+        let parsed = parse("3 months to 2 years", None);
+        let range = parsed.best.expect("range");
+        assert_eq!(range.kind, Kind::Range);
+        assert_eq!(range.approximate, Some(true));
+        let endpoints = range.range.expect("endpoints");
+        assert_eq!(endpoints.from.approximate, Some(true));
+        assert_eq!(endpoints.to.approximate, Some(true));
+    }
+}
+
 /// Reports the reading question a range endpoint carries in its own right.
 ///
 /// [`parse_range`] reduces each endpoint to a single [`Reading`] through

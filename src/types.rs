@@ -901,6 +901,7 @@ impl Reading {
 
     /// Creates a range reading from two endpoint readings.
     pub fn range(from: Reading, to: Reading, confidence: f64) -> Self {
+        let approximate = from.approximate.unwrap_or(false) || to.approximate.unwrap_or(false);
         Self {
             kind: Kind::Range,
             custom_kind: None,
@@ -911,7 +912,7 @@ impl Reading {
             timezone: None,
             range: Some(Box::new(RangeReading { from, to })),
             provenance: None,
-            approximate: Some(false),
+            approximate: Some(approximate),
             confidence: Some(confidence),
         }
     }

@@ -12,24 +12,25 @@ import {
 } from "../web/unravel-adapters.js";
 
 const cleanParsed = {
+  ok: true,
   best: { kind: "quantity", value: 1.8, unit: "m" },
-  findings: { skipped: [], ambiguities: [], approximations: [] },
+  issues: [],
 };
 
 const timezoneParsed = {
+  ok: false,
   best: null,
-  findings: {
-    skipped: [
-      {
-        code: "TIMEZONE_UNSUPPORTED",
-        ref_text: "Europe/Paris",
-        reason: "timezone policy required",
-        span: { start: 4, end: 16, text: "Europe/Paris" },
-      },
-    ],
-    ambiguities: [],
-    approximations: [],
-  },
+  issues: [
+    {
+      code: "TIMEZONE_UNSUPPORTED",
+      severity: "error",
+      rank: 90,
+      recoverable: true,
+      ref_text: "Europe/Paris",
+      reason: "timezone policy required",
+      span: { start: 4, end: 16, text: "Europe/Paris" },
+    },
+  ],
 };
 
 assert.equal(parseForUi(() => cleanParsed, "180cm").ok, true);
@@ -65,35 +66,28 @@ element.dispatch("input");
 assert.equal(calls, 2);
 
 const issues = rankIssues({
-  findings: {
-    skipped: [{ code: "APPROXIMATION", ref_text: "about", reason: "approx", span: {} }],
-    ambiguities: [{ code: "AMBIGUOUS_UNIT", ref_text: "cup", reason: "unit", span: {} }],
-    approximations: [],
-  },
+  ok: true,
+  issues: [
+    { code: "AMBIGUOUS_UNIT", severity: "warning", rank: 55, recoverable: true, ref_text: "cup" },
+    { code: "APPROXIMATION", severity: "warning", rank: 30, recoverable: true, ref_text: "about" },
+  ],
 });
 assert.deepEqual(
   issues.map((issue) => issue.code),
   ["AMBIGUOUS_UNIT", "APPROXIMATION"],
 );
 
-// The adapter classifies codes itself rather than trusting the envelope, so
-// every code the core can emit has to be listed here too. A code this file has
-// never heard of falls through to warning/10, which is how COMPOUND_OVERFLOW
-// and TRAILING_INPUT — both errors the core ranks at 90 — would silently sort
-// below an approximation in a UI.
-for (const code of ["COMPOUND_OVERFLOW", "TRAILING_INPUT"]) {
-  const [issue] = rankIssues({
-    findings: {
-      skipped: [{ code, ref_text: "x", reason: "pinned", span: {} }],
-      ambiguities: [],
-      approximations: [],
-    },
-  });
-  assert.equal(issue.code, code);
-  assert.equal(issue.severity, "error", code);
-  assert.equal(issue.rank, 90, code);
-  assert.equal(issue.recoverable, true, code);
-}
+// Metadata is owned by the core envelope. Unknown codes retain the metadata
+// the core supplied instead of falling through a second JavaScript table.
+assert.deepEqual(
+  rankIssues({
+    ok: false,
+    issues: [
+      { code: "FUTURE_CODE", severity: "error", rank: 77, recoverable: false, ref_text: "x" },
+    ],
+  })[0],
+  { code: "FUTURE_CODE", severity: "error", rank: 77, recoverable: false, ref_text: "x" },
+);
 
 const parsedMatches = parseAllForUi(
   () =>
@@ -103,7 +97,7 @@ const parsedMatches = parseAllForUi(
         start: 3,
         end: 5,
         text: "4m",
-        parsed: { best: { kind: "quantity", value: 4, unit: "m" }, issues: [] },
+        parsed: { ok: true, best: { kind: "quantity", value: 4, unit: "m" }, issues: [] },
       },
     ]),
   "3m×4m",
@@ -147,19 +141,19 @@ const values = canonicalizeValuesForUi(
         ok: false,
         canonical: null,
         parsed: {
+          ok: false,
           best: { kind: "number", value: 3640 },
-          findings: {
-            skipped: [],
-            ambiguities: [
-              {
-                code: "UNIT_ASSUMED",
-                ref_text: "3640",
-                reason: "unitless",
-                span: { start: 0, end: 4, text: "3640" },
-              },
-            ],
-            approximations: [],
-          },
+          issues: [
+            {
+              code: "UNIT_ASSUMED",
+              severity: "info",
+              rank: 40,
+              recoverable: true,
+              ref_text: "3640",
+              reason: "unitless",
+              span: { start: 0, end: 4, text: "3640" },
+            },
+          ],
         },
       },
     ]),
@@ -167,10 +161,8 @@ const values = canonicalizeValuesForUi(
 );
 assert.equal(values[0].issues[0].code, "UNIT_ASSUMED");
 
-// The core breaks a rank tie with `String::cmp` (UTF-8 bytes, i.e. code points).
-// `localeCompare` disagreed with that on plain ASCII — it puts "a" before "B" —
-// so the adapter and the Rust envelope could disagree about which issue is
-// issues[0], which is the one a UI surfaces.
+// The core has already ranked the envelope. The adapter preserves that exact
+// order instead of maintaining a second sorting implementation.
 {
   const issue = (rank, refText) => ({
     code: "AMBIGUOUS_NUMBER",
@@ -182,18 +174,14 @@ assert.equal(values[0].issues[0].code, "UNIT_ASSUMED");
     span: { start: 0, end: 1, text: refText },
   });
 
-  const ranked = rankIssues({
-    issues: [issue(55, "a"), issue(55, "B"), issue(55, "\uff11"), issue(55, "Z")],
-  });
+  const coreOrder = [issue(55, "B"), issue(55, "Z"), issue(55, "a"), issue(55, "\uff11")];
+  const ranked = rankIssues({ ok: true, issues: coreOrder });
   assert.deepEqual(
     ranked.map((entry) => entry.ref_text),
     ["B", "Z", "a", "\uff11"],
-    "equal ranks must break the tie by code point, as String::cmp does",
+    "the adapter must preserve the core's tie-break",
   );
-
-  // Rank still dominates the tie-break.
-  const byRank = rankIssues({ issues: [issue(30, "a"), issue(90, "z")] });
-  assert.deepEqual(byRank.map((entry) => entry.rank), [90, 30]);
+  assert.equal(ranked, coreOrder, "ranked issues should not be copied and re-sorted");
 }
 
 
@@ -228,31 +216,11 @@ for (const decided of [true, false]) {
   assert.equal(canonicalizeFieldsForUi(() => fromCore, [{ field: "w", text: "1,234" }])[0].ok, decided);
 }
 
-// A result the core never decided still goes through the one fallback, and the
-// fallback can only be stricter: a skipped fragment blocks, and so does any
-// finding once a strictness above `forgiving` is declared.
+// A result the core never decided is outside the adapter contract and is never
+// accepted. The adapter does not maintain a second acceptance policy.
 assert.equal(acceptsParsed(cleanParsed), true);
 assert.equal(acceptsParsed(timezoneParsed), false);
-assert.equal(
-  acceptsParsed({
-    best: { kind: "number", value: 1234 },
-    strictness: "confirm",
-    findings: {
-      skipped: [],
-      ambiguities: [
-        {
-          code: "AMBIGUOUS_NUMBER",
-          ref_text: "1,234",
-          reason: "grouping",
-          span: { start: 0, end: 5, text: "1,234" },
-        },
-      ],
-      approximations: [],
-    },
-  }),
-  false,
-);
-assert.equal(acceptsParsed({ best: null, findings: { skipped: [], ambiguities: [], approximations: [] } }), false);
+assert.equal(acceptsParsed({ best: { kind: "number", value: 1234 }, issues: [] }), false);
 
 function mockElement(value) {
   const listeners = new Map();

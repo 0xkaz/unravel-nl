@@ -295,7 +295,10 @@ Browser-facing adapters live in `web/unravel-adapters.js`. They are dependency
 free ESM helpers for DOM inputs, span-preserving `parseAllForUi()`, field-list
 `canonicalizeFieldsForUi()`, canonicalizer-result normalization, and React
 integration by injection; parser functions are injected so the same code can sit
-on top of a WASM bundle or a server bridge. TypeScript definitions live in
+on top of a WASM bundle or a server bridge. An injected parser must return the
+core summary envelope with `ok` and fully ranked `issues`; the adapter does not
+guess acceptance or duplicate the Rust issue catalog for hand-built objects.
+TypeScript definitions live in
 `web/unravel-adapters.d.ts`, and a test compares the two export lists so the
 declarations cannot fall behind the module. The React adapter is covered by an
 actual React server-render runtime smoke test under

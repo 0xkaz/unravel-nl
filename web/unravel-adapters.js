@@ -6,7 +6,7 @@ export function parseForUi(parser, text, ctx = undefined) {
   const best = parsed && parsed.best ? parsed.best : null;
 
   return {
-    ok: acceptsParsed(parsed, issues),
+    ok: acceptsParsed(parsed),
     parsed,
     best,
     issues,
@@ -25,7 +25,7 @@ export function parseAllForUi(parser, text, ctx = undefined) {
     const parsed = match.parsed || match;
     const issues = rankIssues(parsed);
     const best = parsed && parsed.best ? parsed.best : null;
-    const ok = acceptsParsed(parsed, issues);
+    const ok = acceptsParsed(parsed);
     return {
       ...match,
       ok,
@@ -176,140 +176,21 @@ export function createUnravelReactAdapter(React, parser) {
 }
 
 /**
- * Orders two reference texts the way the Rust core does.
- *
- * The core breaks a rank tie with `String::cmp`, which compares UTF-8 bytes and
- * therefore code points. `localeCompare` does not: it puts `"a"` before `"B"`
- * where the core puts `"B"` first, so the two sides disagreed on which issue is
- * `issues[0]` — and that is the one a UI shows.
- */
-function compareRefText(left, right) {
-  const a = Array.from(String(left ?? ""));
-  const b = Array.from(String(right ?? ""));
-  const shared = Math.min(a.length, b.length);
-  for (let index = 0; index < shared; index += 1) {
-    const diff = a[index].codePointAt(0) - b[index].codePointAt(0);
-    if (diff !== 0) {
-      return diff < 0 ? -1 : 1;
-    }
-  }
-  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
-}
-
-/**
  * Whether a parse is acceptable.
  *
  * The Rust core owns this decision — `accepts` in `findings.rs` — and puts the
- * answer in `ok` on every result it serializes, so that answer is used whenever
- * it is present. This module deliberately does not re-derive it: deriving it
+ * answer in `ok` on every result it serializes. This module deliberately does
+ * not re-derive it: deriving it
  * here from `error` severity alone, with no view of the strictness, is what made
  * a `confirm` field show green on an ambiguity the Rust adapter had refused.
- *
- * The remaining branch is only for a caller that hands in a hand-built result
- * the core never decided. It applies the same rule the core states — a skipped
- * fragment blocks, and so does any finding once a strictness above `forgiving`
- * is declared — and it can only ever be stricter, never more permissive.
+ * A hand-built object without the core's decision is therefore not accepted.
  */
-export function acceptsParsed(parsed, issues = rankIssues(parsed)) {
-  if (parsed && typeof parsed.ok === "boolean") {
-    return parsed.ok;
-  }
-  const findings = (parsed && parsed.findings) || {};
-  if ((findings.skipped || []).length > 0) {
-    return false;
-  }
-  if (issues.some((issue) => issue.severity === "error")) {
-    return false;
-  }
-  const strictness = parsed && parsed.strictness;
-  if (strictness && strictness !== "forgiving" && issues.length > 0) {
-    return false;
-  }
-  return Boolean(parsed && parsed.best);
+export function acceptsParsed(parsed) {
+  return Boolean(parsed && parsed.ok === true);
 }
 
 export function rankIssues(parsed) {
-  if (parsed && Array.isArray(parsed.issues)) {
-    return parsed.issues
-      .map((issue) => ({
-        code: issue.code,
-        severity: issue.severity ?? issueSeverity(issue.code),
-        rank: issue.rank ?? issueRank(issue.code),
-        recoverable: issue.recoverable ?? issueRecoverable(issue.code),
-        ref_text: issue.ref_text,
-        reason: issue.reason,
-        span: issue.span,
-      }))
-      .sort((a, b) => b.rank - a.rank || compareRefText(a.ref_text, b.ref_text));
-  }
-  const findings = (parsed && parsed.findings) || {};
-  const issues = [
-    ...mapIssues(findings.skipped || []),
-    ...mapIssues(findings.ambiguities || []),
-    ...mapIssues(findings.approximations || []),
-  ];
-  return issues.sort((a, b) => b.rank - a.rank || compareRefText(a.ref_text, b.ref_text));
-}
-
-function mapIssues(issues) {
-  return issues.map((issue) => ({
-    code: issue.code,
-    severity: issueSeverity(issue.code),
-    rank: issueRank(issue.code),
-    recoverable: issueRecoverable(issue.code),
-    ref_text: issue.ref_text,
-    reason: issue.reason,
-    span: issue.span,
-  }));
-}
-
-function issueSeverity(code) {
-  switch (code) {
-    case "EMPTY":
-    case "NO_VALUE":
-    case "UNKNOWN_UNIT":
-    case "TIMEZONE_UNSUPPORTED":
-    case "REJECTED_BY_POLICY":
-    case "COMPOUND_OVERFLOW":
-    case "TRAILING_INPUT":
-      return "error";
-    case "UNIT_ASSUMED":
-      return "info";
-    default:
-      return "warning";
-  }
-}
-
-function issueRank(code) {
-  switch (code) {
-    case "EMPTY":
-    case "NO_VALUE":
-      return 100;
-    case "TIMEZONE_UNSUPPORTED":
-    case "REJECTED_BY_POLICY":
-    case "COMPOUND_OVERFLOW":
-    case "TRAILING_INPUT":
-      return 90;
-    case "UNKNOWN_UNIT":
-      return 80;
-    case "TYPO_CORRECTED":
-      return 65;
-    case "AMBIGUOUS_NUMBER":
-    case "AMBIGUOUS_DATE":
-    case "AMBIGUOUS_UNIT":
-    case "AMBIGUOUS_CURRENCY":
-      return 55;
-    case "UNIT_ASSUMED":
-      return 40;
-    case "APPROXIMATION":
-      return 30;
-    default:
-      return 10;
-  }
-}
-
-function issueRecoverable(code) {
-  return code !== "EMPTY" && code !== "NO_VALUE";
+  return parsed && Array.isArray(parsed.issues) ? parsed.issues : [];
 }
 
 function setDatasetValue(element, key, value) {

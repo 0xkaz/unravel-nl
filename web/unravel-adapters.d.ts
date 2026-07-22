@@ -71,13 +71,13 @@ export interface Issue {
 }
 
 export interface Parsed {
+  ok: boolean;
   input?: string;
   locale?: LocaleTag | null;
   best?: Reading | null;
   alternatives?: Reading[];
   suggestions?: Array<{ from: string; to: string; score?: number | null }>;
-  findings?: Record<string, unknown>;
-  issues?: Issue[];
+  issues: Issue[];
 }
 
 export interface ParseState {
@@ -166,11 +166,7 @@ export function createUnravelReactAdapter(
 export function rankIssues(parsed: Parsed | null | undefined): Issue[];
 
 /**
- * Whether a parse is acceptable. The Rust side decides: when `parsed.ok` is
- * present it is returned unchanged, so a field cannot show green on something
- * the core refused. The fallback exists only for a hand-built result.
+ * Whether a parse is acceptable. The Rust side decides through `parsed.ok`;
+ * a hand-built result without that decision is outside this adapter contract.
  */
-export function acceptsParsed(
-  parsed: Parsed | null | undefined,
-  issues?: Issue[],
-): boolean;
+export function acceptsParsed(parsed: Parsed | null | undefined): boolean;

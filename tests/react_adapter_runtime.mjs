@@ -4,24 +4,25 @@ import { renderToString } from "../web/node_modules/react-dom/server.node.js";
 import { createUnravelReactAdapter } from "../web/unravel-adapters.js";
 
 const cleanParsed = {
+  ok: true,
   best: { kind: "quantity", value: 1.8, unit: "m" },
-  findings: { skipped: [], ambiguities: [], approximations: [] },
+  issues: [],
 };
 
 const timezoneParsed = {
+  ok: false,
   best: null,
-  findings: {
-    skipped: [
-      {
-        code: "TIMEZONE_UNSUPPORTED",
-        ref_text: "Europe/Paris",
-        reason: "timezone policy required",
-        span: { start: 4, end: 16, text: "Europe/Paris" },
-      },
-    ],
-    ambiguities: [],
-    approximations: [],
-  },
+  issues: [
+    {
+      code: "TIMEZONE_UNSUPPORTED",
+      severity: "error",
+      rank: 90,
+      recoverable: true,
+      ref_text: "Europe/Paris",
+      reason: "timezone policy required",
+      span: { start: 4, end: 16, text: "Europe/Paris" },
+    },
+  ],
 };
 
 const parser = (text) => (text.includes("Europe/Paris") ? timezoneParsed : cleanParsed);

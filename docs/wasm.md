@@ -38,6 +38,9 @@ summary. The Rust core uses byte spans; browser adapters should use `codeUnitSta
 The browser adapter files are `web/unravel-adapters.js` and
 `web/unravel-adapters.d.ts`. A Method A browser artifact should include those
 adapter files plus the generated `pkg/` web target and a checksum manifest.
+Injected parsers must return the core summary envelope (`ok` and ranked
+`issues` included). The adapter intentionally does not classify raw findings or
+decide acceptance for hand-built objects.
 
 ## Artifact Size
 
