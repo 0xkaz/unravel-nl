@@ -41,6 +41,12 @@ export interface ParseContext {
    * name is recognized refuses the call rather than lifting the filter.
    */
   expected_dimensions?: Dimension | `${Dimension},${string}` | null;
+  /**
+   * Built-in measurement domains present in the parser vocabulary. Excluded
+   * domains do not enter grammar dispatch, lookup, typo correction, or
+   * completion. The empty string explicitly loads no measurement units.
+   */
+  registry_dimensions?: Dimension | `${Dimension},${string}` | "" | null;
   number_format?: "auto" | "comma_decimal" | "dot_decimal";
   purpose?: "general" | "quantity" | "number" | "date" | "dimension_editor";
   strictness?: "forgiving" | "confirm" | "strict";

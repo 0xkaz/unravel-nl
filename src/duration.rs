@@ -13,14 +13,15 @@ use crate::*;
 /// Tokens the registry also reads as time are deliberately left alone: `5 h`,
 /// `5 d`, `5 s` and `5 min` mean the same thing either way, so there is nothing
 /// to decide and no reason to move them onto a different grammar.
-fn registry_unit_outranks_duration(text: &str) -> bool {
+fn registry_unit_outranks_duration(text: &str, ctx: &ParseCtx) -> bool {
     split_number_unit(text.trim()).is_some_and(|(_, unit_text)| {
-        unit_by_alias(unit_text).is_some_and(|unit| unit.dimension != Dimension::Time)
+        unit_by_alias_in(unit_text, ctx.unit_registry)
+            .is_some_and(|unit| unit.dimension != Dimension::Time)
     })
 }
 
-pub(crate) fn parse_duration(text: &str) -> Option<Reading> {
-    if registry_unit_outranks_duration(text) {
+pub(crate) fn parse_duration(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    if registry_unit_outranks_duration(text, ctx) {
         return None;
     }
     let stripped = text.trim().to_ascii_lowercase();

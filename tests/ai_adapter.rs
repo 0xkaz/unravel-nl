@@ -1,5 +1,5 @@
 use unravel_nl::{
-    CanonicalizeRequest, Dimension, DimensionSet, IssueCode, ParseCtx, Strictness,
+    CanonicalizeRequest, Dimension, DimensionSet, IssueCode, ParseCtx, Parser, Strictness,
     canonicalize_values, ranked_findings, repair_tool_call_message,
 };
 
@@ -9,7 +9,7 @@ fn repair_messages_name_the_highest_ranked_finding() {
         let request = CanonicalizeRequest::new(
             "value",
             input,
-            Some(ParseCtx {
+            Parser::unrestricted_with_context(ParseCtx {
                 strictness: Strictness::Strict,
                 ..ParseCtx::default()
             }),
@@ -30,23 +30,29 @@ fn repair_messages_name_the_highest_ranked_finding() {
 #[test]
 fn canonicalize_values_accepts_clean_values_and_rejects_strict_assumptions() {
     let values = canonicalize_values(&[
-        CanonicalizeRequest::new("height", "180cm", None),
+        CanonicalizeRequest::new("height", "180cm", Parser::new(Dimension::Length.into())),
         CanonicalizeRequest::new(
             "weight",
             "about 20kg",
-            Some(ParseCtx {
-                strictness: Strictness::Strict,
-                ..ParseCtx::default()
-            }),
+            Parser::with_context(
+                Dimension::Mass.into(),
+                ParseCtx {
+                    strictness: Strictness::Strict,
+                    ..ParseCtx::default()
+                },
+            ),
         ),
         CanonicalizeRequest::new(
             "length",
             "5 meterz",
-            Some(ParseCtx {
-                expected_dimensions: DimensionSet::from(Dimension::Length),
-                strictness: Strictness::Confirm,
-                ..ParseCtx::default()
-            }),
+            Parser::with_context(
+                Dimension::Length.into(),
+                ParseCtx {
+                    expected_dimensions: DimensionSet::from(Dimension::Length),
+                    strictness: Strictness::Confirm,
+                    ..ParseCtx::default()
+                },
+            ),
         ),
     ]);
 
@@ -82,7 +88,9 @@ fn canonicalize_values_accepts_clean_values_and_rejects_strict_assumptions() {
 
 #[test]
 fn repair_tool_call_message_surfaces_timezone_policy() {
-    let message = repair_tool_call_message("starts_at", "3pm Europe/Paris", None).expect("message");
+    let parser = Parser::new(Dimension::Time.into());
+    let message =
+        repair_tool_call_message("starts_at", "3pm Europe/Paris", &parser).expect("message");
     assert!(message.contains("[TIMEZONE_UNSUPPORTED]"));
     assert!(message.contains("starts_at"));
     assert!(message.contains("Europe/Paris"));

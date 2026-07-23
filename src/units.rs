@@ -75,6 +75,14 @@ pub(crate) fn unit_by_alias(alias: &str) -> Option<&'static UnitDef> {
         })
 }
 
+/// Resolves an alias only when its dimension is enabled for this parser.
+///
+/// A configured parser never lets an out-of-scope registry entry win a grammar
+/// race only to reject it after dispatch.
+pub(crate) fn unit_by_alias_in(alias: &str, registry: UnitRegistry) -> Option<&'static UnitDef> {
+    unit_by_alias(alias).filter(|unit| registry.allows(unit.dimension))
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum AliasMatchMode {
     Exact,
@@ -278,12 +286,16 @@ pub(crate) fn custom_unit_by_alias<'a>(alias: &str, ctx: &'a ParseCtx) -> Option
     let alias = alias.trim();
     ctx.custom_units
         .iter()
+        .filter(|unit| ctx.unit_registry.allows(unit.dimension))
         .find(|unit| exact_custom_alias(unit, alias))
         .or_else(|| {
-            ctx.custom_units.iter().find(|unit| {
-                custom_unit_lookup_aliases(unit)
-                    .any(|candidate| candidate.eq_ignore_ascii_case(alias))
-            })
+            ctx.custom_units
+                .iter()
+                .filter(|unit| ctx.unit_registry.allows(unit.dimension))
+                .find(|unit| {
+                    custom_unit_lookup_aliases(unit)
+                        .any(|candidate| candidate.eq_ignore_ascii_case(alias))
+                })
         })
 }
 

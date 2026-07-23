@@ -10,7 +10,10 @@
 //! A crate that reads `毎週月曜` as nothing and says nothing is worse than one
 //! that never read it, because the caller cannot tell the two apart.
 
-use unravel_nl::{IssueCode, ParseCtx, ParsePurpose, parse};
+mod support;
+use support::parse;
+
+use unravel_nl::{IssueCode, ParseCtx, ParsePurpose};
 
 /// Every shape the deleted grammar used to accept now refuses, with a reason.
 #[test]

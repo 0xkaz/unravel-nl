@@ -37,7 +37,9 @@
           parse_json_with_context("約3m", "ja", "length", "strict"),
         );
         const recurrence = JSON.parse(parse_json("every third business day"));
-        const failure = JSON.parse(parse_json("3pm Europe/Paris"));
+        const failure = JSON.parse(
+          parse_json_with_context("3pm Europe/Paris", "", "time", ""),
+        );
 
         if (length.best.unit !== "m" || length.best.dimension !== "length") {
           throw new Error("length parse failed");

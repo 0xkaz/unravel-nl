@@ -14,17 +14,17 @@ pub struct CanonicalizeRequest {
     pub field: String,
     /// The raw text submitted for this field.
     pub text: String,
-    /// Parsing context for this field, if any.
-    pub ctx: Option<ParseCtx>,
+    /// Configured parser that defines this field's vocabulary and policy.
+    pub parser: Parser,
 }
 
 impl CanonicalizeRequest {
-    /// Builds a request for `field` from the submitted `text`.
-    pub fn new(field: &str, text: &str, ctx: Option<ParseCtx>) -> Self {
+    /// Builds a request for `field` from the submitted `text` and parser.
+    pub fn new(field: &str, text: &str, parser: Parser) -> Self {
         Self {
             field: field.to_owned(),
             text: text.to_owned(),
-            ctx,
+            parser,
         }
     }
 }
@@ -55,15 +55,21 @@ pub struct CanonicalizedValue {
 /// [`IssueCode`], plus a did-you-mean suggestion when one is available.
 ///
 /// ```
-/// use unravel_nl::{canonicalize_values, CanonicalizeRequest, ParseCtx, Strictness};
+/// use unravel_nl::{
+///     canonicalize_values, CanonicalizeRequest, Dimension, ParseCtx, Parser,
+///     Strictness,
+/// };
 ///
 /// let values = canonicalize_values(&[CanonicalizeRequest::new(
 ///     "weight",
 ///     "about 20kg",
-///     Some(ParseCtx {
-///         strictness: Strictness::Strict,
-///         ..ParseCtx::default()
-///     }),
+///     Parser::with_context(
+///         Dimension::Mass.into(),
+///         ParseCtx {
+///             strictness: Strictness::Strict,
+///             ..ParseCtx::default()
+///         },
+///     ),
 /// )]);
 ///
 /// assert!(!values[0].ok);
@@ -73,7 +79,7 @@ pub fn canonicalize_values(requests: &[CanonicalizeRequest]) -> Vec<Canonicalize
     requests
         .iter()
         .map(|request| {
-            let parsed = parse(&request.text, request.ctx.clone());
+            let parsed = request.parser.parse(&request.text);
             let ok = accepts(&parsed);
             let canonical = ok.then(|| parsed.best.clone()).flatten();
             let message = (!ok).then(|| adapter_message(&request.field, &parsed));
@@ -94,8 +100,8 @@ pub fn canonicalize_values(requests: &[CanonicalizeRequest]) -> Vec<Canonicalize
 /// Intended for repairing a machine-generated tool call: `None` means the value
 /// was acceptable, `Some(message)` is text that can be handed back to the
 /// caller explaining what to fix.
-pub fn repair_tool_call_message(field: &str, text: &str, ctx: Option<ParseCtx>) -> Option<String> {
-    let request = CanonicalizeRequest::new(field, text, ctx);
+pub fn repair_tool_call_message(field: &str, text: &str, parser: &Parser) -> Option<String> {
+    let request = CanonicalizeRequest::new(field, text, parser.clone());
     canonicalize_values(&[request])
         .into_iter()
         .next()
@@ -157,20 +163,14 @@ pub(crate) fn adapter_message(field: &str, parsed: &Parsed) -> String {
 /// `unresolved range`, `unresolved`, and — for a value
 /// that is infinite or `NaN` — `unrepresentable` in place of the number, so a
 /// quantity keeps its unit and renders as `unrepresentable m`. No library entry
-/// point hands back such a value: [`parse`] reports it as a loss and
-/// [`complete_readings`] leaves the candidate out. It reaches [`humanize`] only
-/// through a [`Reading`] the caller assembled or edited themselves.
+/// point hands back such a value: [`Parser::parse`] reports it as a loss and
+/// [`Parser::complete_readings`] leaves the candidate out. It reaches
+/// [`humanize`] only through a [`Reading`] the caller assembled or edited.
 ///
 /// ```
-/// use unravel_nl::{humanize, parse, HumanizeCtx, Locale, ParseCtx};
+/// use unravel_nl::{humanize, HumanizeCtx, Locale, Parser};
 ///
-/// let parsed = parse(
-///     "5尺3寸",
-///     Some(ParseCtx {
-///         locale: Some(Locale::Ja),
-///         ..ParseCtx::default()
-///     }),
-/// );
+/// let parsed = Parser::japanese_building().parse("5尺3寸");
 /// let best = parsed.best.expect("a canonical reading");
 ///
 /// assert_eq!(
@@ -272,8 +272,8 @@ pub fn describe_reading(reading: &Reading) -> ResourceView {
 /// The endpoints of a range are appended by the same function, under
 /// `range.from.` and `range.to.`, so an endpoint contributes exactly the fields
 /// a top-level reading does. Nesting is as deep as the reading the caller built:
-/// [`parse`] never nests a range inside a range, and the endpoints of the ranges
-/// it does build carry no endpoints of their own.
+/// [`Parser::parse`] never nests a range inside a range, and the endpoints of
+/// the ranges it does build carry no endpoints of their own.
 fn push_reading_fields(fields: &mut Vec<ResourceField>, prefix: &str, reading: &Reading) {
     let named = |name: &str| format!("{prefix}{name}");
     push_resource_field(fields, &named("kind"), kind_str(reading.kind));

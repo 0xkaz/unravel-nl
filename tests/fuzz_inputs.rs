@@ -1,7 +1,7 @@
-use unravel_nl::{
-    IssueCode, Locale, ParseCtx, Parsed, ParsedMatch, Reading, complete, parse,
-    parse_dimensions_for_editor, ranked_findings,
-};
+mod support;
+use support::{complete, parse, parse_dimensions_for_editor};
+
+use unravel_nl::{IssueCode, Locale, ParseCtx, Parsed, ParsedMatch, Reading, ranked_findings};
 
 #[test]
 fn hostile_unicode_inputs_do_not_panic() {

@@ -14,7 +14,10 @@
 //! (`5m3` is shaped exactly like `1m80`) it is reported as an alternative with
 //! an `AmbiguousUnit` finding rather than dropped.
 
-use unravel_nl::{Dimension, IssueCode, Parsed, parse, parse_quantity_fast};
+mod support;
+use support::{parse, parse_quantity_fast};
+
+use unravel_nl::{Dimension, IssueCode, Parsed};
 
 fn assert_close(actual: f64, expected: f64) {
     assert!(

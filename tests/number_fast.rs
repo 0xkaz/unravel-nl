@@ -7,7 +7,10 @@
 //! that `ParseCtx::locale` does not enter into it, and that no reading this
 //! entry point returns ever carries a unit.
 
-use unravel_nl::{IssueCode, Kind, Locale, NumberFormat, ParseCtx, parse_number_fast};
+mod support;
+use support::parse_number_fast;
+
+use unravel_nl::{IssueCode, Kind, Locale, NumberFormat, ParseCtx};
 
 fn with_format(input: &str, number_format: NumberFormat) -> unravel_nl::Parsed {
     parse_number_fast(

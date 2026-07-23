@@ -207,7 +207,7 @@ pub(crate) fn strip_suffix_ascii_case<'a>(text: &'a str, suffix: &str) -> Option
 pub(crate) fn parse_registered_quantity(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     let (number_text, unit_text) = split_number_unit(text)?;
     let value = parse_number_ctx(number_text, ctx)?;
-    if let Some(unit) = unit_by_alias(unit_text) {
+    if let Some(unit) = unit_by_alias_in(unit_text, ctx.unit_registry) {
         return Some(Reading::quantity(
             value * unit.factor,
             unit.canonical_unit,
@@ -269,7 +269,7 @@ pub(crate) fn parse_compound_registered_quantity_ctx(
     text: &str,
     ctx: &ParseCtx,
 ) -> CompoundOutcome {
-    parse_compound_registered_quantity_with_format(text, ctx.number_format)
+    parse_compound_registered_quantity_with_format(text, ctx.number_format, ctx.unit_registry)
 }
 
 /// Reads `5 m 3 cm`, `2 lb 3 oz`, `4 stone 6 lb` — and refuses `3 m 5 m`.
@@ -287,6 +287,7 @@ pub(crate) fn parse_compound_registered_quantity_ctx(
 pub(crate) fn parse_compound_registered_quantity_with_format(
     text: &str,
     number_format: NumberFormat,
+    registry: UnitRegistry,
 ) -> CompoundOutcome {
     let parts: Vec<&str> = text.split_whitespace().collect();
     if parts.len() < 4 || !parts.len().is_multiple_of(2) {
@@ -310,7 +311,7 @@ pub(crate) fn parse_compound_registered_quantity_with_format(
         let Some(value) = parse_number_with_format(pair[0], number_format) else {
             return CompoundOutcome::NotCompound;
         };
-        let Some(unit) = unit_by_alias(pair[1]) else {
+        let Some(unit) = unit_by_alias_in(pair[1], registry) else {
             return CompoundOutcome::NotCompound;
         };
         if let Some(current_dimension) = dimension {
@@ -358,8 +359,11 @@ pub(crate) fn parse_typo_corrected_quantity_ctx(
 ) -> Option<(Reading, Suggestion, String)> {
     let (number_text, unit_text) = split_number_unit(text)?;
     let value = parse_number_ctx(number_text, ctx)?;
-    let suggestion = suggest_unit(unit_text)?;
-    let corrected = unit_by_alias(&suggestion.to)?;
+    if unit_by_alias(unit_text).is_some() {
+        return None;
+    }
+    let suggestion = suggest_unit(unit_text, ctx.unit_registry)?;
+    let corrected = unit_by_alias_in(&suggestion.to, ctx.unit_registry)?;
     let reading = Reading::quantity(
         value * corrected.factor,
         corrected.canonical_unit,
@@ -414,13 +418,13 @@ pub(crate) fn is_number_prefix_char(ch: char) -> bool {
 /// Deliberately narrow: two whitespace-separated tokens only, so the compound
 /// forms that *do* put a space between their parts (`5 ft 11`, `3 yd 2 ft`,
 /// `2 lb 3 oz`) are untouched.
-pub(crate) fn spaced_registry_unit(text: &str) -> bool {
+pub(crate) fn spaced_registry_unit(text: &str, registry: UnitRegistry) -> bool {
     let mut parts = text.split_whitespace();
     let (Some(number_text), Some(unit_text), None) = (parts.next(), parts.next(), parts.next())
     else {
         return false;
     };
-    parse_number(number_text).is_some() && unit_by_alias(unit_text).is_some()
+    parse_number(number_text).is_some() && unit_by_alias_in(unit_text, registry).is_some()
 }
 
 /// True when the text is a number written closed up against a unit token the
@@ -436,12 +440,13 @@ pub(crate) fn spaced_registry_unit(text: &str) -> bool {
 /// could have meant, so it is not dropped: the entry points report it as an
 /// alternative with an [`IssueCode::AmbiguousUnit`] finding — see
 /// [`closed_compound_alternative`] and `report_closed_compound_alternative`.
-pub(crate) fn closed_registry_unit(text: &str) -> bool {
+pub(crate) fn closed_registry_unit(text: &str, registry: UnitRegistry) -> bool {
     let trimmed = text.trim();
     if trimmed.contains(char::is_whitespace) {
         return false;
     }
-    split_number_unit(trimmed).is_some_and(|(_, unit_text)| unit_by_alias(unit_text).is_some())
+    split_number_unit(trimmed)
+        .is_some_and(|(_, unit_text)| unit_by_alias_in(unit_text, registry).is_some())
 }
 
 /// The reading a closed-up `<number><alias>` text also has as a compound.
@@ -449,8 +454,8 @@ pub(crate) fn closed_registry_unit(text: &str) -> bool {
 /// This is the loser of the rule in [`closed_registry_unit`], kept so the entry
 /// points can report it instead of dropping it. `None` when the text is not
 /// that shape, or has no competing compound reading at all.
-pub(crate) fn closed_compound_alternative(text: &str) -> Option<Reading> {
-    if !closed_registry_unit(text) {
+pub(crate) fn closed_compound_alternative(text: &str, registry: UnitRegistry) -> Option<Reading> {
+    if !closed_registry_unit(text, registry) {
         return None;
     }
     let lowered = text.trim().to_ascii_lowercase();
@@ -538,7 +543,11 @@ pub(crate) fn metric_compound_reading(stripped: &str) -> Option<Reading> {
     ))
 }
 
-pub(crate) fn parse_metric_length(text: &str) -> Option<Reading> {
+pub(crate) fn parse_metric_length_ctx(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    parse_metric_length_in(text, ctx.unit_registry)
+}
+
+fn parse_metric_length_in(text: &str, registry: UnitRegistry) -> Option<Reading> {
     let trimmed = text.trim();
     let stripped = trimmed.to_ascii_lowercase();
     // `5 m3` is the registry's cubic metre, not 5 m + 3 cm. Without this the
@@ -559,7 +568,7 @@ pub(crate) fn parse_metric_length(text: &str) -> Option<Reading> {
         // `5m3` is the registry's cubic metre; the metres-and-centimetres
         // reading survives as the alternative the entry points report through
         // [`closed_compound_alternative`].
-        if spaced_registry_unit(trimmed) || closed_registry_unit(trimmed) {
+        if spaced_registry_unit(trimmed, registry) || closed_registry_unit(trimmed, registry) {
             return None;
         }
         // The idiom claims text of this shape outright: `5mm` splits as `5` and

@@ -41,7 +41,7 @@ pub fn mcp_tool_schema_json() -> &'static str {
     MCP_TOOL_SCHEMA_JSON
 }
 
-/// Parses one reading and returns a JSON string at the WASM/FFI boundary around [`parse`].
+/// Parses one reading through the minimal [`Parser`] and returns JSON.
 ///
 /// # Envelope
 ///
@@ -71,10 +71,10 @@ pub fn mcp_tool_schema_json() -> &'static str {
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_json(text: &str) -> String {
-    parsed_summary_json(&parse(text, None))
+    parsed_summary_json(&Parser::default().parse(text))
 }
 
-/// Parses one reading with a locale hint and returns a JSON string at the WASM/FFI boundary around [`parse`].
+/// Parses one reading through the minimal [`Parser`] with a locale hint.
 ///
 /// Returns the same compact summary envelope as [`parse_json`] — `{ok, input,
 /// best, issues}` — which is deliberately not the parse contract published by
@@ -83,23 +83,28 @@ pub fn parse_json(text: &str) -> String {
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_json_with_locale(text: &str, locale: &str) -> String {
-    parsed_summary_json(&parse(
-        text,
-        Some(ParseCtx {
-            locale: parse_locale_tag(locale),
-            ..ParseCtx::default()
-        }),
-    ))
+    let dimensions = crate::parser::minimal_dimensions();
+    parsed_summary_json(
+        &Parser::with_context(
+            dimensions,
+            ParseCtx {
+                locale: parse_locale_tag(locale),
+                expected_dimensions: dimensions,
+                ..ParseCtx::default()
+            },
+        )
+        .parse(text),
+    )
 }
 
-/// Parses one reading with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse`].
+/// Parses one reading through a dimension-scoped [`Parser`] and returns JSON.
 ///
 /// Returns the same compact summary envelope as [`parse_json`] — `{ok, input,
 /// best, issues}` — which is deliberately not the parse contract published by
 /// [`parsed_output_schema_json`].
 ///
 /// An `expected_dimension` tag that names nothing this build can read is
-/// refused rather than parsed; see [`unreadable_dimension_tag`].
+/// refused rather than parsed.
 #[cfg(feature = "wasm")]
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -112,13 +117,10 @@ pub fn parse_json_with_context(
     if unreadable_dimension_tag(expected_dimension) {
         return parsed_summary_json(&unreadable_dimension_tag_parsed(text, expected_dimension));
     }
-    parsed_summary_json(&parse(
-        text,
-        Some(parse_wasm_context(locale, expected_dimension, strictness)),
-    ))
+    parsed_summary_json(&parse_wasm_parser(locale, expected_dimension, strictness).parse(text))
 }
 
-/// Parses editor dimension readings and returns a JSON string at the WASM/FFI boundary around [`parse_dimensions_for_editor`].
+/// Extracts editor dimensions through the minimal [`Parser`] and returns JSON.
 ///
 /// # Envelope
 ///
@@ -132,10 +134,10 @@ pub fn parse_json_with_context(
 #[cfg_attr(docsrs, doc(cfg(feature = "wasm")))]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn parse_dimensions_for_editor_json(text: &str) -> String {
-    parsed_matches_summary_json(text, &parse_dimensions_for_editor(text, None))
+    parsed_matches_summary_json(text, &Parser::default().parse_dimensions_for_editor(text))
 }
 
-/// Parses editor dimensions with explicit context tags and returns a JSON string at the WASM/FFI boundary around [`parse_dimensions_for_editor`].
+/// Extracts editor dimensions through a scoped [`Parser`] and returns JSON.
 ///
 /// # Envelope
 ///
@@ -157,9 +159,23 @@ pub fn parse_dimensions_for_editor_json_with_context(
     if unreadable_dimension_tag(expected_dimension) {
         return unreadable_dimension_tag_matches_json(text, expected_dimension);
     }
+    parsed_matches_summary_json(
+        text,
+        &parse_wasm_parser(locale, expected_dimension, strictness)
+            .parse_dimensions_for_editor(text),
+    )
+}
+
+#[cfg(feature = "wasm")]
+fn parse_wasm_parser(locale: &str, expected_dimension: &str, strictness: &str) -> Parser {
     let mut ctx = parse_wasm_context(locale, expected_dimension, strictness);
-    ctx.purpose = ParsePurpose::DimensionEditor;
-    parsed_matches_summary_json(text, &parse_dimensions_for_editor(text, Some(ctx)))
+    let dimensions = if ctx.expected_dimensions.is_empty() {
+        crate::parser::minimal_dimensions()
+    } else {
+        ctx.expected_dimensions
+    };
+    ctx.expected_dimensions = dimensions;
+    Parser::with_context(dimensions, ctx)
 }
 
 #[cfg(feature = "wasm")]
@@ -442,16 +458,16 @@ mod wasm_tests {
 
     #[test]
     fn parse_json_emits_the_summary_envelope() {
-        let json = parse_json("about 20kg");
+        let json = parse_json("about 20m");
         assert!(is_valid_json(&json), "{json}");
         assert!(json.contains("\"ok\":true"), "{json}");
-        assert!(json.contains("\"input\":\"about 20kg\""), "{json}");
-        assert!(json.contains("\"unit\":\"kg\""), "{json}");
-        assert!(json.contains("\"dimension\":\"mass\""), "{json}");
+        assert!(json.contains("\"input\":\"about 20m\""), "{json}");
+        assert!(json.contains("\"unit\":\"m\""), "{json}");
+        assert!(json.contains("\"dimension\":\"length\""), "{json}");
         assert!(json.contains("\"code\":\"APPROXIMATION\""), "{json}");
 
         // A refused input still produces a well-formed envelope carrying why.
-        let failed = parse_json("3pm Europe/Paris");
+        let failed = parse_json_with_context("3pm Europe/Paris", "", "time", "");
         assert!(is_valid_json(&failed), "{failed}");
         assert!(failed.contains("\"ok\":false"), "{failed}");
         assert!(failed.contains("\"best\":null"), "{failed}");
@@ -477,8 +493,8 @@ mod wasm_tests {
         // The whole envelope is compared rather than a substring of the number:
         // `contains("\"value\":0.473176")` is a *prefix* of the true value and
         // would pass just as happily against a six-decimal rounding.
-        let us = parse_json_with_locale("2 cups", "en-US");
-        let gb = parse_json_with_locale("2 cups", "en-GB");
+        let us = parse_json_with_context("2 cups", "en-US", "volume", "");
+        let gb = parse_json_with_context("2 cups", "en-GB", "volume", "");
         assert_eq!(
             us,
             "{\"ok\":true,\"input\":\"2 cups\",\"best\":{\"kind\":\"quantity\",\
@@ -501,10 +517,12 @@ mod wasm_tests {
         assert!(is_valid_json(&json), "{json}");
         assert!(json.contains("\"code\":\"UNIT_ASSUMED\""), "{json}");
 
-        // Without the dimension tag there is nothing to assume a unit from.
+        // Without a dimension tag, the WASM boundary uses the same minimal
+        // length-and-area registry as `Parser::default`.
         let bare = parse_json_with_context("3640", "", "", "forgiving");
         assert!(is_valid_json(&bare), "{bare}");
-        assert!(!bare.contains("UNIT_ASSUMED"), "{bare}");
+        assert!(bare.contains("UNIT_ASSUMED"), "{bare}");
+        assert_eq!(bare, json);
 
         // A misspelled dimension tag is refused, not absorbed: behaving like no
         // tag at all would turn a hard filter into none, and a length field
@@ -647,7 +665,7 @@ mod wasm_tests {
             ("2〜3日", "172800", "259200", "s", "time"),
         ];
         for (input, from, to, unit, dimension) in cases {
-            let json = parse_json(input);
+            let json = parse_json_with_context(input, "", dimension, "");
             assert!(is_valid_json(&json), "{input}: {json}");
             assert!(json.contains("\"kind\":\"range\""), "{input}: {json}");
             // The endpoints are full readings, not a bare pair of numbers, and
@@ -699,14 +717,17 @@ mod wasm_tests {
     /// is a prefix of the true value and passes against the old rounding.
     #[test]
     fn parse_json_serializes_cups_at_full_precision() {
-        let json = parse_json_with_locale("2 cups", "en-US");
+        let json = parse_json_with_context("2 cups", "en-US", "volume", "");
         assert!(is_valid_json(&json), "{json}");
         assert!(
             json.contains("\"value\":0.473176473,\"unit\":\"L\""),
             "{json}"
         );
         assert!(!json.contains("\"value\":0.473176,"), "{json}");
-        let best = parse("2 cups", None).best.expect("a reading");
+        let best = Parser::new(Dimension::Volume.into())
+            .parse("2 cups")
+            .best
+            .expect("a reading");
         assert!(
             json.contains(&format!("\"value\":{},", best.value.expect("a value"))),
             "{json}"
@@ -873,6 +894,8 @@ mod tests {
         assert!(schema.contains("Reserved for adapter layers and currently ignored by the parser"));
         assert!(schema.contains("This is a hard filter, not a hint"));
         assert!(schema.contains("This does not constrain parsing"));
+        assert!(schema.contains("applied before grammar dispatch"));
+        assert!(schema.contains("independent of expected_dimensions"));
     }
 
     /// The published input schema must accept exactly what the code accepts.
@@ -886,6 +909,7 @@ mod tests {
     fn input_schema_declares_the_dimension_set_the_parser_reads() {
         let schema = parse_input_schema_json();
         assert!(schema.contains("\"expected_dimensions\": {"), "{schema}");
+        assert!(schema.contains("\"registry_dimensions\": {"), "{schema}");
         // The singular property, and the `enum` that forbade the list form, are
         // gone rather than merely joined by a second property.
         assert!(!schema.contains("\"expected_dimension\": {"), "{schema}");

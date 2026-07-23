@@ -21,7 +21,9 @@ assert.equal(recurrence.best, null);
 assert.equal(recurrence.issues[0].code, "NO_VALUE");
 assert.equal(recurrence.best?.recurrence, undefined);
 
-const unsupportedTimezone = JSON.parse(parse_json("3pm Europe/Paris"));
+const unsupportedTimezone = JSON.parse(
+  parse_json_with_context("3pm Europe/Paris", "", "time", ""),
+);
 assert.equal(unsupportedTimezone.ok, false);
 assert.equal(unsupportedTimezone.issues[0].code, "TIMEZONE_UNSUPPORTED");
 assert.equal(unsupportedTimezone.issues[0].severity, "error");

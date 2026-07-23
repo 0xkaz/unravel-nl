@@ -12,10 +12,15 @@
 //! reported as `REJECTED_BY_POLICY`, because a value the caller typed and the
 //! parser read is not something the no-silent-loss contract lets us discard.
 
+mod support;
+use support::{
+    complete, complete_readings, parse, parse_date_fast, parse_dimensions_for_editor,
+    parse_number_fast, parse_quantity_fast,
+};
+
 use unravel_nl::{
     CanonicalizeRequest, Dimension, DimensionSet, IssueCode, Kind, Locale, ParseCtx, Parsed,
-    canonicalize_values, complete, complete_readings, parse, parse_date_fast,
-    parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
+    Parser, canonicalize_values,
 };
 
 fn assert_close(actual: f64, expected: f64) {
@@ -179,7 +184,11 @@ fn every_entry_point_enforces_the_declared_domains() {
             .all(|item| item.dimension == Some(Dimension::Length))
     );
 
-    let canonical = canonicalize_values(&[CanonicalizeRequest::new("width", input, dimensions)]);
+    let canonical = canonicalize_values(&[CanonicalizeRequest::new(
+        "width",
+        input,
+        Parser::unrestricted_with_context(dimensions.expect("dimension policy")),
+    )]);
     assert!(!canonical[0].ok);
     assert!(canonical[0].canonical.is_none());
     assert!(

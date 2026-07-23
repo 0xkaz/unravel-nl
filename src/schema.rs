@@ -25,6 +25,11 @@ pub(crate) const PARSE_INPUT_SCHEMA_JSON: &str = r#"{
       "pattern": "^(length|area|mass|time|volume|currency|temperature|speed|data|data_rate|flow_rate|concentration|acceleration|force|torque|pressure|power|charge|voltage|current|resistance|illuminance|radiation_equivalent_dose|radioactivity)( *, *(length|area|mass|time|volume|currency|temperature|speed|data|data_rate|flow_rate|concentration|acceleration|force|torque|pressure|power|charge|voltage|current|resistance|illuminance|radiation_equivalent_dose|radioactivity))*$",
       "description": "Optional measurement domains the field accepts, as one name or a comma-separated list such as \"length,area\". This is a hard filter, not a hint: a reading from any other measurement domain is refused with REJECTED_BY_POLICY rather than returned. Readings that carry no dimension at all — a bare number, a date — are not refused. Omit it to accept every dimension; a name that is not on this list is refused rather than ignored."
     },
+    "registry_dimensions": {
+      "type": "string",
+      "pattern": "^(|(length|area|mass|time|volume|currency|temperature|speed|data|data_rate|flow_rate|concentration|acceleration|force|torque|pressure|power|charge|voltage|current|resistance|illuminance|radiation_equivalent_dose|radioactivity)( *, *(length|area|mass|time|volume|currency|temperature|speed|data|data_rate|flow_rate|concentration|acceleration|force|torque|pressure|power|charge|voltage|current|resistance|illuminance|radiation_equivalent_dose|radioactivity))*)$",
+      "description": "Optional built-in measurement domains present in the parser vocabulary. This is applied before grammar dispatch, registry lookup, typo correction, and completion. An empty string explicitly loads no measurement units; omission leaves the registry choice to the adapter. This is independent of expected_dimensions, which is an output acceptance policy."
+    },
     "number_format": {
       "type": "string",
       "enum": ["auto", "comma_decimal", "dot_decimal"],

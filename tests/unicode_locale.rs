@@ -1,4 +1,7 @@
-use unravel_nl::{Dimension, Kind, Locale, ParseCtx, parse};
+mod support;
+use support::parse;
+
+use unravel_nl::{Dimension, Kind, Locale, ParseCtx};
 
 #[test]
 fn normalizes_full_width_and_compatibility_units() {

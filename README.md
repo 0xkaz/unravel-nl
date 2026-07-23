@@ -56,11 +56,10 @@ The first slice focuses on:
 - Relative dates such as `next friday` and `in 3 days` with the `dates-jiff`
   feature
 - Static parse input, parsed output, and MCP tool schemas for AI/tool adapters
-- Split API entry points: broad `parse()`, narrower `parse_quantity_fast()`,
-  `parse_number_fast()`, `parse_date_fast()`, editor-focused
-  `parse_dimensions_for_editor()`, and reading-level `complete_readings()`
+- One configured `Parser::parse()` path, with `ParsePurpose` selecting a
+  quantity, number, or date grammar without adding another public entry point
 - Building-dimension extraction with byte spans via
-  `parse_dimensions_for_editor()`
+  `Parser::parse_dimensions_for_editor()`
 - Explicit `NumberFormat` and `AcceptOptions` policies for callers that need
   deterministic punctuation and grammar-shape control
 - Core completion candidates for unit, date, time, currency, temperature, and
@@ -74,6 +73,8 @@ The first slice focuses on:
 - A normalized parser dispatch path, exact-first unit alias lookup, and a
   first-byte index over the unit registry, so typo-heavy and no-match inputs do
   not walk the whole catalog
+- A configured `Parser` instance that limits grammar dispatch, registry lookup,
+  typo correction, and completion to the dimensions a field actually accepts
 
 The default compute path has no I/O and no runtime dependencies. Calendar
 arithmetic is available behind the optional `dates-jiff` feature.
@@ -105,15 +106,10 @@ Minimum supported Rust version: **1.88** (2024 edition, let-chains).
 ## Example
 
 ```rust
-use unravel_nl::{parse, humanize, HumanizeCtx, Locale, ParseCtx};
+use unravel_nl::{humanize, HumanizeCtx, Locale, Parser};
 
-let parsed = parse(
-    "5尺3寸",
-    Some(ParseCtx {
-        locale: Some(Locale::Ja),
-        ..ParseCtx::default()
-    }),
-);
+let parser = Parser::japanese_building();
+let parsed = parser.parse("5尺3寸");
 
 let best = parsed.best.expect("a canonical reading");
 assert_eq!(best.unit.as_deref(), Some("m"));
@@ -123,32 +119,36 @@ assert_eq!(
 );
 ```
 
-## API Entry Points
+## Configured Parser
 
-Use `parse()` as the broad compatibility entry point when the input can be a
-quantity, date, range, conversion, or plain number. Use narrower
-entry points when the UI already knows the field type:
+Use a `Parser` instance when the receiving field knows its measurement
+domains. The instance applies the same set before grammar dispatch, registry
+lookup, typo correction, completion, and final acceptance. An excluded unit is
+therefore absent; it cannot win a ranking decision and cannot be "corrected"
+into an enabled unit.
 
 ```rust
-use unravel_nl::{parse_quantity_fast, Dimension, DimensionSet, ParseCtx};
+use unravel_nl::{Dimension, DimensionSet, Parser};
 
-let parsed = parse_quantity_fast(
-    "1,234 kg",
-    Some(ParseCtx {
-        expected_dimensions: DimensionSet::of(&[Dimension::Mass]),
-        ..ParseCtx::default()
-    }),
-);
+let parser = Parser::new(DimensionSet::from(Dimension::Mass));
+let parsed = parser.parse("1,234 kg");
 
 assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("kg"));
 ```
 
-Available specialized entries are `parse_quantity_fast()`,
-`parse_number_fast()`, and `parse_date_fast()`.
-Use `ParseCtx::purpose` when a single `parse()` call should avoid broad
-grammar dispatch. `parse_dimensions_for_editor()` scans free text for building
-dimensions and unitless dimension fields, and `complete_readings()` returns
-ranked canonical readings for completion UIs.
+`Parser::japanese_building()` is the small length-and-area preset.
+`Parser::default()` uses the same dimensions without assuming a locale.
+`Parser::unrestricted()` keeps the old full catalog for compatibility and
+exploration, but it is no longer the implicit public entry point.
+`Parser::parse_dimensions_for_editor()`, `Parser::complete()`, and
+`Parser::complete_readings()` reuse the same configured boundary.
+
+`ParseCtx::unit_registry` and `ParseCtx::expected_dimensions` have different
+jobs. The registry decides which vocabulary exists. The expected set is an
+acceptance policy: with the unrestricted registry it can still parse an
+out-of-domain reading, move it to `alternatives`, and explain the refusal.
+`Parser::new()` sets both to the same dimensions. `Parser::with_context()`
+preserves an explicitly narrower acceptance policy.
 
 ## Dimension Extraction
 
@@ -179,14 +179,11 @@ extracts length and area values, keeps Japanese building units, and avoids
 currency/date/general grammar:
 
 ```rust
-use unravel_nl::{parse_dimensions_for_editor, Dimension, Locale, ParseCtx};
+use unravel_nl::{Dimension, Parser};
 
-let matches = parse_dimensions_for_editor(
-    "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640",
-    Some(ParseCtx {
-        locale: Some(Locale::Ja),
-        ..ParseCtx::default()
-    }),
+let parser = Parser::japanese_building();
+let matches = parser.parse_dimensions_for_editor(
+    "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640"
 );
 
 assert_eq!(matches.len(), 4);
@@ -204,16 +201,18 @@ omitted entirely when that search fails, and callers must treat them as
 optional. The byte and character spans from the core are always present.
 
 ```rust
-use unravel_nl::{Dimension, DimensionSet, Locale, ParseCtx, parse_dimensions_for_editor};
+use unravel_nl::{Dimension, DimensionSet, Locale, ParseCtx, Parser};
 
-let matches = parse_dimensions_for_editor(
-    "3m×4m のLDK",
-    Some(ParseCtx {
+let dimensions = DimensionSet::from(Dimension::Length);
+let parser = Parser::with_context(
+    dimensions,
+    ParseCtx {
         locale: Some(Locale::Ja),
-        expected_dimensions: DimensionSet::of(&[Dimension::Length]),
+        expected_dimensions: dimensions,
         ..ParseCtx::default()
-    }),
+    },
 );
+let matches = parser.parse_dimensions_for_editor("3m×4m のLDK");
 
 assert_eq!(matches[0].text, "3m");
 assert_eq!(matches[0].start, 0);
@@ -232,16 +231,18 @@ unravel-nl = { version = "0.1", features = ["dates-jiff"] }
 ```
 
 ```rust
-use unravel_nl::{parse, Date, Locale, ParseCtx};
+use unravel_nl::{Date, DimensionSet, Locale, ParseCtx, ParsePurpose, Parser};
 
-let parsed = parse(
-    "next friday",
-    Some(ParseCtx {
+let parser = Parser::with_context(
+    DimensionSet::new(),
+    ParseCtx {
         locale: Some(Locale::En),
         reference_date: Date::new(2026, 7, 19),
+        purpose: ParsePurpose::Date,
         ..ParseCtx::default()
-    }),
+    },
 );
+let parsed = parser.parse("next friday");
 
 assert_eq!(parsed.best.unwrap().date.as_deref(), Some("2026-07-24"));
 ```
@@ -255,16 +256,18 @@ unravel-nl = { version = "0.1", features = ["dates-jiff"] }
 Japanese relative dates are supported with the same feature:
 
 ```rust
-use unravel_nl::{parse, Date, Locale, ParseCtx};
+use unravel_nl::{Date, DimensionSet, Locale, ParseCtx, ParsePurpose, Parser};
 
-let parsed = parse(
-    "来週金曜日",
-    Some(ParseCtx {
+let parser = Parser::with_context(
+    DimensionSet::new(),
+    ParseCtx {
         locale: Some(Locale::Ja),
         reference_date: Date::new(2026, 7, 19),
+        purpose: ParsePurpose::Date,
         ..ParseCtx::default()
-    }),
+    },
 );
+let parsed = parser.parse("来週金曜日");
 
 assert_eq!(parsed.best.unwrap().date.as_deref(), Some("2026-07-24"));
 ```
@@ -282,9 +285,9 @@ date fails loudly.
 UI adapters can turn parser findings into stable severity and rank metadata:
 
 ```rust
-use unravel_nl::{parse, ranked_findings, IssueSeverity};
+use unravel_nl::{ranked_findings, Dimension, IssueSeverity, Parser};
 
-let parsed = parse("3pm Europe/Paris", None);
+let parsed = Parser::new(Dimension::Time.into()).parse("3pm Europe/Paris");
 let issues = ranked_findings(&parsed);
 
 assert_eq!(issues[0].severity, IssueSeverity::Error);
@@ -350,8 +353,10 @@ node tests/wasm_node_smoke.mjs
 ```
 
 The WASM package exports `parse_json*` and
-`parse_dimensions_for_editor_json*` functions, with locale-only and minimal
-context variants for `expected_dimension` and `strictness`. The browser smoke
+`parse_dimensions_for_editor_json*` functions. Their no-context default is the
+same length-and-area registry as `Parser::default()`; context variants replace
+it with the dimensions named by `expected_dimension` and also apply
+`strictness`. The browser smoke
 page is `tests/wasm_browser_e2e.html`; serve the repository root and open
 `/tests/wasm_browser_e2e.html` after generating `pkg/`. Browser-target Method A
 artifacts can be assembled from `pkg/` plus `web/unravel-adapters.*` and
@@ -360,24 +365,27 @@ checksummed before vendoring.
 ## Unit Registry And Strictness
 
 ```rust
-use unravel_nl::{parse, unit_definitions, IssueCode, ParseCtx, Strictness};
+use unravel_nl::{
+    unit_definitions, Dimension, IssueCode, ParseCtx, Parser, Strictness,
+};
 
 assert!(unit_definitions().iter().any(|unit| unit.id == "ft"));
 
-let forgiving = parse("5 meterz", None);
+let forgiving = Parser::new(Dimension::Length.into()).parse("5 meterz");
 assert_eq!(forgiving.best.unwrap().unit.as_deref(), Some("m"));
 assert_eq!(
     forgiving.findings.ambiguities[0].code,
     IssueCode::TypoCorrected
 );
 
-let confirm = parse(
-    "5 meterz",
-    Some(ParseCtx {
+let confirm_parser = Parser::with_context(
+    Dimension::Length.into(),
+    ParseCtx {
         strictness: Strictness::Confirm,
         ..ParseCtx::default()
-    }),
+    },
 );
+let confirm = confirm_parser.parse("5 meterz");
 assert!(confirm.best.is_none());
 assert_eq!(confirm.suggestions[0].to, "m");
 ```
@@ -385,11 +393,11 @@ assert_eq!(confirm.suggestions[0].to, "m");
 Callers can also add deterministic custom unit aliases at parse time:
 
 ```rust
-use unravel_nl::{parse, CustomUnit, Dimension, ParseCtx};
+use unravel_nl::{CustomUnit, Dimension, ParseCtx, Parser};
 
-let parsed = parse(
-    "3 smoots",
-    Some(ParseCtx {
+let parser = Parser::with_context(
+    Dimension::Length.into(),
+    ParseCtx {
         custom_units: vec![CustomUnit::new(
             "smoot",
             "m",
@@ -398,8 +406,9 @@ let parsed = parse(
             1.7018,
         )],
         ..ParseCtx::default()
-    }),
+    },
 );
+let parsed = parser.parse("3 smoots");
 
 assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("m"));
 ```
@@ -407,11 +416,11 @@ assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("m"));
 Custom units can also carry an application-facing kind label:
 
 ```rust
-use unravel_nl::{parse, CustomUnit, Dimension, ParseCtx};
+use unravel_nl::{CustomUnit, Dimension, ParseCtx, Parser};
 
-let parsed = parse(
-    "3 cases",
-    Some(ParseCtx {
+let parser = Parser::with_context(
+    Dimension::Volume.into(),
+    ParseCtx {
         custom_units: vec![CustomUnit::new(
             "case",
             "item",
@@ -420,8 +429,9 @@ let parsed = parse(
             24.0,
         ).kind("package_count")],
         ..ParseCtx::default()
-    }),
+    },
 );
+let parsed = parser.parse("3 cases");
 
 assert_eq!(parsed.best.unwrap().custom_kind.as_deref(), Some("package_count"));
 ```
@@ -429,21 +439,15 @@ assert_eq!(parsed.best.unwrap().custom_kind.as_deref(), Some("package_count"));
 ## Completions
 
 ```rust
-use unravel_nl::{complete, complete_readings, CompletionKind, Dimension, DimensionSet, ParseCtx};
+use unravel_nl::{CompletionKind, Dimension, Parser};
 
-let completions = complete("10 met", None);
+let completions = Parser::new(Dimension::Length.into()).complete("10 met");
 
 assert_eq!(completions[0].value, "meter");
 assert_eq!(completions[0].canonical.as_deref(), Some("m"));
 assert_eq!(completions[0].kind, CompletionKind::Unit);
 
-let readings = complete_readings(
-    "10",
-    Some(ParseCtx {
-        expected_dimensions: DimensionSet::of(&[Dimension::Mass]),
-        ..ParseCtx::default()
-    }),
-);
+let readings = Parser::new(Dimension::Mass.into()).complete_readings("10");
 
 assert!(readings.iter().any(|item| item.text == "10 kg"));
 ```
@@ -453,9 +457,9 @@ assert!(readings.iter().any(|item| item.text == "10 kg"));
 Temperature readings are normalized to Celsius:
 
 ```rust
-use unravel_nl::{humanize, parse};
+use unravel_nl::{humanize, Dimension, Parser};
 
-let parsed = parse("68 F", None);
+let parsed = Parser::new(Dimension::Temperature.into()).parse("68 F");
 let best = parsed.best.expect("temperature");
 
 assert_eq!(best.unit.as_deref(), Some("C"));
@@ -465,28 +469,29 @@ assert_eq!(humanize(&best, None), "20 °C");
 ## Approximate And Fuzzy Input
 
 ```rust
-use unravel_nl::{parse, Dimension, DimensionSet, FuzzyProfile, FuzzyTerm, ParseCtx};
+use unravel_nl::{Dimension, FuzzyProfile, FuzzyTerm, ParseCtx, Parser};
 
-let tolerance = parse("10 ± 0.5 mm", None);
+let tolerance = Parser::new(Dimension::Length.into()).parse("10 ± 0.5 mm");
 assert!(tolerance.best.unwrap().range.is_some());
 
-let bounded = parse("10mm以下", None);
+let bounded = Parser::new(Dimension::Length.into()).parse("10mm以下");
 assert!(bounded.best.unwrap().range.is_some());
 
-let hot = parse(
-    "it's hot",
-    Some(ParseCtx {
-        expected_dimensions: DimensionSet::of(&[Dimension::Temperature]),
+let hot_parser = Parser::with_context(
+    Dimension::Temperature.into(),
+    ParseCtx {
+        expected_dimensions: Dimension::Temperature.into(),
         ..ParseCtx::default()
-    }),
+    },
 );
+let hot = hot_parser.parse("it's hot");
 
 assert!(hot.best.unwrap().range.is_some());
 
-let custom = parse(
-    "heavy",
-    Some(ParseCtx {
-        expected_dimensions: DimensionSet::of(&[Dimension::Mass]),
+let custom_parser = Parser::with_context(
+    Dimension::Mass.into(),
+    ParseCtx {
+        expected_dimensions: Dimension::Mass.into(),
         fuzzy_profiles: vec![FuzzyProfile::new(
             "parcels",
             Dimension::Mass,
@@ -494,8 +499,9 @@ let custom = parse(
             &[FuzzyTerm::new("heavy", 20.0, 70.0)],
         )],
         ..ParseCtx::default()
-    }),
+    },
 );
+let custom = custom_parser.parse("heavy");
 
 assert!(custom.best.unwrap().range.is_some());
 ```
@@ -503,18 +509,19 @@ assert!(custom.best.unwrap().range.is_some());
 Callers that must reject broad grammar shapes can use `AcceptOptions`:
 
 ```rust
-use unravel_nl::{parse, AcceptOptions, ParseCtx};
+use unravel_nl::{AcceptOptions, Dimension, ParseCtx, Parser};
 
-let parsed = parse(
-    "between 5 and 10 kg",
-    Some(ParseCtx {
+let parser = Parser::with_context(
+    Dimension::Mass.into(),
+    ParseCtx {
         accept: AcceptOptions {
             ranges: false,
             ..AcceptOptions::default()
         },
         ..ParseCtx::default()
-    }),
+    },
 );
+let parsed = parser.parse("between 5 and 10 kg");
 
 assert!(parsed.best.is_none());
 assert_eq!(parsed.alternatives.len(), 1);
@@ -524,15 +531,16 @@ Numeric punctuation can be pinned with `NumberFormat` when locale inference is
 too permissive:
 
 ```rust
-use unravel_nl::{parse, NumberFormat, ParseCtx};
+use unravel_nl::{Dimension, NumberFormat, ParseCtx, Parser};
 
-let parsed = parse(
-    "1,234 kg",
-    Some(ParseCtx {
+let parser = Parser::with_context(
+    Dimension::Mass.into(),
+    ParseCtx {
         number_format: NumberFormat::CommaDecimal,
         ..ParseCtx::default()
-    }),
+    },
 );
+let parsed = parser.parse("1,234 kg");
 
 assert_eq!(parsed.best.unwrap().value, Some(1.234));
 ```
@@ -542,15 +550,16 @@ assert_eq!(parsed.best.unwrap().value, Some(1.234));
 Currency conversion only runs when the caller supplies an explicit rate:
 
 ```rust
-use unravel_nl::{parse, CurrencyRate, ParseCtx};
+use unravel_nl::{CurrencyRate, Dimension, ParseCtx, Parser};
 
-let parsed = parse(
-    "USD 10 to JPY",
-    Some(ParseCtx {
+let parser = Parser::with_context(
+    Dimension::Currency.into(),
+    ParseCtx {
         currency_rates: vec![CurrencyRate::new("USD", "JPY", 150.0)],
         ..ParseCtx::default()
-    }),
+    },
 );
+let parsed = parser.parse("USD 10 to JPY");
 
 let best = parsed.best.expect("converted amount");
 assert_eq!(best.unit.as_deref(), Some("JPY"));
@@ -563,7 +572,7 @@ assert_eq!(best.value, Some(1500.0));
 use unravel_nl::{
     canonicalize_values, contract_version, mcp_tool_schema_json,
     parse_input_schema_json, parsed_output_schema_json, CanonicalizeRequest,
-    ParseCtx, Strictness,
+    Dimension, ParseCtx, Parser, Strictness,
 };
 
 assert_eq!(contract_version(), "unravel-nl.parse.v1");
@@ -574,10 +583,13 @@ assert!(mcp_tool_schema_json().contains("unravel_nl_parse"));
 let values = canonicalize_values(&[CanonicalizeRequest::new(
     "weight",
     "about 20kg",
-    Some(ParseCtx {
-        strictness: Strictness::Strict,
-        ..ParseCtx::default()
-    }),
+    Parser::with_context(
+        Dimension::Mass.into(),
+        ParseCtx {
+            strictness: Strictness::Strict,
+            ..ParseCtx::default()
+        },
+    ),
 )]);
 
 assert!(!values[0].ok);

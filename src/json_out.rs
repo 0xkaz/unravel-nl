@@ -557,7 +557,7 @@ mod tests {
                 let values = canonicalize_values(&[CanonicalizeRequest::new(
                     "field",
                     text,
-                    Some(ctx.clone()),
+                    Parser::unrestricted_with_context(ctx.clone()),
                 )]);
                 assert_eq!(values[0].ok, decided, "{label}: the adapter disagrees");
                 assert_eq!(

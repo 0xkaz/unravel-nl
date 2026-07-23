@@ -288,6 +288,51 @@ impl DimensionSet {
     }
 }
 
+/// Selects which built-in measurement domains exist in a parser's vocabulary.
+///
+/// This is deliberately distinct from [`DimensionSet`]'s policy semantics:
+/// `DimensionSet::new()` means "no acceptance restriction", while
+/// `UnitRegistry::Only(DimensionSet::new())` means "load no measurement
+/// units". That distinction lets [`Parser::new`] model the empty registry used
+/// by a minimal parser without changing the established meaning of
+/// [`ParseCtx::expected_dimensions`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum UnitRegistry {
+    /// Loads every built-in measurement domain.
+    #[default]
+    All,
+    /// Loads exactly the dimensions in the set, including none for an empty set.
+    Only(DimensionSet),
+}
+
+impl UnitRegistry {
+    /// Creates the unrestricted compatibility registry.
+    pub const fn all() -> Self {
+        Self::All
+    }
+
+    /// Creates a registry containing exactly `dimensions`.
+    pub const fn only(dimensions: DimensionSet) -> Self {
+        Self::Only(dimensions)
+    }
+
+    /// Returns whether this registry contains `dimension`.
+    pub const fn allows(self, dimension: Dimension) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(dimensions) => dimensions.contains(dimension),
+        }
+    }
+
+    /// Returns the explicit dimension set, or `None` for the full registry.
+    pub const fn dimensions(self) -> Option<DimensionSet> {
+        match self {
+            Self::All => None,
+            Self::Only(dimensions) => Some(dimensions),
+        }
+    }
+}
+
 impl From<Dimension> for DimensionSet {
     fn from(dimension: Dimension) -> Self {
         Self::new().with(dimension)
@@ -376,7 +421,7 @@ pub enum NumberFormat {
     DotDecimal,
 }
 
-/// Selects which parser grammar [`parse`] runs.
+/// Selects which parser grammar [`Parser::parse`] runs.
 ///
 /// Carried by [`ParseCtx::purpose`], where it is a hard filter rather than a
 /// hint: input the selected grammar does not read is refused rather than handed
@@ -526,13 +571,13 @@ pub struct ParseCtx {
     pub locale: Option<Locale>,
     /// Expected top-level reading kind. This does **not** constrain parsing.
     ///
-    /// [`parse`] ignores it when choosing a grammar: `parse("5 kg", ..)` with
-    /// `expect: Some(Kind::Date)` still returns the `5 kg` quantity. Only two
+    /// [`Parser::parse`] ignores it when choosing a grammar: parsing `5 kg`
+    /// with `expect: Some(Kind::Date)` still returns the quantity. Only two
     /// places read it:
     ///
-    /// - [`complete`] and [`complete_readings`] filter candidates by it, so
-    ///   `Some(Kind::Date)` keeps date completions only and
-    ///   `Some(Kind::Number)` drops every candidate.
+    /// - [`Parser::complete`] and [`Parser::complete_readings`] filter
+    ///   candidates by it, so `Some(Kind::Date)` keeps date completions only
+    ///   and `Some(Kind::Number)` drops every candidate.
     /// - A bare number parsed with `Some(Kind::Quantity)` gains a millimetre
     ///   length alternative and a [`IssueCode::UnitAssumed`] ambiguity.
     ///
@@ -542,12 +587,11 @@ pub struct ParseCtx {
     /// hint.
     ///
     /// The empty set — the default — places no restriction. A non-empty set
-    /// binds on every entry point: [`parse`], [`parse_quantity_fast`],
-    /// [`parse_number_fast`], [`parse_date_fast`],
-    /// [`parse_dimensions_for_editor`], [`complete`],
-    /// [`complete_readings`], and [`canonicalize_values`]. A reading whose
-    /// dimension is outside the set never comes back as [`Parsed::best`]; it is
-    /// moved to [`Parsed::alternatives`] and reported as
+    /// binds on [`Parser::parse`], [`Parser::parse_dimensions_for_editor`],
+    /// [`Parser::complete`], [`Parser::complete_readings`], and
+    /// [`canonicalize_values`]. A reading whose dimension is outside the set
+    /// never comes back as [`Parsed::best`]; it is moved to
+    /// [`Parsed::alternatives`] and reported as
     /// [`IssueCode::RejectedByPolicy`], so the refusal is visible rather than
     /// silent. If a competing reading of the same input *is* in the set, that
     /// reading is promoted to `best` instead — `5m3` under
@@ -560,57 +604,65 @@ pub struct ParseCtx {
     /// **Readings that have no dimension at all are not refused.** A bare
     /// number and a date have no measurement domain, so they
     /// cannot collide with one; restricting the domains a unit may come from
-    /// says nothing about whether the field may hold `3640`. This is what lets
-    /// [`parse_number_fast`] stay useful under a restriction.
-    /// [`complete`] is deliberately stricter — see its documentation.
+    /// says nothing about whether the field may hold `3640`.
+    /// [`Parser::complete`] is deliberately stricter — see its documentation.
     ///
-    /// [`parse_dimensions_for_editor`] is the one place a bare number *does*
+    /// [`Parser::parse_dimensions_for_editor`] is the one place a bare number *does*
     /// carry a domain, because a label gave it one: `寸法3640` is a millimetre
     /// length, and a field that declared areas refuses it rather than dropping
     /// it. The declaration composes with that label by intersection, so it
     /// narrows what the label allowed and never widens it.
     ///
     /// ```
-    /// use unravel_nl::{parse_quantity_fast, Dimension, DimensionSet, IssueCode, ParseCtx};
+    /// use unravel_nl::{Dimension, DimensionSet, IssueCode, ParseCtx, Parser};
     ///
-    /// let parsed = parse_quantity_fast(
-    ///     "5 mM",
-    ///     Some(ParseCtx {
+    /// let parsed = Parser::unrestricted_with_context(
+    ///     ParseCtx {
     ///         expected_dimensions: DimensionSet::of(&[Dimension::Length]),
     ///         ..ParseCtx::default()
-    ///     }),
-    /// );
+    ///     },
+    /// ).parse("5 mM");
     ///
     /// assert!(parsed.best.is_none());
     /// assert_eq!(parsed.findings.skipped[0].code, IssueCode::RejectedByPolicy);
     /// ```
     pub expected_dimensions: DimensionSet,
+    /// Built-in measurement registry this parser instance loads.
+    ///
+    /// [`UnitRegistry::All`] is the default compatibility mode.
+    /// [`UnitRegistry::Only`] prevents other domains from entering grammar
+    /// dispatch, registry lookup, typo correction, or completion in the first
+    /// place; its empty set loads no measurement units. This differs from
+    /// [`ParseCtx::expected_dimensions`]:
+    /// `expected_dimensions` reads an out-of-domain value and returns it as a
+    /// refused alternative, while this field says that value is not part of
+    /// the parser's vocabulary at all.
+    ///
+    /// Prefer constructing this through [`Parser::new`] so registry and output
+    /// policy cannot accidentally disagree.
+    pub unit_registry: UnitRegistry,
     /// Numeric punctuation policy.
     pub number_format: NumberFormat,
-    /// Selects which grammar [`parse`] runs. This is a hard filter, not a hint.
+    /// Selects which grammar [`Parser::parse`] runs. This is a hard filter, not
+    /// a hint.
     ///
     /// Input that the selected grammar does not read is refused rather than
-    /// handed to another grammar: `parse("5 kg", ..)` with
-    /// `purpose: ParsePurpose::Number` and `parse("next friday", ..)` with
-    /// `purpose: ParsePurpose::Quantity` both return `best: None` and report
-    /// [`IssueCode::NoValue`].
-    ///
-    /// For the three whole-string purposes this is exactly the corresponding
-    /// narrow entry point: [`ParsePurpose::Quantity`] is
-    /// [`parse_quantity_fast`], [`ParsePurpose::Number`] is
-    /// [`parse_number_fast`], and [`ParsePurpose::Date`] is
-    /// [`parse_date_fast`].
+    /// handed to another grammar: parsing `5 kg` with
+    /// [`ParsePurpose::Number`], or `next friday` with
+    /// [`ParsePurpose::Quantity`], returns `best: None` and reports
+    /// [`IssueCode::NoValue`]. Quantity, number, and date selection all stay on
+    /// the single [`Parser::parse`] route.
     ///
     /// [`ParsePurpose::DimensionEditor`] is the exception, and is **not**
-    /// equivalent to [`parse_dimensions_for_editor`]. That function is an
+    /// equivalent to [`Parser::parse_dimensions_for_editor`]. That method is an
     /// extractor: it scans free text for numeric candidates, infers an expected
     /// dimension from a neighbouring label, and keeps only the candidates that
     /// survive that filter. This purpose runs the same editor grammar over the
     /// whole input with neither step, so the two diverge in both directions:
-    /// `parse("幅3m", ..)` with this purpose returns `best: None` while
-    /// `parse_dimensions_for_editor("幅3m", ..)` extracts `3 m` from after the
-    /// label, and `parse("3640", ..)` with this purpose returns the unitless
-    /// number while `parse_dimensions_for_editor("3640", ..)` returns nothing,
+    /// parsing `幅3m` with this purpose returns `best: None` while the extractor
+    /// method returns `3 m` from after the label, and parsing `3640` with this
+    /// purpose returns the unitless number while extracting from the same
+    /// string returns nothing,
     /// because an unlabelled bare number is not a dimension.
     ///
     /// [`ParseCtx::expected_dimensions`] is the other hard filter, and the two

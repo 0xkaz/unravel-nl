@@ -7,9 +7,12 @@
 //!    [`parse_quantity_fast`], because the compound-height parser splits on the
 //!    first `m` and runs before the registry lookup in the fast path.
 
+mod support;
+use support::{parse, parse_number_fast, parse_quantity_fast};
+
 use unravel_nl::{
-    CanonicalizeRequest, Dimension, IssueCode, Kind, NumberFormat, ParseCtx, Parsed, Strictness,
-    canonicalize_values, parse, parse_number_fast, parse_quantity_fast,
+    CanonicalizeRequest, Dimension, IssueCode, Kind, NumberFormat, ParseCtx, Parsed, Parser,
+    Strictness, canonicalize_values,
 };
 
 fn ambiguous_number_findings(parsed: &Parsed) -> Vec<(&str, usize, usize)> {
@@ -262,8 +265,16 @@ fn strict_canonicalization_refuses_a_guessed_grouping() {
         ..ParseCtx::default()
     };
     let results = canonicalize_values(&[
-        CanonicalizeRequest::new("weight", "1.234 kg", Some(ctx.clone())),
-        CanonicalizeRequest::new("clear", "1.5 kg", Some(ctx.clone())),
+        CanonicalizeRequest::new(
+            "weight",
+            "1.234 kg",
+            Parser::with_context(Dimension::Mass.into(), ctx.clone()),
+        ),
+        CanonicalizeRequest::new(
+            "clear",
+            "1.5 kg",
+            Parser::with_context(Dimension::Mass.into(), ctx.clone()),
+        ),
     ]);
 
     assert!(!results[0].ok, "{:#?}", results[0]);

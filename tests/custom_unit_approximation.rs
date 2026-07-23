@@ -8,6 +8,9 @@
 //! `year` — used to produce `approximate: Some(true)` with a completely empty
 //! `Findings`, which is that guarantee broken.
 
+mod support;
+use support::{parse, parse_quantity_fast};
+
 use unravel_nl::*;
 
 fn smoot_ctx(approximate: bool) -> ParseCtx {

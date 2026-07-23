@@ -1,6 +1,9 @@
 #![cfg(feature = "dates-jiff")]
 
-use unravel_nl::{Date, Kind, Locale, ParseCtx, parse};
+mod support;
+use support::parse;
+
+use unravel_nl::{Date, Kind, Locale, ParseCtx};
 
 const DATE_GOLDEN: &str = include_str!("corpus/date_golden.tsv");
 

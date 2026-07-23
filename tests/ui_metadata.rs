@@ -1,4 +1,7 @@
-use unravel_nl::{IssueCode, IssueSeverity, ParseCtx, Strictness, parse, ranked_findings};
+mod support;
+use support::parse;
+
+use unravel_nl::{IssueCode, IssueSeverity, ParseCtx, Strictness, ranked_findings};
 
 #[test]
 fn ranked_findings_orders_blocking_issues_first() {

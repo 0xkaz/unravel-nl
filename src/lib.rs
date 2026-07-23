@@ -19,20 +19,16 @@
 //!
 //! # Choosing an entry point
 //!
-//! [`parse`] is the broad entry point: use it when the input could be any of a
-//! quantity, date, time, range, conversion request, or plain number. Every other entry point is narrower, and narrower is better whenever
-//! the caller already knows what the field holds — a dedicated entry point does
-//! less grammar dispatch, so it is faster and, more importantly, it cannot
-//! misread the input as some other kind of value. A date field parsed with
-//! [`parse_date_fast`] will never come back holding a currency.
+//! [`Parser`] is the configured entry point. Use [`Parser::japanese_building`]
+//! for the small length-and-area preset, or [`Parser::new`] with an explicit
+//! [`DimensionSet`]. Keeping the unit domains on one instance prevents
+//! unrelated registries from competing for the same input.
 //!
-//! | Entry point | Use when |
-//! | --- | --- |
-//! | [`parse`] | The kind of value is unknown. |
-//! | [`parse_quantity_fast`] | The field holds a measurement. |
-//! | [`parse_number_fast`] | The field holds a bare number. |
-//! | [`parse_date_fast`] | The field holds a date. |
-//! | [`parse_dimensions_for_editor`] | Free text where only lengths and areas count. |
+//! [`Parser::default`] is the locale-neutral length-and-area preset.
+//! [`Parser::unrestricted`] keeps the old full catalog as an explicit
+//! compatibility choice. Set [`ParseCtx::purpose`] through
+//! [`Parser::with_context`] when a field is known to hold only a quantity,
+//! date, or number.
 //!
 //! # Reading the result
 //!
@@ -57,15 +53,10 @@
 //! # Getting started
 //!
 //! ```
-//! use unravel_nl::{humanize, parse, HumanizeCtx, Locale, ParseCtx};
+//! use unravel_nl::{humanize, HumanizeCtx, Locale, Parser};
 //!
-//! let parsed = parse(
-//!     "5尺3寸",
-//!     Some(ParseCtx {
-//!         locale: Some(Locale::Ja),
-//!         ..ParseCtx::default()
-//!     }),
-//! );
+//! let parser = Parser::japanese_building();
+//! let parsed = parser.parse("5尺3寸");
 //!
 //! let best = parsed.best.expect("a canonical reading");
 //! assert_eq!(best.unit.as_deref(), Some("m"));
@@ -105,6 +96,7 @@ mod grammar;
 mod json_out;
 mod normalize;
 mod number;
+mod parser;
 mod quantity;
 mod scan;
 mod schema;
@@ -121,14 +113,12 @@ pub use adapters::{
     CanonicalizeRequest, CanonicalizedValue, canonicalize_values, describe_parsed,
     describe_reading, humanize, repair_tool_call_message,
 };
-pub use completion::{complete, complete_readings};
+#[cfg(test)]
+pub(crate) use completion::*;
 pub(crate) use currency::*;
 pub(crate) use dates::*;
 pub(crate) use duration::*;
 pub(crate) use entry::*;
-pub use entry::{
-    parse, parse_date_fast, parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
-};
 pub(crate) use findings::*;
 pub use findings::{
     Ambiguity, Approximation, Findings, IssueCode, IssueSeverity, RankedIssue, Skipped, Span,
@@ -139,6 +129,7 @@ pub(crate) use grammar::*;
 pub(crate) use json_out::*;
 pub(crate) use normalize::*;
 pub(crate) use number::*;
+pub use parser::Parser;
 pub(crate) use quantity::*;
 pub(crate) use scan::*;
 pub(crate) use schema::*;
@@ -148,7 +139,7 @@ pub use types::{
     AcceptOptions, Completion, CompletionKind, CompletionReading, CurrencyRate, CustomUnit, Date,
     Dimension, DimensionSet, FuzzyProfile, FuzzyTerm, HumanizeCtx, Kind, Locale, NumberFormat,
     ParseCtx, ParsePurpose, Parsed, ParsedMatch, Provenance, RangeReading, Reading, ResourceField,
-    ResourceView, Strictness, Suggestion,
+    ResourceView, Strictness, Suggestion, UnitRegistry,
 };
 pub(crate) use unit_aliases::*;
 pub use unit_defs::UnitDef;

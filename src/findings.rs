@@ -132,9 +132,9 @@ impl IssueCode {
 /// which is what makes spans usable for editor highlighting.
 ///
 /// ```
-/// use unravel_nl::parse;
+/// use unravel_nl::{Dimension, Parser};
 ///
-/// let parsed = parse("３pm Europe/Paris", None);
+/// let parsed = Parser::new(Dimension::Time.into()).parse("３pm Europe/Paris");
 /// let span = &parsed.findings.skipped[0].span;
 ///
 /// assert_eq!(&parsed.input[span.start..span.end], span.text);
@@ -300,9 +300,9 @@ pub struct RankedIssue {
 /// problem first without knowing the code taxonomy.
 ///
 /// ```
-/// use unravel_nl::{parse, ranked_findings, IssueSeverity};
+/// use unravel_nl::{ranked_findings, IssueSeverity, Parser};
 ///
-/// let parsed = parse("", None);
+/// let parsed = Parser::default().parse("");
 /// let issues = ranked_findings(&parsed);
 ///
 /// assert_eq!(issues[0].severity, IssueSeverity::Error);
@@ -369,16 +369,17 @@ pub fn ranked_findings(parsed: &Parsed) -> Vec<RankedIssue> {
 ///
 /// Severity is deliberately *not* the carrier of this decision. A strict
 /// refusal of `about 20kg` is reported as a skipped `APPROXIMATION`, which
-/// [`issue_severity`] keeps at [`IssueSeverity::Warning`] so a UI can offer to
+/// `issue_severity` keeps at [`IssueSeverity::Warning`] so a UI can offer to
 /// confirm it rather than present it as broken — see
 /// `recoverable_and_warning_do_not_promise_a_reading`. Reading acceptance off
 /// severity would have accepted exactly that parse.
 ///
 /// ```
-/// use unravel_nl::{accepts, parse};
+/// use unravel_nl::{accepts, Dimension, Parser};
 ///
-/// assert!(accepts(&parse("5 kg", None)));
-/// assert!(!accepts(&parse("", None)));
+/// let parser = Parser::new(Dimension::Mass.into());
+/// assert!(accepts(&parser.parse("5 kg")));
+/// assert!(!accepts(&parser.parse("")));
 /// ```
 pub fn accepts(parsed: &Parsed) -> bool {
     if !parsed.findings.skipped.is_empty() {

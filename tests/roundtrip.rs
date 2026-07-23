@@ -1,4 +1,7 @@
-use unravel_nl::{HumanizeCtx, Kind, Locale, ParseCtx, Reading, humanize, parse};
+mod support;
+use support::parse;
+
+use unravel_nl::{HumanizeCtx, Kind, Locale, ParseCtx, Reading, humanize};
 
 const GOLDEN: &str = include_str!("corpus/golden.tsv");
 

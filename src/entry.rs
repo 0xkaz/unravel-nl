@@ -1,17 +1,14 @@
-//! Entry points.
+//! Internal parser dispatch.
 //!
-//! [`parse`] is the broad entry point; the rest are narrower, and narrower is
-//! better whenever the caller already knows what the field holds. The selection
-//! table lives in the crate-level docs, because this module is private and its
-//! prose does not reach the rendered documentation.
+//! Public calls enter through [`Parser`]; this module holds the one normalized
+//! route used by every configured instance.
 
 use crate::*;
 
 /// Parses one value out of `text`, trying every supported grammar.
 ///
-/// This is the general entry point. Set [`ParseCtx::purpose`] to restrict the
-/// dispatch without switching functions, or call one of the narrower entry
-/// points in this module directly.
+/// [`Parser`] supplies the context. [`ParseCtx::purpose`] restricts the
+/// dispatch without adding another public entry point.
 ///
 /// The reading the parser ranked first is in [`Parsed::best`], competing
 /// readings are in [`Parsed::alternatives`], and anything skipped, ambiguous,
@@ -23,15 +20,9 @@ use crate::*;
 /// returned, and the refusal is reported as [`IssueCode::RejectedByPolicy`].
 ///
 /// ```
-/// use unravel_nl::{parse, Locale, ParseCtx};
+/// use unravel_nl::Parser;
 ///
-/// let parsed = parse(
-///     "5尺3寸",
-///     Some(ParseCtx {
-///         locale: Some(Locale::Ja),
-///         ..ParseCtx::default()
-///     }),
-/// );
+/// let parsed = Parser::japanese_building().parse("5尺3寸");
 ///
 /// let best = parsed.best.expect("a canonical reading");
 /// assert_eq!(best.unit.as_deref(), Some("m"));
@@ -74,127 +65,29 @@ pub fn parse(text: &str, ctx: Option<ParseCtx>) -> Parsed {
     parsed
 }
 
-/// Parses `text` as a measurement, skipping the date grammars.
-///
-/// [`ParseCtx::expected_dimensions`] is a hard filter here. A non-empty set
-/// refuses any reading from a measurement domain outside it: `5 kg` under
-/// `[Dimension::Length]` returns `best: None` with the mass in
-/// [`Parsed::alternatives`] and an [`IssueCode::RejectedByPolicy`] finding,
-/// rather than the mass the caller said the field could not hold. Declaring the
-/// domains is also what keeps unit collisions across domains out of the answer:
-/// with lengths declared, `5 mM` cannot come back as a concentration and `5 m3`
-/// reads as the compound 5 m 3 cm.
-///
-/// ```
-/// use unravel_nl::{parse_quantity_fast, Dimension, DimensionSet, ParseCtx};
-///
-/// let parsed = parse_quantity_fast(
-///     "1,234 kg",
-///     Some(ParseCtx {
-///         expected_dimensions: DimensionSet::of(&[Dimension::Mass]),
-///         ..ParseCtx::default()
-///     }),
-/// );
-///
-/// assert_eq!(parsed.best.unwrap().unit.as_deref(), Some("kg"));
-/// ```
-pub fn parse_quantity_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
-    let ctx = ctx.unwrap_or_default();
-    parse_quantity_fast_with_ctx(text, &ctx)
+// The old specialized functions survive only as test adapters while the
+// regression corpus migrates to the single `Parser::parse` route. They contain
+// no parsing logic of their own.
+#[cfg(test)]
+pub(crate) fn parse_quantity_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
+    parse_with_test_purpose(text, ctx, ParsePurpose::Quantity)
 }
 
-pub(crate) fn parse_quantity_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
-    let normalized_input = normalize_input_cow(text);
-    let trimmed = normalized_input.trim();
-    let mut parsed = parsed_shell(text, ctx);
-    if trimmed.is_empty() {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "empty input"));
-        retarget_findings_to_input(&mut parsed);
-        return parsed;
-    }
-    parse_quantity_fast_into(trimmed, ctx, &mut parsed);
-    enforce_expected_dimensions(trimmed, ctx, &mut parsed);
-    retarget_findings_to_input(&mut parsed);
-    parsed
+#[cfg(test)]
+pub(crate) fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
+    parse_with_test_purpose(text, ctx, ParsePurpose::Number)
 }
 
-/// Parses `text` as a bare number, without attaching a unit.
-///
-/// Grouping and decimal separators are read according to
-/// [`ParseCtx::number_format`]. [`ParseCtx::locale`] does **not** affect this
-/// entry point: `1.234` reads the same under every locale, and only an explicit
-/// [`NumberFormat`] settles whether the dot groups digits or introduces a
-/// fraction.
-///
-/// Under [`NumberFormat::Auto`] the ambiguity is reported only when the input
-/// is genuinely grouping-shaped: an optional sign, then **one to three digits**,
-/// then a single separator, then **exactly three digits**, and nothing more.
-/// Both sides matter — a longer left side cannot be a leading group, so
-/// `1234.567` and `12345.678` are plain decimals with no finding, while
-/// `1.234`, `12.345`, `123.456`, `0.123`, and `00.123` are all ambiguous.
-/// `1.234` returns 1.234 with 1234 in [`Parsed::alternatives`] and an
-/// [`IssueCode::AmbiguousNumber`] finding, and `1,234` returns the mirror pair.
-/// Anything the shape already settles returns one reading and no finding:
-/// `1.23`, `1.2345`, and `0.5` are decimals, `1.234.567` is 1234567, and
-/// `1.234,56` is 1234.56.
-///
-/// [`ParseCtx::expected_dimensions`] is enforced here as everywhere else, but a
-/// bare number has no measurement domain, so a restriction does not refuse one:
-/// this entry point keeps working under any declared set. What the set does
-/// change is the millimetre alternative — a set containing [`Dimension::Length`]
-/// offers it, exactly as `expect: Some(Kind::Quantity)` does.
-pub fn parse_number_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
-    let ctx = ctx.unwrap_or_default();
-    parse_number_fast_with_ctx(text, &ctx)
+#[cfg(test)]
+pub(crate) fn parse_date_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
+    parse_with_test_purpose(text, ctx, ParsePurpose::Date)
 }
 
-pub(crate) fn parse_number_fast_with_ctx(text: &str, ctx: &ParseCtx) -> Parsed {
-    let normalized_input = normalize_input_cow(text);
-    let trimmed = normalized_input.trim();
-    let mut parsed = parsed_shell(text, ctx);
-    if trimmed.is_empty() {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "empty input"));
-        retarget_findings_to_input(&mut parsed);
-        return parsed;
-    }
-    parse_number_fast_into(trimmed, ctx, &mut parsed);
-    enforce_expected_dimensions(trimmed, ctx, &mut parsed);
-    retarget_findings_to_input(&mut parsed);
-    parsed
-}
-
-/// Parses `text` as a date, skipping quantity and currency grammars.
-///
-/// The parser never reads the host clock. Relative expressions such as
-/// `next friday` resolve only when [`ParseCtx::reference_date`] is supplied and
-/// the `dates-jiff` feature is enabled; otherwise they are reported as findings
-/// rather than resolved against an implicit "today".
-///
-/// [`ParseCtx::expected_dimensions`] is enforced here as everywhere else, but a
-/// date has no measurement domain, so a declared set never refuses one.
-pub fn parse_date_fast(text: &str, ctx: Option<ParseCtx>) -> Parsed {
-    let ctx = ctx.unwrap_or_default();
-    let normalized_input = normalize_input_cow(text);
-    let trimmed = normalized_input.trim();
-    let mut parsed = parsed_shell(text, &ctx);
-    if trimmed.is_empty() {
-        parsed
-            .findings
-            .skipped
-            .push(skipped(trimmed, "empty input"));
-        retarget_findings_to_input(&mut parsed);
-        return parsed;
-    }
-    parse_date_fast_into(trimmed, &ctx, &mut parsed);
-    enforce_expected_dimensions(trimmed, &ctx, &mut parsed);
-    retarget_findings_to_input(&mut parsed);
-    parsed
+#[cfg(test)]
+fn parse_with_test_purpose(text: &str, ctx: Option<ParseCtx>, purpose: ParsePurpose) -> Parsed {
+    let mut ctx = ctx.unwrap_or_default();
+    ctx.purpose = purpose;
+    parse(text, Some(ctx))
 }
 
 pub(crate) fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
@@ -248,14 +141,10 @@ pub(crate) fn parsed_shell(text: &str, ctx: &ParseCtx) -> Parsed {
 /// [`accepts`] is false for it.
 ///
 /// ```
-/// use unravel_nl::{parse_dimensions_for_editor, Locale, ParseCtx};
+/// use unravel_nl::Parser;
 ///
-/// let matches = parse_dimensions_for_editor(
+/// let matches = Parser::japanese_building().parse_dimensions_for_editor(
 ///     "幅3m×奥行4m、予算1234、next friday、6帖、寸法3640",
-///     Some(ParseCtx {
-///         locale: Some(Locale::Ja),
-///         ..ParseCtx::default()
-///     }),
 /// );
 ///
 /// assert_eq!(matches.len(), 4);
@@ -282,7 +171,7 @@ pub fn parse_dimensions_for_editor(text: &str, ctx: Option<ParseCtx>) -> Vec<Par
 pub(crate) fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     parse_normalized_dispatch(trimmed, ctx, parsed);
     report_ambiguous_quantity_number(trimmed, ctx, parsed, parse_normalized_dispatch);
-    report_closed_compound_alternative(trimmed, parsed);
+    report_closed_compound_alternative(trimmed, ctx, parsed);
     finalize_parsed(trimmed, parsed);
 }
 
@@ -299,7 +188,7 @@ pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &
 pub(crate) fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     parse_quantity_fast_dispatch(trimmed, ctx, parsed);
     report_ambiguous_quantity_number(trimmed, ctx, parsed, parse_quantity_fast_dispatch);
-    report_closed_compound_alternative(trimmed, parsed);
+    report_closed_compound_alternative(trimmed, ctx, parsed);
     finalize_parsed(trimmed, parsed);
 }
 
@@ -475,11 +364,15 @@ pub(crate) const AMBIGUOUS_ALTERNATIVE_FACTOR: f64 = 0.875;
 ///
 /// Runs from both `parse_normalized_into` and [`parse_quantity_fast_into`], so
 /// every entry point reports the same alternative and the same finding.
-pub(crate) fn report_closed_compound_alternative(trimmed: &str, parsed: &mut Parsed) {
+pub(crate) fn report_closed_compound_alternative(
+    trimmed: &str,
+    ctx: &ParseCtx,
+    parsed: &mut Parsed,
+) {
     let Some(best) = parsed.best.as_ref() else {
         return;
     };
-    let Some(mut alternative) = closed_compound_alternative(trimmed) else {
+    let Some(mut alternative) = closed_compound_alternative(trimmed, ctx.unit_registry) else {
         return;
     };
     // The grammars are guarded, so the compound reading should never also be

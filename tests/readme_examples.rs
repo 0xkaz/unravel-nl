@@ -1,6 +1,9 @@
 //! Keeps the README and README.ja.md examples honest.
 
-use unravel_nl::{HumanizeCtx, Locale, ParseCtx, humanize, parse, parse_dimensions_for_editor};
+mod support;
+use support::{parse, parse_dimensions_for_editor};
+
+use unravel_nl::{HumanizeCtx, Locale, ParseCtx, humanize};
 
 #[test]
 fn readme_shakkanho_example() {

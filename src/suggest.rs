@@ -1,19 +1,24 @@
 use crate::*;
 
-pub(crate) fn suggestions_for(text: &str) -> Vec<Suggestion> {
+pub(crate) fn suggestions_for(text: &str, ctx: &ParseCtx) -> Vec<Suggestion> {
     let mut suggestions = Vec::new();
     for token in ascii_tokens(text) {
+        // A known but disabled unit is not a typo. Correcting `kg` to `km`
+        // inside a length-only parser would manufacture a value from a
+        // deliberate registry boundary.
         if unit_by_alias(&token).is_some() {
             continue;
         }
-        if let Some(suggestion) = suggest_unit(&token).or_else(|| suggest_legacy_word(&token)) {
+        if let Some(suggestion) =
+            suggest_unit(&token, ctx.unit_registry).or_else(|| suggest_legacy_word(&token))
+        {
             suggestions.push(suggestion);
         }
     }
     suggestions
 }
 
-pub(crate) fn suggest_unit(token: &str) -> Option<Suggestion> {
+pub(crate) fn suggest_unit(token: &str, registry: UnitRegistry) -> Option<Suggestion> {
     let normalized = normalize_alias(token);
     if normalized.len() > 32 {
         return None;
@@ -26,6 +31,9 @@ pub(crate) fn suggest_unit(token: &str) -> Option<Suggestion> {
     // length check is O(1), while `is_ascii` and the whitespace search are
     // O(alias) and used to run in front of it.
     for (alias, unit) in first_char_alias_candidates(&normalized) {
+        if !registry.allows(unit.dimension) {
+            continue;
+        }
         if normalized.len().abs_diff(alias.len()) > limit {
             continue;
         }
@@ -48,10 +56,10 @@ pub(crate) fn suggest_unit(token: &str) -> Option<Suggestion> {
             score: Some(1.0 - distance as f64 / max_len),
         }
     })
-    .or_else(|| suggest_non_ascii_unit(token))
+    .or_else(|| suggest_non_ascii_unit(token, registry))
 }
 
-pub(crate) fn suggest_non_ascii_unit(token: &str) -> Option<Suggestion> {
+pub(crate) fn suggest_non_ascii_unit(token: &str, registry: UnitRegistry) -> Option<Suggestion> {
     let token_len = token.chars().count();
     // A one-character typo has no useful evidence: every unrelated symbol is
     // one edit away from every one-character unit. Accepting it made `5 €`
@@ -62,6 +70,9 @@ pub(crate) fn suggest_non_ascii_unit(token: &str) -> Option<Suggestion> {
     }
     let mut best: Option<(&'static str, usize, usize)> = None;
     for unit in UNIT_DEFS {
+        if !registry.allows(unit.dimension) {
+            continue;
+        }
         for alias in unit_lookup_aliases(unit) {
             if alias.is_ascii() {
                 continue;
@@ -226,7 +237,7 @@ mod tests {
                 score: Some(1.0 - distance as f64 / max_len),
             }
         })
-        .or_else(|| suggest_non_ascii_unit(token))
+        .or_else(|| suggest_non_ascii_unit(token, UnitRegistry::all()))
     }
 
     fn suggestion_corpus() -> Vec<String> {
@@ -262,7 +273,7 @@ mod tests {
     #[test]
     fn bucketed_suggest_unit_picks_the_same_unit() {
         for token in suggestion_corpus() {
-            let actual = suggest_unit(&token);
+            let actual = suggest_unit(&token, UnitRegistry::all());
             let expected = suggest_unit_reference(&token);
             assert_eq!(
                 actual
@@ -279,11 +290,12 @@ mod tests {
     #[test]
     fn known_typos_keep_their_suggestions() {
         for (token, expected) in [("meterz", "m"), ("kgx", "kg"), ("secx", "s")] {
-            let suggestion = suggest_unit(token).unwrap_or_else(|| panic!("{token}"));
+            let suggestion =
+                suggest_unit(token, UnitRegistry::all()).unwrap_or_else(|| panic!("{token}"));
             assert_eq!(suggestion.from, token);
             assert_eq!(suggestion.to, expected);
         }
-        assert_eq!(suggest_unit("xqzw"), None);
+        assert_eq!(suggest_unit("xqzw", UnitRegistry::all()), None);
 
         let parsed = parse("meterz kgx lbz secx", None);
         let suggested: Vec<(&str, &str)> = parsed

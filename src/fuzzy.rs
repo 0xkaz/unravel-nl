@@ -77,7 +77,7 @@ pub(crate) fn parse_custom_fuzzy_profile(text: &str, ctx: &ParseCtx) -> Option<P
         if !ctx.expected_dimensions.allows(profile.dimension) {
             continue;
         }
-        let Some(target_unit) = unit_by_alias(&profile.unit) else {
+        let Some(target_unit) = unit_by_alias_in(&profile.unit, ctx.unit_registry) else {
             continue;
         };
         if target_unit.dimension != profile.dimension {
@@ -626,27 +626,32 @@ pub(crate) fn parse_endpoint(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     {
         return Some(reading);
     }
-    if features.maybe_japanese_length
+    if ctx.unit_registry.allows(Dimension::Length)
+        && features.maybe_japanese_length
         && let Some(reading) = parse_japanese_length(text)
     {
         return Some(reading);
     }
-    if features.maybe_tatami
+    if ctx.unit_registry.allows(Dimension::Area)
+        && features.maybe_tatami
         && let Some(reading) = parse_tatami_area(text)
     {
         return Some(reading);
     }
-    if features.maybe_tsubo
+    if ctx.unit_registry.allows(Dimension::Area)
+        && features.maybe_tsubo
         && let Some(reading) = parse_tsubo_area(text)
     {
         return Some(reading);
     }
-    if features.maybe_area
+    if ctx.unit_registry.allows(Dimension::Area)
+        && features.maybe_area
         && let Some(reading) = parse_square_meter(text)
     {
         return Some(reading);
     }
-    if features.maybe_temperature
+    if ctx.unit_registry.allows(Dimension::Temperature)
+        && features.maybe_temperature
         && let Some(reading) = parse_temperature(text)
     {
         return Some(reading);
@@ -656,32 +661,38 @@ pub(crate) fn parse_endpoint(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     {
         return Some(reading);
     }
-    if features.maybe_metric_length
-        && let Some(reading) = parse_metric_length(text)
+    if ctx.unit_registry.allows(Dimension::Length)
+        && features.maybe_metric_length
+        && let Some(reading) = parse_metric_length_ctx(text, ctx)
     {
         return Some(reading);
     }
-    if features.maybe_mass
+    if ctx.unit_registry.allows(Dimension::Mass)
+        && features.maybe_mass
         && let Some(reading) = parse_mass(text)
     {
         return Some(reading);
     }
-    if features.maybe_clock
+    if ctx.unit_registry.allows(Dimension::Time)
+        && features.maybe_clock
         && let Some(reading) = parse_clock_time(text)
     {
         return Some(reading);
     }
-    if features.maybe_duration
-        && let Some(reading) = parse_duration(text)
+    if ctx.unit_registry.allows(Dimension::Time)
+        && features.maybe_duration
+        && let Some(reading) = parse_duration(text, ctx)
     {
         return Some(reading);
     }
-    if features.maybe_feet_inches
-        && let Some(reading) = parse_feet_inches(text)
+    if ctx.unit_registry.allows(Dimension::Length)
+        && features.maybe_feet_inches
+        && let Some(reading) = parse_feet_inches(text, ctx)
     {
         return Some(reading);
     }
-    if features.maybe_currency
+    if ctx.unit_registry.allows(Dimension::Currency)
+        && features.maybe_currency
         && let Some((best, _, _)) = parse_currency(text, ctx)
     {
         return Some(best);

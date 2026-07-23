@@ -14,10 +14,12 @@
 //!   have, no unit invented for a string of bare digits. A dropped value is
 //!   detectable downstream, an invented one is not.
 
-use unravel_nl::{
-    Findings, Kind, Locale, ParseCtx, Parsed, Reading, UnitDef, parse, parse_date_fast,
-    parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast, unit_definitions,
+mod support;
+use support::{
+    parse, parse_date_fast, parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
 };
+
+use unravel_nl::{Findings, Kind, Locale, ParseCtx, Parsed, Reading, UnitDef, unit_definitions};
 
 /// Inputs the removed scanner tests used, plus the shapes that broke it, plus a
 /// generated sweep of label × separator × number × unit.

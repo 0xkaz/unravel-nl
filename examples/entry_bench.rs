@@ -3,10 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use unravel_nl::{
-    Date, Locale, ParseCtx, parse, parse_date_fast, parse_dimensions_for_editor,
-    parse_quantity_fast,
-};
+use unravel_nl::{Date, Locale, ParseCtx, ParsePurpose, Parser};
 
 const QUANTITY_INPUTS: &[&str] = &[
     "5尺3寸",
@@ -51,64 +48,66 @@ fn main() {
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(200_000);
 
-    let quantity_ctx = Some(ParseCtx {
+    let quantity_general = Parser::unrestricted_with_context(ParseCtx {
         locale: Some(Locale::Ja),
         ..ParseCtx::default()
     });
-    let date_ctx = Some(ParseCtx {
+    let quantity_only = Parser::unrestricted_with_context(ParseCtx {
+        locale: Some(Locale::Ja),
+        purpose: ParsePurpose::Quantity,
+        ..ParseCtx::default()
+    });
+    let date_general = Parser::unrestricted_with_context(ParseCtx {
         locale: Some(Locale::Ja),
         reference_date: Date::new(2026, 7, 19),
         ..ParseCtx::default()
     });
+    let date_only = Parser::unrestricted_with_context(ParseCtx {
+        locale: Some(Locale::Ja),
+        reference_date: Date::new(2026, 7, 19),
+        purpose: ParsePurpose::Date,
+        ..ParseCtx::default()
+    });
 
     run_parse(
-        "parse() quantity corpus",
+        "Parser general quantity corpus",
         QUANTITY_INPUTS,
-        quantity_ctx.clone(),
+        &quantity_general,
         iterations,
-        parse,
     );
     run_parse(
-        "parse_quantity_fast() corpus",
+        "Parser quantity-purpose corpus",
         QUANTITY_INPUTS,
-        quantity_ctx,
+        &quantity_only,
         iterations,
-        parse_quantity_fast,
     );
     run_parse(
-        "parse() date corpus",
+        "Parser general date corpus",
         DATE_INPUTS,
-        date_ctx.clone(),
+        &date_general,
         iterations,
-        parse,
     );
     run_parse(
-        "parse_date_fast() corpus",
+        "Parser date-purpose corpus",
         DATE_INPUTS,
-        date_ctx,
+        &date_only,
         iterations,
-        parse_date_fast,
     );
     run_editor_scan(
-        "parse_dimensions_for_editor() corpus",
+        "Parser editor corpus",
         EDITOR_SENTENCES,
+        &Parser::japanese_building(),
         iterations,
     );
 }
 
-fn run_parse(
-    label: &str,
-    inputs: &[&str],
-    ctx: Option<ParseCtx>,
-    iterations: usize,
-    parser: fn(&str, Option<ParseCtx>) -> unravel_nl::Parsed,
-) {
+fn run_parse(label: &str, inputs: &[&str], parser: &Parser, iterations: usize) {
     let started = Instant::now();
     let mut matched = 0_usize;
 
     for idx in 0..iterations {
         let input = inputs[idx % inputs.len()];
-        let parsed = parser(black_box(input), black_box(ctx.clone()));
+        let parsed = parser.parse(black_box(input));
         if parsed.best.is_some() {
             matched += 1;
         }
@@ -118,17 +117,12 @@ fn run_parse(
     print_result(label, iterations, matched, started.elapsed());
 }
 
-fn run_editor_scan(label: &str, inputs: &[&str], iterations: usize) {
+fn run_editor_scan(label: &str, inputs: &[&str], parser: &Parser, iterations: usize) {
     let started = Instant::now();
     let mut matched = 0_usize;
-    let ctx = Some(ParseCtx {
-        locale: Some(Locale::Ja),
-        ..ParseCtx::default()
-    });
-
     for idx in 0..iterations {
         let input = inputs[idx % inputs.len()];
-        let matches = parse_dimensions_for_editor(black_box(input), black_box(ctx.clone()));
+        let matches = parser.parse_dimensions_for_editor(black_box(input));
         matched += matches.len();
         black_box(matches);
     }

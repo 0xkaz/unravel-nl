@@ -36,7 +36,10 @@ const scanner: Scanner = () => [
   },
 ];
 
-const state = parseForUi(parser, "3m", { purpose: "dimension_editor" });
+const state = parseForUi(parser, "3m", {
+  purpose: "dimension_editor",
+  registry_dimensions: "length,area",
+});
 const matches: ParsedMatchState[] = parseAllForUi(scanner, "3m");
 
 state.ok satisfies boolean;

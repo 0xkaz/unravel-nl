@@ -5,9 +5,12 @@
 //! (which needs a `wasm-pack` build) or not at all. `UnknownUnit` is documented
 //! as reserved and is never constructed; a sweep guards that claim.
 
+mod support;
+use support::parse;
+
 use unravel_nl::{
     Dimension, DimensionSet, Findings, IssueCode, IssueSeverity, Kind, Locale, ParseCtx, Parsed,
-    Skipped, Span, parse, ranked_findings,
+    Skipped, Span, ranked_findings,
 };
 
 #[test]

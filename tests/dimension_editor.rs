@@ -1,7 +1,7 @@
-use unravel_nl::{
-    Dimension, IssueCode, Kind, Locale, ParseCtx, ParsePurpose, accepts, parse,
-    parse_dimensions_for_editor,
-};
+mod support;
+use support::{parse, parse_dimensions_for_editor};
+
+use unravel_nl::{Dimension, IssueCode, Kind, Locale, ParseCtx, ParsePurpose, accepts};
 
 #[test]
 fn extracts_editor_dimensions_without_general_values() {

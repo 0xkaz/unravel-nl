@@ -1,7 +1,9 @@
+mod support;
+use support::{complete, complete_readings, parse};
+
 use unravel_nl::{
     AcceptOptions, CompletionKind, CustomUnit, Dimension, DimensionSet, FuzzyProfile, FuzzyTerm,
-    IssueCode, Kind, NumberFormat, ParseCtx, complete_readings, describe_parsed, describe_reading,
-    parse,
+    IssueCode, Kind, NumberFormat, ParseCtx, describe_parsed, describe_reading,
 };
 
 #[test]
@@ -301,7 +303,7 @@ fn described_ok_uses_the_public_acceptance_rule() {
 
 #[test]
 fn prefix_completion_api_remains_available() {
-    let completions = unravel_nl::complete("10 met", None);
+    let completions = complete("10 met", None);
     assert_eq!(completions[0].kind, CompletionKind::Unit);
 }
 

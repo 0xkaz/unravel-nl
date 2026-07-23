@@ -1,4 +1,7 @@
-use unravel_nl::{Dimension, Kind, parse};
+mod support;
+use support::parse;
+
+use unravel_nl::{Dimension, Kind};
 
 #[test]
 fn parses_same_dimension_mixed_compound_units() {

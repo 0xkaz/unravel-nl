@@ -251,6 +251,9 @@ pub(crate) fn dispatch(
         if !entry.reads(grammar) {
             continue;
         }
+        if !grammar.is_enabled(ctx.unit_registry) {
+            continue;
+        }
         if !features.may_hold(grammar) {
             continue;
         }
@@ -269,7 +272,7 @@ pub(crate) fn dispatch(
     TRACE.with(|recorded| recorded.borrow_mut().push(trace));
 
     if entry == Entry::General && features.maybe_suggestion {
-        parsed.suggestions = suggestions_for(trimmed);
+        parsed.suggestions = suggestions_for(trimmed, ctx);
     }
     parsed
         .findings
@@ -431,7 +434,7 @@ fn try_grammar(
             parsed.best = Some(reading);
             true
         }
-        Grammar::MetricLength => set_if_read(parse_metric_length(trimmed), parsed),
+        Grammar::MetricLength => set_if_read(parse_metric_length_ctx(trimmed, ctx), parsed),
         Grammar::Mass => set_if_read(parse_mass(trimmed), parsed),
         Grammar::TimezoneClock => {
             let Some((reading, day_shift)) = parse_timezone_clock_time(trimmed, ctx) else {
@@ -451,7 +454,7 @@ fn try_grammar(
             true
         }
         Grammar::Clock => set_if_read(parse_clock_time(trimmed), parsed),
-        Grammar::Duration => set_if_read(parse_duration(trimmed), parsed),
+        Grammar::Duration => set_if_read(parse_duration(trimmed, ctx), parsed),
         // An apostrophe is a foot mark and a Swiss digit group separator, and
         // for a while both readings were built so the choice could be reported.
         // They cannot both stand: a Swiss group is three digits, so the
@@ -459,7 +462,7 @@ fn try_grammar(
         // above them. `1'234` is a number and `1'11` is a height, and neither
         // is a choice. What is left is grammar order, which is written down
         // once — see `GRAMMAR_ORDER`.
-        Grammar::FeetInches => set_if_read(parse_feet_inches(trimmed), parsed),
+        Grammar::FeetInches => set_if_read(parse_feet_inches(trimmed, ctx), parsed),
         Grammar::Cups => {
             let Some((best, alternatives, ambiguity)) = parse_cups(trimmed, ctx) else {
                 return false;
@@ -535,6 +538,27 @@ fn try_grammar(
             ));
             true
         }
+    }
+}
+
+impl Grammar {
+    /// Whether a parser configured for `dimensions` needs to try this grammar.
+    ///
+    /// Dynamic grammars inspect their result or registry lookup themselves.
+    /// Fixed-dimension grammars can be skipped before doing any parsing, which
+    /// both reduces work and prevents an excluded domain from winning by order.
+    fn is_enabled(self, registry: UnitRegistry) -> bool {
+        let fixed = match self {
+            Self::JapaneseLength | Self::MetricLength | Self::FeetInches => Some(Dimension::Length),
+            Self::TatamiArea | Self::TsuboArea | Self::SquareMeter => Some(Dimension::Area),
+            Self::Temperature => Some(Dimension::Temperature),
+            Self::Mass => Some(Dimension::Mass),
+            Self::TimezoneClock | Self::Clock | Self::Duration => Some(Dimension::Time),
+            Self::Cups => Some(Dimension::Volume),
+            Self::Currency => Some(Dimension::Currency),
+            _ => None,
+        };
+        fixed.is_none_or(|dimension| registry.allows(dimension))
     }
 }
 

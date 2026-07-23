@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use unravel_nl::{Locale, ParseCtx, parse};
+use unravel_nl::{Locale, ParseCtx, Parser};
 
 const DEFAULT_INPUTS: &[&str] = &[
     "5尺3寸",
@@ -87,6 +87,19 @@ const HOSTILE_INPUTS: &[&str] = &[
     "尺尺尺尺尺",
 ];
 
+const BUILDING_INPUTS: &[&str] = &[
+    "5尺3寸",
+    "6帖",
+    "延床100㎡",
+    "100-120㎡",
+    "180cm",
+    "1m80",
+    "5ft 11",
+    "壁厚105mm",
+];
+
+const OUT_OF_SCOPE_INPUTS: &[&str] = &["5 kg", "5 W", "5 mM", "1.5 cups", "meters meters meters"];
+
 #[cfg(feature = "dates-jiff")]
 const DATE_INPUTS: &[&str] = &[
     "next friday",
@@ -114,31 +127,81 @@ fn main() {
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(200_000);
 
-    let default_ctx = Some(ParseCtx {
+    let default_parser = Parser::unrestricted_with_context(ParseCtx {
         locale: Some(Locale::Ja),
         ..ParseCtx::default()
     });
-    run("default corpus", DEFAULT_INPUTS, default_ctx, iterations);
-    run("hostile no-match corpus", HOSTILE_INPUTS, None, iterations);
+    run(
+        "default corpus",
+        DEFAULT_INPUTS,
+        &default_parser,
+        iterations,
+    );
+    run(
+        "hostile no-match corpus",
+        HOSTILE_INPUTS,
+        &Parser::unrestricted(),
+        iterations,
+    );
+    run_parser(
+        "building valid, unrestricted",
+        BUILDING_INPUTS,
+        &Parser::unrestricted(),
+        iterations,
+    );
+    run_parser(
+        "building valid, length+area",
+        BUILDING_INPUTS,
+        &Parser::japanese_building(),
+        iterations,
+    );
+    run_parser(
+        "out-of-scope, unrestricted",
+        OUT_OF_SCOPE_INPUTS,
+        &Parser::unrestricted(),
+        iterations,
+    );
+    run_parser(
+        "out-of-scope, length+area",
+        OUT_OF_SCOPE_INPUTS,
+        &Parser::japanese_building(),
+        iterations,
+    );
 
     #[cfg(feature = "dates-jiff")]
     {
-        let date_ctx = Some(ParseCtx {
+        let date_parser = Parser::unrestricted_with_context(ParseCtx {
             locale: Some(Locale::Ja),
             reference_date: unravel_nl::Date::new(2026, 7, 19),
             ..ParseCtx::default()
         });
-        run("date corpus", DATE_INPUTS, date_ctx, iterations);
+        run("date corpus", DATE_INPUTS, &date_parser, iterations);
     }
 }
 
-fn run(label: &str, inputs: &[&str], ctx: Option<ParseCtx>, iterations: usize) {
+fn run_parser(label: &str, inputs: &[&str], parser: &Parser, iterations: usize) {
     let started = Instant::now();
     let mut matched = 0_usize;
 
     for idx in 0..iterations {
         let input = inputs[idx % inputs.len()];
-        let parsed = parse(black_box(input), black_box(ctx.clone()));
+        let parsed = parser.parse(black_box(input));
+        if parsed.best.is_some() {
+            matched += 1;
+        }
+        black_box(parsed);
+    }
+
+    print_result(label, iterations, matched, started.elapsed());
+}
+
+fn run(label: &str, inputs: &[&str], parser: &Parser, iterations: usize) {
+    let started = Instant::now();
+    let mut matched = 0_usize;
+
+    for idx in 0..iterations {
+        let input = inputs[idx % inputs.len()];
+        let parsed = parser.parse(black_box(input));
         if parsed.best.is_some() {
             matched += 1;
         }

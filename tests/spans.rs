@@ -7,10 +7,13 @@
 //! assertion here is written against `parsed.input`, which is the string a
 //! consumer highlights.
 
+mod support;
+use support::{
+    parse, parse_date_fast, parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
+};
+
 use unravel_nl::{
-    Dimension, DimensionSet, IssueCode, Kind, Locale, ParseCtx, Parsed, Strictness, parse,
-    parse_date_fast, parse_dimensions_for_editor, parse_number_fast, parse_quantity_fast,
-    ranked_findings,
+    Dimension, DimensionSet, IssueCode, Kind, Locale, ParseCtx, Parsed, Strictness, ranked_findings,
 };
 
 /// The contract, checked for every finding: the span is a slice of the input.
