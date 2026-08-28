@@ -33,7 +33,8 @@ The first slice focuses on:
 - Locale-sensitive cup volumes with explicit alternatives
 - An expanding unit registry for length, mass, area, duration, volume, speed,
   data, data-rate, flow-rate, pressure, power, electrical, lighting, and
-  radiation aliases
+  radiation aliases, including SI-prefixed symbols such as `kN`, `MPa`, `kW`,
+  `mV`, `ms`, `mg`, and `mm2`, matched case-sensitively so `kN` is not `kn`
 - Mixed same-dimension compound units such as `3 yd 2 ft` and `4 stone 6 lb`
 - Registry-backed unit typo correction such as `5 meterz`
 - Forgiving, confirm, and strict parse modes for correction policy
@@ -434,6 +435,78 @@ let parser = Parser::with_context(
 let parsed = parser.parse("3 cases");
 
 assert_eq!(parsed.best.unwrap().custom_kind.as_deref(), Some("package_count"));
+```
+
+## Unit Symbols And Letter Case
+
+In SI the case of a symbol carries the meaning: `H` is the henry and `h` the
+hour, `S` the siemens and `s` the second, `kN` the kilonewton and `kn` the
+knot. Alias lookup matches the exact spelling first, so a symbol the registry
+knows always reads as itself.
+
+```rust
+use unravel_nl::{Dimension, IssueCode, Parser};
+
+let parser = Parser::unrestricted();
+
+// The registry carries SI-prefixed entries, so `kN` is force, not the knot.
+let force = parser.parse("7 kN").best.expect("a force reading");
+assert_eq!(force.dimension, Some(Dimension::Force));
+assert_eq!(force.value, Some(7000.0));
+```
+
+A symbol can also name a quantity that has no `Dimension` here. There is no
+honest reading to return for one, so `best` is left empty and the symbol is
+reported. Which finding you get says where the refused reading came from.
+
+A correctly spelled symbol is never treated as a misspelling of an unrelated
+unit — `Hz` is not a typo for the hour:
+
+```rust
+use unravel_nl::{IssueCode, Parser};
+
+let parsed = Parser::unrestricted().parse("7 Hz");
+
+assert!(parsed.best.is_none());
+assert!(parsed.alternatives.is_empty());
+assert_eq!(parsed.findings.skipped[0].code, IssueCode::UnknownUnit);
+```
+
+Where only the letter case separates the two readings, the case-folded one is
+still plausible, so it is offered as an alternative rather than dropped:
+
+```rust
+use unravel_nl::{IssueCode, Parser};
+
+let parsed = Parser::unrestricted().parse("5 H");
+
+assert!(parsed.best.is_none());
+assert_eq!(parsed.alternatives[0].value, Some(18000.0)); // five hours
+assert_eq!(
+    parsed.findings.ambiguities[0].code,
+    IssueCode::AmbiguousUnit
+);
+```
+
+The same applies when one symbol names two quantities the registry does
+measure. `C` is Celsius to the temperature grammar and the coulomb in the
+registry; the temperature reading keeps `best`, and the other is named beside
+it so the choice is visible:
+
+```rust
+use unravel_nl::{Dimension, IssueCode, Parser};
+
+let parsed = Parser::unrestricted().parse("7 C");
+
+assert_eq!(
+    parsed.best.as_ref().unwrap().dimension,
+    Some(Dimension::Temperature)
+);
+assert_eq!(parsed.alternatives[0].dimension, Some(Dimension::Charge));
+assert_eq!(
+    parsed.findings.ambiguities[0].code,
+    IssueCode::AmbiguousUnit
+);
 ```
 
 ## Completions

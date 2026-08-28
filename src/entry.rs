@@ -172,7 +172,7 @@ pub(crate) fn parse_normalized_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut 
     parse_normalized_dispatch(trimmed, ctx, parsed);
     report_ambiguous_quantity_number(trimmed, ctx, parsed, parse_normalized_dispatch);
     report_closed_compound_alternative(trimmed, ctx, parsed);
-    finalize_parsed(trimmed, parsed);
+    finalize_parsed(trimmed, ctx, parsed);
 }
 
 pub(crate) fn parse_normalized_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
@@ -189,7 +189,7 @@ pub(crate) fn parse_quantity_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &m
     parse_quantity_fast_dispatch(trimmed, ctx, parsed);
     report_ambiguous_quantity_number(trimmed, ctx, parsed, parse_quantity_fast_dispatch);
     report_closed_compound_alternative(trimmed, ctx, parsed);
-    finalize_parsed(trimmed, parsed);
+    finalize_parsed(trimmed, ctx, parsed);
 }
 
 pub(crate) fn parse_quantity_fast_dispatch(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
@@ -217,7 +217,7 @@ pub(crate) fn parse_number_into(
     parsed: &mut Parsed,
 ) {
     dispatch(Entry::Number, sink, trimmed, ctx, parsed);
-    finalize_parsed(trimmed, parsed);
+    finalize_parsed(trimmed, ctx, parsed);
 }
 
 pub(crate) fn parse_date_fast_into(trimmed: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
@@ -402,9 +402,11 @@ pub(crate) const DESCENDING_RANGE_REASON: &str = "Range endpoints run from high 
 ///
 /// Runs after grammar dispatch, so it sees the reading whichever grammar won.
 /// It is idempotent: nested dispatch paths may run it more than once.
-pub(crate) fn finalize_parsed(text: &str, parsed: &mut Parsed) {
+pub(crate) fn finalize_parsed(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     reject_non_finite(text, parsed);
     flag_descending_range(text, parsed);
+    withhold_unmodelled_unit_symbol(text, parsed);
+    report_competing_exact_alias(text, ctx, parsed);
 }
 
 /// Drops readings whose value overflowed to infinity or collapsed to NaN.
@@ -720,6 +722,188 @@ pub(crate) fn note_malformed_compound(parsed: &mut Parsed, text: &str, reason: &
     ));
 }
 
+/// Reason reported when a correctly spelled symbol names an unmeasured quantity.
+pub(crate) const UNMODELLED_UNIT_REASON: &str =
+    "unit symbol names a quantity this registry does not measure";
+
+/// Reason reported when only the letter case separates two quantities.
+pub(crate) const UNMODELLED_UNIT_CASE_REASON: &str = "unit symbol differs from the matched unit only by letter case, and the two name different quantities";
+
+/// Keeps a reading out of `best` when the unit symbol names a quantity that has
+/// no [`Dimension`] here.
+///
+/// This runs after dispatch rather than inside any one grammar because every
+/// path that reaches a wrong reading here reaches it a different way, and each
+/// of them ends in the same place. `7 Hz` arrives through did-you-mean
+/// matching, which fabricates the hour from a correctly spelled symbol; `7 H`
+/// arrives through ASCII case folding, which cannot tell the henry from the
+/// hour. Guarding the shared exit covers both, and covers the fast dispatch
+/// too, instead of three guards that have to agree.
+///
+/// What happens to the reading depends on where it came from, because the two
+/// are not equally worth keeping:
+///
+/// - A **fabricated** reading — one did-you-mean invented, marked by an
+///   [`IssueCode::TypoCorrected`] finding — is dropped. `7 lm` as
+///   66225113308065600 m is not a competing reading of the lumen, it is noise,
+///   and [`Parsed::alternatives`] is for readings a caller might choose between.
+/// - A **case-folded** reading — `7 H` as seven hours — is moved to
+///   [`Parsed::alternatives`] and reported as [`IssueCode::AmbiguousUnit`].
+///   Someone really may write `7 H` for hours, so the reading is not thrown
+///   away; it just stops being the one a caller gets without asking.
+///
+/// Either way [`Parsed::best`] ends empty, which is the point: the guarantee
+/// this restores is that `best` never holds a quantity the input did not name.
+pub(crate) fn withhold_unmodelled_unit_symbol(text: &str, parsed: &mut Parsed) {
+    let Some((_, unit_text)) = split_number_unit(text) else {
+        return;
+    };
+    let Some(quantity) = unmodelled_unit_symbol(unit_text) else {
+        return;
+    };
+
+    // `finalize_parsed` may run more than once over the same result, and both
+    // branches below are writes rather than tests, so a second run would file
+    // the refusal twice. Having already refused this symbol is the fixed point.
+    if already_refused(parsed, unit_text) {
+        return;
+    }
+
+    // Nothing was read, so nothing is being withheld — but the refusal is still
+    // worth naming. Whatever finding the grammars left says only that no
+    // reading matched; this one says which quantity the symbol asked for and
+    // that this registry does not measure it.
+    if parsed.best.is_none() && parsed.alternatives.is_empty() {
+        parsed.findings.skipped.push(skipped_with_span(
+            unit_text,
+            &format!("{UNMODELLED_UNIT_REASON}: {quantity}"),
+            IssueCode::UnknownUnit,
+            span_in(text, unit_text),
+        ));
+        return;
+    }
+
+    let fabricated = parsed
+        .findings
+        .ambiguities
+        .iter()
+        .map(|found| found.code)
+        .chain(parsed.findings.skipped.iter().map(|found| found.code))
+        .any(|code| code == IssueCode::TypoCorrected);
+
+    let withheld = parsed.best.take();
+    if fabricated {
+        parsed.alternatives.clear();
+        parsed.suggestions.clear();
+        // The TypoCorrected finding described a correction that no longer
+        // stands, so it is replaced rather than left next to the refusal.
+        parsed
+            .findings
+            .ambiguities
+            .retain(|found| found.code != IssueCode::TypoCorrected);
+        parsed
+            .findings
+            .skipped
+            .retain(|found| found.code != IssueCode::TypoCorrected);
+        parsed.findings.skipped.push(skipped_with_span(
+            unit_text,
+            &format!("{UNMODELLED_UNIT_REASON}: {quantity}"),
+            IssueCode::UnknownUnit,
+            span_in(text, unit_text),
+        ));
+        return;
+    }
+
+    if let Some(withheld) = withheld {
+        parsed.alternatives.push(withheld);
+    }
+    let candidate_count = parsed.alternatives.len();
+    parsed.findings.ambiguities.push(ambiguity_with_span(
+        unit_text,
+        &format!("{UNMODELLED_UNIT_CASE_REASON}: {quantity}"),
+        Some(candidate_count),
+        IssueCode::AmbiguousUnit,
+        span_in(text, unit_text),
+    ));
+}
+
+/// Whether this unit symbol has already been refused on this result.
+fn already_refused(parsed: &Parsed, unit_text: &str) -> bool {
+    let refused =
+        |code: IssueCode| matches!(code, IssueCode::UnknownUnit | IssueCode::AmbiguousUnit);
+    parsed
+        .findings
+        .ambiguities
+        .iter()
+        .any(|found| refused(found.code) && found.ref_text == unit_text)
+        || parsed
+            .findings
+            .skipped
+            .iter()
+            .any(|found| refused(found.code) && found.ref_text == unit_text)
+}
+
+/// Reports the registry unit whose name the input spelled exactly, when some
+/// other grammar answered instead.
+///
+/// `7 C` is the whole of this case today: `C` is the coulomb in the registry
+/// and Celsius to the temperature grammar, the temperature grammar wins, and
+/// the coulomb was dropped without a word — so a caller reading `best` could
+/// not tell that the symbol it passed names something else as well.
+///
+/// Unlike [`withhold_unmodelled_unit_symbol`] this leaves `best` alone. Both
+/// readings are ones this registry measures, Celsius is the better guess for
+/// `7 C`, and there is no need to withhold a reading to make the competition
+/// visible — naming it in [`Parsed::alternatives`] with an
+/// [`IssueCode::AmbiguousUnit`] finding is enough for a caller to see that a
+/// choice was made, and cheaper than refusing a reading that is probably right.
+pub(crate) fn report_competing_exact_alias(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
+    let Some((number_text, unit_text)) = split_number_unit(text) else {
+        return;
+    };
+    let Some(competing) = unit_by_alias_exact(unit_text) else {
+        return;
+    };
+    if !ctx.unit_registry.allows(competing.dimension) {
+        return;
+    }
+    let Some(best) = parsed.best.as_ref() else {
+        return;
+    };
+    // The grammar that won already agrees with the registry, so there is no
+    // competition to report.
+    if best.dimension == Some(competing.dimension) {
+        return;
+    }
+    // Only a plain quantity competes with a unit alias. A range or a date that
+    // happens to end in these characters is not this case.
+    if best.value.is_none() || best.range.is_some() {
+        return;
+    }
+    if already_refused(parsed, unit_text) {
+        return;
+    }
+    let Some(value) = parse_number_ctx(number_text, ctx) else {
+        return;
+    };
+
+    parsed.alternatives.push(Reading::quantity(
+        value * competing.factor,
+        competing.canonical_unit,
+        competing.dimension,
+        competing.provenance,
+        competing.approximate,
+        0.5,
+    ));
+    parsed.findings.ambiguities.push(ambiguity_with_span(
+        unit_text,
+        "unit symbol also names a registry unit of another quantity",
+        Some(parsed.alternatives.len() + 1),
+        IssueCode::AmbiguousUnit,
+        span_in(text, unit_text),
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,6 +1079,46 @@ mod tests {
                     .iter()
                     .any(|issue| issue.reason == DESCENDING_RANGE_REASON),
                 "{input}"
+            );
+        }
+    }
+    /// Running the finalizers twice files the refusal once.
+    ///
+    /// [`finalize_parsed`] documents itself as idempotent because nested
+    /// dispatch may reach it more than once, and both withholding branches
+    /// write findings rather than test for them. No entry point reaches it
+    /// twice for these inputs today, so this calls it directly — an integration
+    /// test cannot tell a guarded write from a write that simply never
+    /// happened twice.
+    #[test]
+    fn finalizers_are_idempotent_over_withheld_unit_symbols() {
+        for input in ["5 H", "7 Hz", "7 C"] {
+            let ctx = ParseCtx::default();
+            let once = parse(input, Some(ctx.clone()));
+
+            let mut twice = once.clone();
+            finalize_parsed(input, &ctx, &mut twice);
+            finalize_parsed(input, &ctx, &mut twice);
+
+            assert_eq!(
+                twice.findings.ambiguities.len(),
+                once.findings.ambiguities.len(),
+                "{input:?} filed extra ambiguities"
+            );
+            assert_eq!(
+                twice.findings.skipped.len(),
+                once.findings.skipped.len(),
+                "{input:?} filed extra skips"
+            );
+            assert_eq!(
+                twice.alternatives.len(),
+                once.alternatives.len(),
+                "{input:?} grew an extra alternative"
+            );
+            assert_eq!(
+                twice.best.is_some(),
+                once.best.is_some(),
+                "{input:?} changed its mind about best"
             );
         }
     }

@@ -1138,4 +1138,353 @@ pub(crate) const UNIT_DEFS: &[UnitDef] = &[
         provenance: Provenance::SiMultiple,
         approximate: false,
     },
+    // SI-prefixed entries for bases the registry already carried unprefixed.
+    //
+    // Every unit below is an explicit table entry because this registry has no
+    // prefix machinery: `mA` and `mL` were readable only because someone wrote
+    // them out, while `kN`, `MPa`, `kW`, `mV`, `ms`, and `mg` had no entry at
+    // all. A missing entry is not a missing reading — the alias lookup falls
+    // through to a case-folded or did-you-mean match and returns a *different*
+    // physical quantity, so `7 kN` read as 3.6 m/s (the knot) and `7 mg` as
+    // 7 m. Exact alias matching runs before either fallback, so adding the
+    // entry is what makes the correct reading win.
+    UnitDef {
+        id: "mN",
+        canonical_unit: "N",
+        aliases: &["mN", "millinewton", "millinewtons"],
+        dimension: Dimension::Force,
+        factor: 0.001,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "kN",
+        canonical_unit: "N",
+        aliases: &["kN", "kilonewton", "kilonewtons"],
+        dimension: Dimension::Force,
+        factor: 1000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "MN",
+        canonical_unit: "N",
+        aliases: &["MN", "meganewton", "meganewtons"],
+        dimension: Dimension::Force,
+        factor: 1_000_000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "hPa",
+        canonical_unit: "Pa",
+        aliases: &["hPa", "hectopascal", "hectopascals"],
+        dimension: Dimension::Pressure,
+        factor: 100.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "MPa",
+        canonical_unit: "Pa",
+        aliases: &["MPa", "megapascal", "megapascals"],
+        dimension: Dimension::Pressure,
+        factor: 1_000_000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "GPa",
+        canonical_unit: "Pa",
+        aliases: &["GPa", "gigapascal", "gigapascals"],
+        dimension: Dimension::Pressure,
+        factor: 1_000_000_000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    // 1 bar is defined as exactly 1e5 Pa, so the conversion is exact even
+    // though the bar is not an SI unit.
+    UnitDef {
+        id: "bar",
+        canonical_unit: "Pa",
+        aliases: &["bar", "bars"],
+        dimension: Dimension::Pressure,
+        factor: 100_000.0,
+        provenance: Provenance::InternationalExact,
+        approximate: false,
+    },
+    UnitDef {
+        id: "mbar",
+        canonical_unit: "Pa",
+        aliases: &["mbar", "mbars", "millibar", "millibars"],
+        dimension: Dimension::Pressure,
+        factor: 100.0,
+        provenance: Provenance::InternationalExact,
+        approximate: false,
+    },
+    // Structural drawings write the megapascal as a force over an area. It is
+    // the same quantity: 1 N/mm2 is exactly 1 MPa.
+    UnitDef {
+        id: "N/mm2",
+        canonical_unit: "Pa",
+        aliases: &["N/mm2", "N/mm^2", "N/mm²"],
+        dimension: Dimension::Pressure,
+        factor: 1_000_000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "mW",
+        canonical_unit: "W",
+        aliases: &["mW", "milliwatt", "milliwatts"],
+        dimension: Dimension::Power,
+        factor: 0.001,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "kW",
+        canonical_unit: "W",
+        aliases: &["kW", "kilowatt", "kilowatts"],
+        dimension: Dimension::Power,
+        factor: 1000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "MW",
+        canonical_unit: "W",
+        aliases: &["MW", "megawatt", "megawatts"],
+        dimension: Dimension::Power,
+        factor: 1_000_000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "GW",
+        canonical_unit: "W",
+        aliases: &["GW", "gigawatt", "gigawatts"],
+        dimension: Dimension::Power,
+        factor: 1_000_000_000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "mV",
+        canonical_unit: "V",
+        aliases: &["mV", "millivolt", "millivolts"],
+        dimension: Dimension::Voltage,
+        factor: 0.001,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "kV",
+        canonical_unit: "V",
+        aliases: &["kV", "kilovolt", "kilovolts"],
+        dimension: Dimension::Voltage,
+        factor: 1000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "ms",
+        canonical_unit: "s",
+        aliases: &["ms", "millisecond", "milliseconds"],
+        dimension: Dimension::Time,
+        factor: 0.001,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "\u{03bc}s",
+        canonical_unit: "s",
+        aliases: &[
+            "\u{03bc}s",
+            "\u{00b5}s",
+            "us",
+            "microsecond",
+            "microseconds",
+        ],
+        dimension: Dimension::Time,
+        factor: 0.000_001,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "ns",
+        canonical_unit: "s",
+        aliases: &["ns", "nanosecond", "nanoseconds"],
+        dimension: Dimension::Time,
+        factor: 0.000_000_001,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    // The registry carried the microgram but not the milligram, so `7 mg` fell
+    // through to the metre.
+    UnitDef {
+        id: "mg",
+        canonical_unit: "kg",
+        aliases: &[
+            "mg",
+            "milligram",
+            "milligrams",
+            "milligramme",
+            "milligrammes",
+        ],
+        dimension: Dimension::Mass,
+        factor: 0.000_001,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "m\u{03a9}",
+        canonical_unit: "\u{03a9}",
+        aliases: &["m\u{03a9}", "mohm", "mohms", "milliohm", "milliohms"],
+        dimension: Dimension::Resistance,
+        factor: 0.001,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "k\u{03a9}",
+        canonical_unit: "\u{03a9}",
+        aliases: &[
+            "k\u{03a9}",
+            "kohm",
+            "kohms",
+            "kiloohm",
+            "kiloohms",
+            "kilohm",
+            "kilohms",
+        ],
+        dimension: Dimension::Resistance,
+        factor: 1000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "M\u{03a9}",
+        canonical_unit: "\u{03a9}",
+        aliases: &[
+            "M\u{03a9}",
+            "Mohm",
+            "Mohms",
+            "megaohm",
+            "megaohms",
+            "megohm",
+            "megohms",
+        ],
+        dimension: Dimension::Resistance,
+        factor: 1_000_000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    // Areas below the square metre. Technical drawings write section areas in
+    // mm2 and cm2, which the registry read as a length by dropping the "2".
+    UnitDef {
+        id: "mm2",
+        canonical_unit: "m2",
+        aliases: &[
+            "mm2",
+            "mm^2",
+            "mm\u{00b2}",
+            "square millimeter",
+            "square millimeters",
+        ],
+        dimension: Dimension::Area,
+        factor: 0.000_001,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "cm2",
+        canonical_unit: "m2",
+        aliases: &[
+            "cm2",
+            "cm^2",
+            "cm\u{00b2}",
+            "square centimeter",
+            "square centimeters",
+        ],
+        dimension: Dimension::Area,
+        factor: 0.000_1,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "km2",
+        canonical_unit: "m2",
+        aliases: &[
+            "km2",
+            "km^2",
+            "km\u{00b2}",
+            "square kilometer",
+            "square kilometers",
+        ],
+        dimension: Dimension::Area,
+        factor: 1_000_000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
 ];
+
+/// Unit symbols this registry can recognize as units but cannot measure.
+///
+/// Every entry names a quantity that has no [`Dimension`], so there is no
+/// honest reading to return for it. The table exists because *not* naming
+/// them is what produced wrong readings: an unknown token falls through to
+/// case-folded and did-you-mean matching, which happily resolved `Hz` to the
+/// hour, `lm` and `cd` to the metre, `sr` to the stone, and `dB` to the day.
+/// Those are not corrections of a misspelling — the input was spelled
+/// correctly, and the registry simply does not measure what it names.
+///
+/// Matching is exact and case-sensitive, because in SI the case of a symbol
+/// carries the meaning: `H` is the henry and `h` the hour, `S` the siemens and
+/// `s` the second. Folding them together is what let `7 H` be read as seven
+/// hours with no finding at all.
+///
+/// The second field names the quantity, and is reported in the finding so the
+/// caller learns why the symbol was refused rather than only that it was.
+pub(crate) const UNMODELLED_UNIT_SYMBOLS: &[(&str, &str)] = &[
+    ("Hz", "frequency"),
+    ("kHz", "frequency"),
+    ("MHz", "frequency"),
+    ("GHz", "frequency"),
+    ("rpm", "rotational frequency"),
+    ("H", "inductance"),
+    ("mH", "inductance"),
+    ("\u{03bc}H", "inductance"),
+    ("S", "electric conductance"),
+    ("mS", "electric conductance"),
+    ("\u{03bc}S", "electric conductance"),
+    ("mF", "capacitance"),
+    ("\u{03bc}F", "capacitance"),
+    ("nF", "capacitance"),
+    ("pF", "capacitance"),
+    ("Wb", "magnetic flux"),
+    // The bare `F` and `T` are deliberately absent. They are the farad and the
+    // tesla, but `72 F` is overwhelmingly Fahrenheit and `7 T` the tonne, and
+    // both of those readings are ones this registry does measure. Refusing them
+    // would trade a rare wrong reading for a common lost one.
+    ("lm", "luminous flux"),
+    ("cd", "luminous intensity"),
+    ("mol", "amount of substance"),
+    ("mmol", "amount of substance"),
+    ("kmol", "amount of substance"),
+    ("sr", "solid angle"),
+    ("dB", "logarithmic level"),
+    ("Gy", "absorbed dose"),
+    ("kat", "catalytic activity"),
+];
+
+/// Returns the quantity `token` names, when this registry cannot measure it.
+///
+/// Exact and case-sensitive by design — see [`UNMODELLED_UNIT_SYMBOLS`].
+pub(crate) fn unmodelled_unit_symbol(token: &str) -> Option<&'static str> {
+    let token = token.trim();
+    UNMODELLED_UNIT_SYMBOLS
+        .iter()
+        .find(|(symbol, _)| *symbol == token)
+        .map(|(_, quantity)| *quantity)
+}

@@ -83,6 +83,19 @@ pub(crate) fn unit_by_alias_in(alias: &str, registry: UnitRegistry) -> Option<&'
     unit_by_alias(alias).filter(|unit| registry.allows(unit.dimension))
 }
 
+/// Resolves `alias` only where the registry spells it exactly.
+///
+/// [`unit_by_alias`] falls back to ASCII case folding when no exact spelling
+/// matches, which is what a caller wants when reading `40 KG`. It is not what a
+/// caller wants when the question is "does this text name a registry unit
+/// outright" — folding answers yes for `7 KN` on the strength of the knot,
+/// which is a different quantity from the kilonewton the input spelled.
+pub(crate) fn unit_by_alias_exact(alias: &str) -> Option<&'static UnitDef> {
+    let alias = alias.trim();
+    fast_unit_by_alias(alias, AliasMatchMode::Exact)
+        .or_else(|| fallback_unit_by_alias(alias, AliasMatchMode::Exact))
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum AliasMatchMode {
     Exact,
