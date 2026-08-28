@@ -208,6 +208,18 @@ pub(crate) fn parse_plus_minus_range(text: &str, ctx: &ParseCtx) -> Option<Readi
 
     let unit = center.unit.as_deref()?;
     let dimension = center.dimension?;
+    // A tolerance on a temperature is a temperature *difference*, and there is
+    // no reading for one here: every temperature is absolute and canonicalized
+    // through an offset, so `center ± delta` subtracts two absolute
+    // temperatures and calls the result a temperature. That is meaningless.
+    // `-40 K ± 0.5` came out as -40.5 °C to -585.8 °C, and `-40 C ± 0.5` was
+    // right only because Celsius is the canonical unit and its offset is zero
+    // — an accident, not a rule, and not one to ship on. Two-endpoint ranges
+    // are unaffected: `40 to 85 K` converts each end on its own, which is
+    // well defined.
+    if dimension == Dimension::Temperature {
+        return None;
+    }
     let provenance = center.provenance.unwrap_or(Provenance::TradeCustom);
     let approximate = center.approximate.unwrap_or(false) || delta.approximate.unwrap_or(false);
     Some(Reading::range(
@@ -756,13 +768,25 @@ pub(crate) fn unit_suffix<'a>(text: &str, ctx: &'a ParseCtx) -> Option<&'a str> 
     let builtin_suffixes = [
         "㎡", "m^2", "m2", "平米", "帖", "畳", "坪", "cm", "mm", "m", "kg", "g", "minutes",
         "minute", "mins", "min", "hours", "hour", "hrs", "hr", "days", "day", "日",
+        // Temperature is a grammar rather than registry entries — an offset
+        // conversion is not a factor — so the registry scan below cannot see
+        // these, and a range borrowing a unit from its right endpoint found
+        // nothing to borrow. `40 to 85 C` happened to work through the
+        // coulomb, which spells `C` too; `40 to 85 K` and `40 to 85 F` had
+        // nothing to lean on at all.
+        "°C", "℃", "°F", "℉", "C", "F", "K", "度",
     ];
+    // `unit_lookup_aliases` rather than `unit.aliases`, because a unit's id is
+    // one of the spellings that resolve it everywhere else in this crate, and
+    // reading `aliases` alone disagreed with that. Exactly one unit is written
+    // that way — the coulomb, whose `C` lives in its id — and the disagreement
+    // was enough to make `40 to 85 C` unreadable while `40 C to 85 C` parsed:
+    // a range borrows the right endpoint's unit for a left endpoint that has
+    // none, and this could not see the `C` to borrow.
     let all_builtin_suffixes = || {
-        builtin_suffixes.into_iter().chain(
-            UNIT_DEFS
-                .iter()
-                .flat_map(|unit| unit.aliases.iter().copied()),
-        )
+        builtin_suffixes
+            .into_iter()
+            .chain(UNIT_DEFS.iter().flat_map(unit_lookup_aliases))
     };
     let mut best = all_builtin_suffixes()
         .filter(|suffix| trimmed.ends_with(suffix))
