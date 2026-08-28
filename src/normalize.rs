@@ -250,6 +250,21 @@ pub(crate) fn push_normalized_char(normalized: &mut String, ch: char) {
         '＊' | '×' => normalized.push('*'),
         '＾' => normalized.push('^'),
         '％' => normalized.push('%'),
+        // Full-width and CJK comparators fold to their ASCII spellings. This
+        // library already normalizes full-width digits and reads the `以下`
+        // suffix, so it is written to be handed Japanese technical text; `≦`
+        // (U+2266) is the ordinary way that text writes "at most", and leaving
+        // it out while reading `≤` was an inconsistency rather than a policy.
+        // The mapping belongs here, with the rest of the normalization table,
+        // so it is one declared and inspectable rewrite rather than a
+        // substitution hidden inside a grammar — and so `OriginalOffsets`
+        // keeps spans pointing at the untouched input across the length change
+        // (`＜` is three bytes, `<` is one).
+        '≦' => normalized.push('≤'),
+        '≧' => normalized.push('≥'),
+        '＜' => normalized.push('<'),
+        '＞' => normalized.push('>'),
+        '＝' => normalized.push('='),
         '　' => normalized.push(' '),
         '㍍' => normalized.push('m'),
         '㌢' => normalized.push_str("cm"),
@@ -395,6 +410,11 @@ pub(crate) fn needs_input_normalization(ch: char) -> bool {
             | '×'
             | '＾'
             | '％'
+            | '≦'
+            | '≧'
+            | '＜'
+            | '＞'
+            | '＝'
             | '　'
             | '㍍'
             | '㌢'

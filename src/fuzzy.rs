@@ -239,6 +239,9 @@ pub(crate) fn parse_upper_bound_range(text: &str, ctx: &ParseCtx) -> Option<Read
         .or_else(|| trimmed.strip_prefix("最大"))
         .or_else(|| trimmed.strip_prefix("上限"))
         .or_else(|| trimmed.strip_prefix('≤'))
+        // `<=` has to be tried before `<`, or the bare `<` matches first and
+        // leaves an `=` that no endpoint parses, so the whole bound is lost.
+        .or_else(|| trimmed.strip_prefix("<="))
         .or_else(|| trimmed.strip_prefix('<'))
         .or_else(|| {
             ["以下", "未満", "まで"]

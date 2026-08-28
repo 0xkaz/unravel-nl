@@ -99,24 +99,79 @@ fn a_bound_without_a_unit_is_not_given_one() {
     assert!(unit.is_empty(), "a bare range acquired the unit {unit:?}");
 }
 
-/// Full-width text reaches the bound grammar through normalization.
+/// Full-width and CJK comparators reach the bound grammar through normalization.
 ///
-/// The suffix form does. The comparator prefixes do not: `≦` (U+2266) and the
-/// full-width `＜` are ordinary in Japanese technical writing and are not read,
-/// while their half-width spellings are. That is a gap, pinned here so it is
-/// written down rather than merely absent.
+/// `≦` (U+2266) is how Japanese technical writing ordinarily says "at most",
+/// and this library already normalizes full-width digits and reads the `以下`
+/// suffix — so reading `≤` but not `≦` was an inconsistency, not a policy. The
+/// mapping lives in the normalization table with the other rewrites rather
+/// than inside the bound grammar, so it is one declared rule.
 #[test]
-fn full_width_bounds_are_read_by_suffix_but_not_by_comparator() {
-    let (from, to, unit) = upper_bound_of(&parse("２５．４ｍｍ以下", None)).expect("a bound");
-    assert_eq!(from, None);
+fn full_width_comparators_normalize_to_their_ascii_spellings() {
+    for input in ["≦ 40 C", "<= 40 C", "≤ 40 C", "< 40 C", "＜40 C"] {
+        let (from, to, unit) =
+            upper_bound_of(&parse(input, None)).unwrap_or_else(|| panic!("{input:?} unread"));
+        assert_eq!(from, None, "{input:?} invented a lower bound");
+        assert!((to - 40.0).abs() < 1e-9, "{input:?} got {to}");
+        assert_eq!(unit, "C", "{input:?}");
+    }
+
+    // The suffix form and a CJK compatibility unit still compose with it.
+    let (_, to, unit) = upper_bound_of(&parse("２５．４ｍｍ以下", None)).expect("a bound");
     assert!((to - 0.0254).abs() < 1e-9, "got {to}");
     assert_eq!(unit, "m");
 
-    // Characterization, not endorsement: these are the unread comparators.
-    for input in ["≦ 40 C", "＜40kg", "≧ 5 mm"] {
+    let (_, to, unit) = upper_bound_of(&parse("≦40㎜", None)).expect("a bound");
+    assert!((to - 0.04).abs() < 1e-9, "got {to}");
+    assert_eq!(unit, "m");
+}
+
+/// Normalizing a comparator does not move the spans a caller highlights with.
+///
+/// This is the half that makes the rewrite safe to do at all: `＜` is three
+/// bytes and `<` is one, so a span computed on the normalized text and handed
+/// back unchanged would point into the middle of the original. Findings and
+/// editor matches both have to address the untouched input.
+#[test]
+fn normalized_comparators_keep_spans_on_the_original_input() {
+    // An unread full-width bound reports a span covering the original bytes.
+    let parsed = parse("≧ 5 mm", None);
+    let skipped = parsed.findings.skipped.first().expect("a finding");
+    assert_eq!(skipped.span.start, 0);
+    assert_eq!(skipped.span.end, "≧ 5 mm".len());
+    assert_eq!(skipped.span.text, "≧ 5 mm");
+
+    // An editor match inside a longer line addresses the original too.
+    let line = "bore ２５．４ mm and wall 10 mm";
+    let matches = Parser::unrestricted().parse_dimensions_for_editor(line);
+    let first = matches.first().expect("a match");
+    assert_eq!(&line[first.start..first.end], "２５．４ mm");
+}
+
+/// Lower-bound comparators stay unread, in every spelling.
+///
+/// There is no lower-bound grammar at all, so normalizing `≧` to `≥` maps the
+/// character without making the input readable. Pinned as characterization:
+/// the day a lower bound is read, this test should be the one that says so.
+#[test]
+fn lower_bound_comparators_are_still_unread() {
+    for input in [
+        "≧ 5 mm",
+        "＞5mm",
+        ">= 5 mm",
+        "≥ 5 mm",
+        "> 5 mm",
+        "min 12 mm",
+        "over 5 mm",
+    ] {
+        let parsed = parse(input, None);
         assert!(
-            unread(&parse(input, None)),
-            "{input:?} now reads — the gap closed, so update this test"
+            unread(&parsed),
+            "{input:?} now reads — a lower bound grammar arrived, so update this test"
+        );
+        assert!(
+            !parsed.findings.skipped.is_empty(),
+            "{input:?} was dropped without a finding"
         );
     }
 }

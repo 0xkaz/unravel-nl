@@ -556,6 +556,14 @@ let range = bounded.best.unwrap().range.expect("a range");
 assert_eq!(range.from.value, None);
 assert_eq!(range.to.value, Some(0.01));
 
+// Comparators are read in their full-width spellings too: `≦` (U+2266) is how
+// Japanese technical writing ordinarily says "at most". They fold to the ASCII
+// spelling in the normalization table, so spans still address your input.
+let full_width = Parser::new(Dimension::Temperature.into()).parse("≦ 40 C");
+let range = full_width.best.unwrap().range.expect("a range");
+assert_eq!(range.from.value, None);
+assert_eq!(range.to.value, Some(40.0));
+
 let hot_parser = Parser::with_context(
     Dimension::Temperature.into(),
     ParseCtx {
