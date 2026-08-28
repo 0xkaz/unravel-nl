@@ -105,13 +105,52 @@ impl InputFeatures {
             || trimmed.contains("..")
             || trimmed.contains('≤')
             || trimmed.contains('<')
+            || trimmed.contains('≥')
+            || trimmed.contains('>')
             || trimmed.contains('-')
-            || ["less than ", "under ", "below ", "up to ", "at most "]
+            || [
+                "less than ",
+                "under ",
+                "below ",
+                "up to ",
+                "at most ",
+                "no more than ",
+                "not more than ",
+                "max ",
+                "max. ",
+                "maximum ",
+            ]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+            || lower.ends_with("maximum")
+            || lower.ends_with(" max")
+            // The lower-bound markers have to open this gate too, or the
+            // grammar that reads them is never reached.
+            || [
+                "at least ",
+                "no less than ",
+                "not less than ",
+                "more than ",
+                "greater than ",
+                "over ",
+                "above ",
+                "min ",
+                "min. ",
+                "minimum ",
+            ]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+            || ["最大", "上限", "最小", "下限"]
                 .iter()
-                .any(|prefix| lower.starts_with(prefix))
+                .any(|prefix| trimmed.starts_with(prefix))
             || trimmed.ends_with("以下")
             || trimmed.ends_with("未満")
-            || trimmed.ends_with("まで");
+            || trimmed.ends_with("まで")
+            || trimmed.ends_with("以上")
+            || trimmed.ends_with("超")
+            || trimmed.ends_with("を超える")
+            || trimmed.ends_with("より大きい")
+            || lower.ends_with("minimum");
         let maybe_duration = lower.starts_with('p')
             || lower.contains("hour")
             || lower.contains("minute")

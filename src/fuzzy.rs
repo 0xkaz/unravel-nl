@@ -231,6 +231,27 @@ pub(crate) fn parse_plus_minus_range(text: &str, ctx: &ParseCtx) -> Option<Readi
     ))
 }
 
+/// Markers that state an upper bound, in the normalized text.
+///
+/// The mirror of [`LOWER_BOUND_PREFIXES`]. `max` is listed as a suffix where
+/// `min` is not, because `min` is also the minute and `5 min` has to stay a
+/// duration; nothing reads `max` as a unit, so the pair is asymmetric on
+/// purpose.
+const UPPER_BOUND_PREFIXES: &[&str] = &[
+    "less than ",
+    "under ",
+    "below ",
+    "up to ",
+    "at most ",
+    "no more than ",
+    "not more than ",
+    "max ",
+    "max. ",
+    "maximum ",
+];
+
+const UPPER_BOUND_SUFFIXES: &[&str] = &["maximum", "max"];
+
 /// Markers that state a lower bound, in the normalized text.
 ///
 /// Prefixes and suffixes are kept apart because two of them are ambiguous in
@@ -251,7 +272,11 @@ const LOWER_BOUND_PREFIXES: &[&str] = &[
     "minimum ",
 ];
 
+// `>=` before `>`, or the bare `>` matches first and leaves an `=` behind.
 const LOWER_BOUND_SYMBOL_PREFIXES: &[&str] = &["≥", ">=", ">"];
+
+/// The Japanese prefixes, mirroring `最大` and `上限` on the upper side.
+const LOWER_BOUND_JA_PREFIXES: &[&str] = &["最小", "下限"];
 
 // `min` is deliberately absent as a suffix: it is the minute there, and
 // listing it refused `5 min` as a bound. Only the prefix form (`min 12 mm`) is
@@ -281,25 +306,43 @@ pub(crate) fn states_lower_bound(text: &str) -> Option<&'static str> {
     {
         return Some(marker);
     }
+    if let Some(marker) = LOWER_BOUND_JA_PREFIXES
+        .iter()
+        .find(|marker| trimmed.starts_with(**marker))
+    {
+        return Some(marker);
+    }
     // A suffix marker needs something in front of it, or the "bound" is the
     // whole input and there is no quantity being bounded.
-    LOWER_BOUND_SUFFIXES
+    if let Some(marker) = LOWER_BOUND_SUFFIXES.iter().find(|marker| {
+        let matched = if marker.is_ascii() {
+            lower.strip_suffix(**marker)
+        } else {
+            trimmed.strip_suffix(**marker)
+        };
+        matched.is_some_and(|rest| !rest.trim().is_empty())
+    }) {
+        return Some(marker);
+    }
+
+    // A two-sided `5mm以上60mm以下` ends with the *upper* marker, so the lower
+    // one is in the middle and no positional test finds it. These three read as
+    // a bound wherever they appear — unlike `超`, which is a bound only as a
+    // suffix (`超音波` is ultrasound), and unlike the ASCII markers, where
+    // `over` hides in `overall` and `min` in `minute`.
+    LOWER_BOUND_ANYWHERE
         .iter()
-        .find(|marker| {
-            let matched = if marker.is_ascii() {
-                lower.strip_suffix(**marker)
-            } else {
-                trimmed.strip_suffix(**marker)
-            };
-            matched.is_some_and(|rest| !rest.trim().is_empty())
-        })
+        .find(|marker| trimmed.contains(**marker))
         .copied()
 }
 
+/// Lower-bound markers unambiguous enough to match anywhere in the input.
+const LOWER_BOUND_ANYWHERE: &[&str] = &["以上", "を超える", "より大きい"];
+
 pub(crate) fn parse_upper_bound_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     let trimmed = text.trim();
-    let rest = ["less than ", "under ", "below ", "up to ", "at most "]
-        .into_iter()
+    let rest = UPPER_BOUND_PREFIXES
+        .iter()
         .find_map(|prefix| strip_prefix_ascii_case(trimmed, prefix))
         .or_else(|| trimmed.strip_prefix("最大"))
         .or_else(|| trimmed.strip_prefix("上限"))
@@ -312,6 +355,12 @@ pub(crate) fn parse_upper_bound_range(text: &str, ctx: &ParseCtx) -> Option<Read
             ["以下", "未満", "まで"]
                 .into_iter()
                 .find_map(|suffix| trimmed.strip_suffix(suffix))
+        })
+        .or_else(|| {
+            UPPER_BOUND_SUFFIXES
+                .iter()
+                .find_map(|suffix| strip_suffix_ascii_case(trimmed, suffix))
+                .filter(|rest| !rest.trim().is_empty())
         })?
         .trim();
     if rest.is_empty() {
@@ -324,6 +373,57 @@ pub(crate) fn parse_upper_bound_range(text: &str, ctx: &ParseCtx) -> Option<Read
     }
     let from = unstated_bound_quantity(&to)?;
     Some(Reading::range(from, to, 0.86))
+}
+
+/// Reads a lower bound: `≥ 5 mm`, `min 12 mm`, `5mm以上`.
+///
+/// The mirror of [`parse_upper_bound_range`], and deliberately the same shape:
+/// a bound states one endpoint, so this returns a range whose *upper* end is
+/// unstated, exactly as the upper-bound grammar returns one whose lower end is.
+/// Representing the two differently would make a caller handle "at most" and
+/// "at least" as different kinds of answer when they are the same kind.
+pub(crate) fn parse_lower_bound_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    let trimmed = text.trim();
+    let rest = LOWER_BOUND_PREFIXES
+        .iter()
+        .find_map(|prefix| strip_prefix_ascii_case(trimmed, prefix))
+        .or_else(|| {
+            LOWER_BOUND_JA_PREFIXES
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(*prefix))
+        })
+        .or_else(|| {
+            LOWER_BOUND_SYMBOL_PREFIXES
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(*prefix))
+        })
+        .or_else(|| {
+            LOWER_BOUND_SUFFIXES.iter().find_map(|suffix| {
+                if suffix.is_ascii() {
+                    strip_suffix_ascii_case(trimmed, suffix)
+                } else {
+                    trimmed.strip_suffix(*suffix)
+                }
+            })
+        })?
+        .trim();
+    if rest.is_empty() {
+        return None;
+    }
+
+    let from = parse_endpoint(rest, ctx)?;
+    if from.kind != Kind::Quantity || from.value.is_none() {
+        return None;
+    }
+    let to = unstated_bound_quantity(&from)?;
+    Some(Reading::range(from, to, 0.86))
+}
+
+/// [`strip_prefix_ascii_case`], from the other end.
+fn strip_suffix_ascii_case<'a>(text: &'a str, suffix: &str) -> Option<&'a str> {
+    let cut = text.len().checked_sub(suffix.len())?;
+    let (head, tail) = text.split_at_checked(cut)?;
+    tail.eq_ignore_ascii_case(suffix).then_some(head)
 }
 
 /// The open end of a one-sided bound: the unit is known, the value is not.

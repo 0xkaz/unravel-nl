@@ -34,6 +34,8 @@ pub(crate) enum Grammar {
     PlusMinusRange,
     /// `under 5 kg`, `5kg以下`.
     UpperBoundRange,
+    /// `over 5 kg`, `5kg以上`, `min 12 mm`.
+    LowerBoundRange,
     /// `5-10 kg`, `2〜3日`, `from 2kg to 10kg`.
     Range,
     /// `5 kg to lb`.
@@ -81,7 +83,7 @@ pub(crate) enum Grammar {
 /// The single definition of the order the grammars are tried in.
 ///
 /// Every entry point walks this slice. None of them keeps an order of its own.
-pub(crate) const GRAMMAR_ORDER: [Grammar; 28] = [
+pub(crate) const GRAMMAR_ORDER: [Grammar; 29] = [
     Grammar::Qualified,
     Grammar::Fuzzy,
     Grammar::SlashDateOrFraction,
@@ -89,6 +91,7 @@ pub(crate) const GRAMMAR_ORDER: [Grammar; 28] = [
     Grammar::RelativeDate,
     Grammar::PlusMinusRange,
     Grammar::UpperBoundRange,
+    Grammar::LowerBoundRange,
     Grammar::Range,
     Grammar::Conversion,
     Grammar::JapaneseLength,
@@ -345,6 +348,9 @@ fn try_grammar(
         }
         Grammar::UpperBoundRange => {
             accept_range(parse_upper_bound_range(trimmed, ctx), trimmed, ctx, parsed)
+        }
+        Grammar::LowerBoundRange => {
+            accept_range(parse_lower_bound_range(trimmed, ctx), trimmed, ctx, parsed)
         }
         Grammar::Range => {
             let Some(reading) = parse_range(trimmed, ctx) else {
@@ -630,7 +636,10 @@ impl InputFeatures {
             Grammar::Qualified | Grammar::Fuzzy => true,
             Grammar::SlashDateOrFraction => self.has_slash,
             Grammar::NumericSlashDate | Grammar::RelativeDate => self.maybe_date,
-            Grammar::PlusMinusRange | Grammar::UpperBoundRange | Grammar::Range => self.maybe_range,
+            Grammar::PlusMinusRange
+            | Grammar::UpperBoundRange
+            | Grammar::LowerBoundRange
+            | Grammar::Range => self.maybe_range,
             Grammar::Conversion => self.maybe_conversion,
             Grammar::JapaneseLength => self.maybe_japanese_length,
             Grammar::TatamiArea => self.maybe_tatami,

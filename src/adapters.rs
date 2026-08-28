@@ -234,6 +234,12 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
                 if range.from.value.is_none() && range.to.value.is_some() {
                     return format!("up to {}", humanize(&range.to, endpoint_ctx));
                 }
+                // The mirror image, now that a lower bound is readable: `at
+                // least` is one of the prefixes `parse_lower_bound_range`
+                // accepts, so this direction round-trips like the other one.
+                if range.to.value.is_none() && range.from.value.is_some() {
+                    return format!("at least {}", humanize(&range.from, endpoint_ctx));
+                }
                 format!(
                     "{} to {}",
                     humanize(&range.from, endpoint_ctx.clone()),

@@ -725,25 +725,23 @@ pub(crate) fn note_malformed_compound(parsed: &mut Parsed, text: &str, reason: &
 
 /// Reason reported when the input states a bound this registry cannot read.
 pub(crate) const UNSUPPORTED_LOWER_BOUND_REASON: &str =
-    "input states a lower bound, and this registry reads no lower bound";
+    "input states a lower bound this parser could not read";
 
-/// Refuses an input that states a lower bound, and says that is what it is.
+/// Names the marker when a stated lower bound could not be read.
 ///
-/// There is no lower-bound grammar here: `≥ 5 mm`, `min 12 mm` and `5mm以上`
-/// have never been readable. Two things follow, and only the first is about
-/// correctness.
+/// The lower-bound grammar reads the ordinary forms now, so this withholds
+/// nothing: a reading that exists is the right answer. What is left is the
+/// case the grammar still cannot reach — a two-sided `5mm以上60mm以下`, say —
+/// and there the generic `NoValue` note ("no supported reading matched") is
+/// true and useless, because it cannot tell text this parser cannot read from
+/// text stating something it does not implement. Naming the marker makes the
+/// refusal actionable.
 ///
-/// A lower bound must not come back as something else. `5mm以上` returned an
-/// area of 5e-6 m2, because did-you-mean matching treated `mm以上` as a
-/// misspelling and found a square millimetre nearby. Refusing to correct
-/// across a bound marker stops that at the source; withholding here is the
-/// backstop, so no other path can reach a reading either.
-///
-/// The rest is honesty rather than correctness. An unread input already
-/// reported `NoValue` with "no supported reading matched", which is true and
-/// useless — it does not distinguish text this parser cannot parse from text
-/// that states something it does not implement. Naming the marker makes the
-/// refusal actionable, and a caller can tell the two apart without guessing.
+/// Withholding used to be the whole point of this function, when no lower
+/// bound could be read at all and `5mm以上` came back as an area. That job now
+/// belongs entirely to the check in `parse_typo_corrected_quantity_ctx`, which
+/// refuses to spell-correct across a bound marker — the change that makes it
+/// load-bearing rather than redundant, exactly as its comment predicted.
 pub(crate) fn withhold_unsupported_lower_bound(text: &str, parsed: &mut Parsed) {
     let Some(marker) = states_lower_bound(text) else {
         return;
@@ -757,12 +755,11 @@ pub(crate) fn withhold_unsupported_lower_bound(text: &str, parsed: &mut Parsed) 
         return;
     }
 
-    // Anything read here was read by ignoring the bound or by correcting
-    // across it, and neither is a reading of what the text says.
-    parsed.best = None;
-    parsed.alternatives.clear();
-    parsed.suggestions.clear();
-    parsed.findings.ambiguities.clear();
+    // A reading is the right answer, not something to withhold: the
+    // lower-bound grammar reads the ordinary forms now.
+    if parsed.best.is_some() {
+        return;
+    }
 
     // The generic "nothing matched" note is true but says nothing this one does
     // not say better, and two findings for one cause read as two problems.

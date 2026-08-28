@@ -15,7 +15,7 @@
 mod support;
 use support::parse;
 
-use unravel_nl::{Dimension, DimensionSet, IssueCode, Parsed, Parser};
+use unravel_nl::{Dimension, DimensionSet, IssueCode, Parsed, Parser, humanize};
 
 fn upper_bound_of(parsed: &Parsed) -> Option<(Option<f64>, f64, String)> {
     let range = parsed.best.as_ref()?.range.as_ref()?;
@@ -28,6 +28,13 @@ fn upper_bound_of(parsed: &Parsed) -> Option<(Option<f64>, f64, String)> {
 
 fn unread(parsed: &Parsed) -> bool {
     parsed.best.is_none() && parsed.alternatives.is_empty()
+}
+
+fn assert_close(actual: f64, expected: f64) {
+    assert!(
+        (actual - expected).abs() < 1e-9,
+        "expected {expected}, got {actual}"
+    );
 }
 
 /// A sign with nothing behind it is not a number, and not a bound.
@@ -135,8 +142,9 @@ fn full_width_comparators_normalize_to_their_ascii_spellings() {
 #[test]
 fn normalized_comparators_keep_spans_on_the_original_input() {
     // A refused full-width bound points at the marker, in the original bytes.
-    for (input, marker) in [("≧ 5 mm", "≧"), ("＞5mm", "＞"), ("２５．４mm以上", "以上")]
-    {
+    // The unit is deliberately unknown (`ｘ`), so these stay unread whatever the
+    // bound grammars can do, and the span is the only thing under test.
+    for (input, marker) in [("≧ ５ ｘ", "≧"), ("２５．４ｘ以上", "以上")] {
         let parsed = parse(input, None);
         let skipped = parsed.findings.skipped.first().expect("a finding");
         assert_eq!(
@@ -156,30 +164,186 @@ fn normalized_comparators_keep_spans_on_the_original_input() {
     assert_eq!(&line[first.start..first.end], "２５．４ mm");
 }
 
-/// Lower-bound comparators stay unread, in every spelling.
+/// A lower bound reads as a bound, in every spelling.
 ///
-/// There is no lower-bound grammar at all, so normalizing `≧` to `≥` maps the
-/// character without making the input readable. Pinned as characterization:
-/// the day a lower bound is read, this test should be the one that says so.
+/// This replaces the test that pinned these as unread. That one carried its own
+/// instruction — "the day a lower bound is read, this test should be the one
+/// that says so" — and it was: adding the grammar turned it red, which is what
+/// a characterization test is for.
+///
+/// The shape mirrors the upper bound exactly. `≥ 5 mm` states the lower end and
+/// leaves the upper unstated, where `≤ 5 mm` does the reverse, so a caller
+/// handles one kind of answer rather than two.
 #[test]
-fn lower_bound_comparators_are_still_unread() {
+fn a_lower_bound_reads_with_its_upper_end_unstated() {
     for input in [
-        "≧ 5 mm",
-        "＞5mm",
-        ">= 5 mm",
         "≥ 5 mm",
         "> 5 mm",
-        "min 12 mm",
+        ">= 5 mm",
+        "≧ 5 mm",
+        "＞5mm",
         "over 5 mm",
+        "at least 5 mm",
+        "more than 5 mm",
+        "above 5 mm",
+        "no less than 5 mm",
+        "5 mm minimum",
+        "5mm以上",
+        "5mm超",
+        "5mmを超える",
     ] {
         let parsed = parse(input, None);
+        let best = parsed
+            .best
+            .as_ref()
+            .unwrap_or_else(|| panic!("{input:?} was not read"));
+        let range = best.range.as_ref().expect("a range");
+
+        assert_close(range.from.value.expect("the stated bound"), 0.005);
+        assert_eq!(range.from.unit.as_deref(), Some("m"), "{input:?}");
+        assert_eq!(range.to.value, None, "{input:?} invented an upper bound");
+        assert_eq!(range.to.unit.as_deref(), Some("m"), "{input:?}");
+    }
+}
+
+/// The two directions are mirror images, and both survive a round trip.
+///
+/// `humanize` renders the open end away rather than naming it, and the text it
+/// produces is a spelling each grammar accepts, so the pair closes.
+#[test]
+fn both_bound_directions_round_trip_through_humanize() {
+    for (input, rendered_as) in [
+        ("≥ 5 mm", "at least 0.005 m"),
+        ("5mm以上", "at least 0.005 m"),
+        ("min 12 mm", "at least 0.012 m"),
+        ("under 40 kg", "up to 40 kg"),
+        ("40 C max", "up to 40 °C"),
+    ] {
+        let first = parse(input, None)
+            .best
+            .unwrap_or_else(|| panic!("{input:?}"));
+        let rendered = humanize(&first, None);
+        assert_eq!(rendered, rendered_as, "{input:?}");
+
+        let second = parse(&rendered, None)
+            .best
+            .unwrap_or_else(|| panic!("{input:?} rendered as {rendered:?}, which did not parse"));
+        let (a, b) = (
+            first.range.as_ref().expect("a range"),
+            second.range.as_ref().expect("a range"),
+        );
+        assert_eq!(a.from.value, b.from.value, "{input:?} -> {rendered:?}");
+        assert_eq!(a.to.value, b.to.value, "{input:?} -> {rendered:?}");
+        assert_eq!(a.from.unit, b.from.unit, "{input:?} -> {rendered:?}");
+    }
+}
+
+/// English `max` and `min` are read on both sides.
+///
+/// Adding `min` and `minimum` for the lower bound while the upper side still
+/// could not read `max 40 C` would have left this able to read one half of a
+/// tolerance table. `max` is a suffix marker where `min` is not, because `min`
+/// is also the minute.
+#[test]
+fn max_and_min_are_read_on_both_sides() {
+    for (input, from, to) in [
+        ("max 40 kg", None, Some(40.0)),
+        ("max. 40 kg", None, Some(40.0)),
+        ("40 kg max", None, Some(40.0)),
+        ("40 kg maximum", None, Some(40.0)),
+        ("no more than 40 kg", None, Some(40.0)),
+        ("min 40 kg", Some(40.0), None),
+        ("min. 40 kg", Some(40.0), None),
+        ("40 kg minimum", Some(40.0), None),
+        ("no less than 40 kg", Some(40.0), None),
+    ] {
+        let best = parse(input, None)
+            .best
+            .unwrap_or_else(|| panic!("{input:?} was not read"));
+        let range = best.range.as_ref().expect("a range");
+        assert_eq!(range.from.value, from, "{input:?}");
+        assert_eq!(range.to.value, to, "{input:?}");
+    }
+}
+
+/// A lower bound the grammar cannot reach is still refused by name.
+///
+/// `5mm以上60mm以下` states both ends and nothing here reads the pair, so it goes
+/// unread — but the refusal names the marker rather than saying only that
+/// nothing matched, which is the difference between "cannot parse this" and
+/// "does not implement this".
+#[test]
+fn an_unreachable_lower_bound_is_refused_by_name() {
+    for (input, marker) in [("5mm以上60mm以下", "以上"), ("２５．４ｘ以上", "以上")]
+    {
+        let parsed = parse(input, None);
+        assert!(unread(&parsed), "{input:?} produced a reading");
         assert!(
-            unread(&parsed),
-            "{input:?} now reads — a lower bound grammar arrived, so update this test"
+            parsed.suggestions.is_empty(),
+            "{input:?} still suggests a spelling correction"
         );
         assert!(
-            !parsed.findings.skipped.is_empty(),
-            "{input:?} was dropped without a finding"
+            parsed
+                .findings
+                .skipped
+                .iter()
+                .any(|found| found.reason.contains(marker)),
+            "{input:?} did not name the bound: {:?}",
+            parsed.findings.skipped
+        );
+    }
+}
+
+/// A bound marker is never a misspelling of a unit.
+///
+/// `5mm以上` came back as an area of 5e-6 m2 once, because `mm以上` is a short
+/// hop from a square millimetre by edit distance. It reads as a bound now, so
+/// what this checks is the thing that would break quietly if the guard went:
+/// the reading is a length, and no spelling correction was involved.
+#[test]
+fn a_bound_marker_is_not_corrected_into_a_unit() {
+    for input in ["5mm以上", "5mm超", "40C以上", "12kg以上"] {
+        let parsed = parse(input, None);
+        assert!(
+            !parsed
+                .findings
+                .ambiguities
+                .iter()
+                .any(|found| found.code == IssueCode::TypoCorrected),
+            "{input:?} was read by spelling correction"
+        );
+        assert!(parsed.suggestions.is_empty(), "{input:?}");
+
+        let best = parsed.best.as_ref().unwrap_or_else(|| panic!("{input:?}"));
+        let range = best.range.as_ref().expect("a range");
+        assert_ne!(
+            range.from.dimension,
+            Some(Dimension::Area),
+            "{input:?} was read as an area"
+        );
+    }
+}
+
+/// The minute survives the lower-bound markers.
+///
+/// `min` is a bound only as a prefix — `min 12 mm`. As a suffix it is the
+/// minute, and listing it there refused `5 min` as a bound, which is why the
+/// prefix and suffix markers are kept in separate lists.
+#[test]
+fn the_minute_is_not_mistaken_for_a_minimum() {
+    for (input, seconds) in [("5 min", 300.0), ("5 minutes", 300.0), ("90 min", 5400.0)] {
+        let best = parse(input, None)
+            .best
+            .unwrap_or_else(|| panic!("{input:?}"));
+        assert_eq!(best.dimension, Some(Dimension::Time), "{input:?}");
+        assert_eq!(best.value, Some(seconds), "{input:?}");
+    }
+
+    // Upper bounds are untouched by any of this.
+    for input in ["5mm以下", "5mm未満", "5mmまで", "≦ 40 C", "under 40 kg"] {
+        assert!(
+            parse(input, None).best.is_some(),
+            "{input:?} lost its upper bound"
         );
     }
 }
@@ -264,77 +428,4 @@ fn a_scoped_parser_offers_nothing_from_outside_its_registry() {
     let scoped = Parser::new(DimensionSet::of(&[Dimension::Length])).parse("5 H");
     assert!(scoped.best.is_none());
     assert!(scoped.alternatives.is_empty());
-}
-
-/// A stated lower bound is refused as one, not read as something else.
-///
-/// This registry has no lower-bound grammar, so `5mm以上` has never had a
-/// correct reading. What it had instead was a wrong one: did-you-mean matching
-/// treated `mm以上` as a misspelling and returned an area of 5e-6 m2. An area
-/// is a worse answer than no answer, so the bound marker now blocks spelling
-/// correction and the refusal names the marker it found.
-#[test]
-fn a_stated_lower_bound_is_refused_by_name() {
-    for (input, marker) in [
-        ("5mm以上", "以上"),
-        ("5mm超", "超"),
-        ("40C以上", "以上"),
-        ("12kg以上", "以上"),
-        ("≥ 5 mm", "≥"),
-        ("> 5 mm", ">"),
-        (">= 5 mm", ">="),
-        ("min 12 mm", "min "),
-        ("over 5 mm", "over "),
-        ("at least 5 mm", "at least "),
-        ("more than 5 mm", "more than "),
-        ("above 5 mm", "above "),
-        ("5 mm minimum", "minimum"),
-    ] {
-        let parsed = parse(input, None);
-        assert!(unread(&parsed), "{input:?} produced a reading");
-        assert!(
-            parsed.suggestions.is_empty(),
-            "{input:?} still suggests a spelling correction"
-        );
-
-        let found = parsed
-            .findings
-            .skipped
-            .iter()
-            .find(|found| found.reason.contains("lower bound"))
-            .unwrap_or_else(|| panic!("{input:?} did not name the bound"));
-        assert!(found.reason.contains(marker), "{input:?}: {}", found.reason);
-
-        // One cause, one finding: the generic "nothing matched" note is gone.
-        assert_eq!(
-            parsed.findings.skipped.len(),
-            1,
-            "{input:?} filed {} findings",
-            parsed.findings.skipped.len()
-        );
-    }
-}
-
-/// The minute survives the lower-bound markers.
-///
-/// `min` is a bound only as a prefix — `min 12 mm`. As a suffix it is the
-/// minute, and listing it there refused `5 min` as a bound, which is why the
-/// prefix and suffix markers are kept in separate lists.
-#[test]
-fn the_minute_is_not_mistaken_for_a_minimum() {
-    for (input, seconds) in [("5 min", 300.0), ("5 minutes", 300.0), ("90 min", 5400.0)] {
-        let best = parse(input, None)
-            .best
-            .unwrap_or_else(|| panic!("{input:?}"));
-        assert_eq!(best.dimension, Some(Dimension::Time), "{input:?}");
-        assert_eq!(best.value, Some(seconds), "{input:?}");
-    }
-
-    // Upper bounds are untouched by any of this.
-    for input in ["5mm以下", "5mm未満", "5mmまで", "≦ 40 C", "under 40 kg"] {
-        assert!(
-            parse(input, None).best.is_some(),
-            "{input:?} lost its upper bound"
-        );
-    }
 }
