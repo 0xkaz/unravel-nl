@@ -393,15 +393,32 @@ pub(crate) fn parse_typo_corrected_quantity_ctx(
 pub(crate) fn split_number_unit(text: &str) -> Option<(&str, &str)> {
     let trimmed = text.trim();
     let mut seen_digit = false;
+    // Set just after an `e` that an exponent follows, so the sign in `1.2e-3`
+    // is read as part of the number rather than ending it. Without this the
+    // splitter stops at the `e` and hands `1.2` to the number parser and
+    // `e-3 ohm` to the unit registry, which is the same number split two ways.
+    let mut after_exponent_marker = false;
     for (idx, ch) in trimmed.char_indices() {
         if is_number_prefix_char(ch) {
             seen_digit = true;
+            after_exponent_marker = false;
             continue;
         }
-        if matches!(ch, '+' | '-') && idx == 0 {
+        if matches!(ch, '+' | '-') && (idx == 0 || after_exponent_marker) {
+            after_exponent_marker = false;
+            continue;
+        }
+        if seen_digit
+            && matches!(ch, 'e' | 'E')
+            && trimmed
+                .get(idx + ch.len_utf8()..)
+                .is_some_and(exponent_prefix)
+        {
+            after_exponent_marker = true;
             continue;
         }
         if seen_digit && matches!(ch, '.' | ',' | '_' | '/' | '½' | '¼' | '¾') {
+            after_exponent_marker = false;
             continue;
         }
         if seen_digit {
@@ -414,6 +431,15 @@ pub(crate) fn split_number_unit(text: &str) -> Option<(&str, &str)> {
         return None;
     }
     None
+}
+
+/// True when `text` opens with an exponent: an optional sign, then a digit.
+///
+/// Only the opening matters here; the unit follows the digits and is not this
+/// function's business.
+fn exponent_prefix(text: &str) -> bool {
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    digits.starts_with(|ch: char| ch.is_ascii_digit())
 }
 
 pub(crate) fn is_number_prefix_char(ch: char) -> bool {

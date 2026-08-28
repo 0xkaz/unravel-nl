@@ -379,10 +379,25 @@ fn extreme_and_zero_values_stay_exact() {
     assert_eq!(stated.0, None, "the open end is still open");
     assert_eq!(stated.1, 0.0, "the stated end is zero");
 
-    // Exponent notation is not read at all, so an overflowing literal never
-    // reaches the bound grammar. Pinned so the day it is read, this is seen.
-    for input in ["1e308 kg", "1e400 kg", "under 1e308 kg"] {
-        assert!(unread(&parse(input, None)), "{input:?} now reads");
+    // Exponent notation reads now, so a literal at the edge of what an f64
+    // holds does reach the bound grammar. What must not happen is a number the
+    // text does not contain: overflow to infinity and underflow to zero are
+    // both refused rather than reported.
+    assert_eq!(
+        parse("1e308 kg", None).best.expect("1e308 kg").value,
+        Some(1e308)
+    );
+    let bounded = upper_bound_of(&parse("under 1e308 kg", None)).expect("a bound");
+    assert_eq!(bounded.0, None);
+    assert_eq!(bounded.1, 1e308);
+
+    for input in ["1e400 kg", "1e309", "1e-400 kg"] {
+        let parsed = parse(input, None);
+        assert!(
+            unread(&parsed),
+            "{input:?} reported a number it cannot hold"
+        );
+        assert!(!parsed.findings.skipped.is_empty(), "{input:?}");
     }
 }
 

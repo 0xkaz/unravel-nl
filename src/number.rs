@@ -23,6 +23,35 @@ pub(crate) fn parse_number_with_format(text: &str, number_format: NumberFormat) 
         return None;
     }
 
+    // Scientific notation, before anything else looks at the text: `1.2e5` is
+    // one number, and every path below reads the mantissa alone and stops at
+    // the `e`. The mantissa goes back through this function so it keeps the
+    // caller's locale format — `1,2e5` is 120000 under a comma decimal.
+    if let Some((mantissa, exponent)) = split_exponent(trimmed) {
+        // The mantissa still goes through locale normalization, so `1,2e5` is
+        // 120000 under a comma decimal. Reassembling the two and letting the
+        // standard library parse the whole literal is what keeps the result
+        // correctly rounded: multiplying by `10f64.powi(exponent)` reads
+        // `1e308` as 1.0000000000000006e308, because that power is not exact.
+        let normalized = normalize_locale_number(mantissa, number_format)?;
+        if !normalized
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || matches!(ch, '.' | '-' | '+'))
+        {
+            return None;
+        }
+        let base: f64 = normalized.parse().ok()?;
+        let scaled: f64 = format!("{normalized}e{exponent}").parse().ok()?;
+        // An exponent is the easiest way to write a number this type cannot
+        // hold, at either end. Overflowing to infinity is not a reading of the
+        // input, and neither is underflowing to zero: `1e-400` is not zero, and
+        // reporting zero would be a number the text does not contain.
+        if !scaled.is_finite() || (scaled == 0.0 && base != 0.0) {
+            return None;
+        }
+        return Some(scaled);
+    }
+
     if let Some(value) = parse_japanese_large_number(trimmed) {
         return Some(value);
     }
@@ -49,6 +78,31 @@ pub(crate) fn parse_number_with_format(text: &str, number_format: NumberFormat) 
     } else {
         None
     }
+}
+
+/// Splits `1.2e5` into its mantissa and exponent.
+///
+/// The `e` has to sit between a digit and an exponent, which is what keeps this
+/// away from text that merely contains the letter. No unit in this registry
+/// begins with `e`, so a digit followed by `e` and digits is never a quantity
+/// with a unit attached.
+pub(crate) fn split_exponent(text: &str) -> Option<(&str, i32)> {
+    let marker = text.rfind(['e', 'E'])?;
+    let (mantissa, rest) = text.split_at(marker);
+    let exponent = rest.get(1..)?;
+    if !mantissa.ends_with(|ch: char| ch.is_ascii_digit()) {
+        return None;
+    }
+    if !exponent_digits(exponent) {
+        return None;
+    }
+    Some((mantissa, exponent.parse().ok()?))
+}
+
+/// True when `text` is an exponent: an optional sign and at least one digit.
+pub(crate) fn exponent_digits(text: &str) -> bool {
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 pub(crate) fn normalize_locale_number(text: &str, number_format: NumberFormat) -> Option<String> {
