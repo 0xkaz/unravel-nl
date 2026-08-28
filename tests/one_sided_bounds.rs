@@ -134,12 +134,20 @@ fn full_width_comparators_normalize_to_their_ascii_spellings() {
 /// editor matches both have to address the untouched input.
 #[test]
 fn normalized_comparators_keep_spans_on_the_original_input() {
-    // An unread full-width bound reports a span covering the original bytes.
-    let parsed = parse("≧ 5 mm", None);
-    let skipped = parsed.findings.skipped.first().expect("a finding");
-    assert_eq!(skipped.span.start, 0);
-    assert_eq!(skipped.span.end, "≧ 5 mm".len());
-    assert_eq!(skipped.span.text, "≧ 5 mm");
+    // A refused full-width bound points at the marker, in the original bytes.
+    for (input, marker) in [("≧ 5 mm", "≧"), ("＞5mm", "＞"), ("２５．４mm以上", "以上")]
+    {
+        let parsed = parse(input, None);
+        let skipped = parsed.findings.skipped.first().expect("a finding");
+        assert_eq!(
+            input.get(skipped.span.start..skipped.span.end),
+            Some(marker),
+            "{input:?} span {}..{} does not cover {marker:?} in the original",
+            skipped.span.start,
+            skipped.span.end
+        );
+        assert_eq!(skipped.span.text, marker, "{input:?}");
+    }
 
     // An editor match inside a longer line addresses the original too.
     let line = "bore ２５．４ mm and wall 10 mm";
@@ -256,4 +264,77 @@ fn a_scoped_parser_offers_nothing_from_outside_its_registry() {
     let scoped = Parser::new(DimensionSet::of(&[Dimension::Length])).parse("5 H");
     assert!(scoped.best.is_none());
     assert!(scoped.alternatives.is_empty());
+}
+
+/// A stated lower bound is refused as one, not read as something else.
+///
+/// This registry has no lower-bound grammar, so `5mm以上` has never had a
+/// correct reading. What it had instead was a wrong one: did-you-mean matching
+/// treated `mm以上` as a misspelling and returned an area of 5e-6 m2. An area
+/// is a worse answer than no answer, so the bound marker now blocks spelling
+/// correction and the refusal names the marker it found.
+#[test]
+fn a_stated_lower_bound_is_refused_by_name() {
+    for (input, marker) in [
+        ("5mm以上", "以上"),
+        ("5mm超", "超"),
+        ("40C以上", "以上"),
+        ("12kg以上", "以上"),
+        ("≥ 5 mm", "≥"),
+        ("> 5 mm", ">"),
+        (">= 5 mm", ">="),
+        ("min 12 mm", "min "),
+        ("over 5 mm", "over "),
+        ("at least 5 mm", "at least "),
+        ("more than 5 mm", "more than "),
+        ("above 5 mm", "above "),
+        ("5 mm minimum", "minimum"),
+    ] {
+        let parsed = parse(input, None);
+        assert!(unread(&parsed), "{input:?} produced a reading");
+        assert!(
+            parsed.suggestions.is_empty(),
+            "{input:?} still suggests a spelling correction"
+        );
+
+        let found = parsed
+            .findings
+            .skipped
+            .iter()
+            .find(|found| found.reason.contains("lower bound"))
+            .unwrap_or_else(|| panic!("{input:?} did not name the bound"));
+        assert!(found.reason.contains(marker), "{input:?}: {}", found.reason);
+
+        // One cause, one finding: the generic "nothing matched" note is gone.
+        assert_eq!(
+            parsed.findings.skipped.len(),
+            1,
+            "{input:?} filed {} findings",
+            parsed.findings.skipped.len()
+        );
+    }
+}
+
+/// The minute survives the lower-bound markers.
+///
+/// `min` is a bound only as a prefix — `min 12 mm`. As a suffix it is the
+/// minute, and listing it there refused `5 min` as a bound, which is why the
+/// prefix and suffix markers are kept in separate lists.
+#[test]
+fn the_minute_is_not_mistaken_for_a_minimum() {
+    for (input, seconds) in [("5 min", 300.0), ("5 minutes", 300.0), ("90 min", 5400.0)] {
+        let best = parse(input, None)
+            .best
+            .unwrap_or_else(|| panic!("{input:?}"));
+        assert_eq!(best.dimension, Some(Dimension::Time), "{input:?}");
+        assert_eq!(best.value, Some(seconds), "{input:?}");
+    }
+
+    // Upper bounds are untouched by any of this.
+    for input in ["5mm以下", "5mm未満", "5mmまで", "≦ 40 C", "under 40 kg"] {
+        assert!(
+            parse(input, None).best.is_some(),
+            "{input:?} lost its upper bound"
+        );
+    }
 }

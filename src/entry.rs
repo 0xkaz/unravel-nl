@@ -407,6 +407,7 @@ pub(crate) fn finalize_parsed(text: &str, ctx: &ParseCtx, parsed: &mut Parsed) {
     flag_descending_range(text, parsed);
     withhold_unmodelled_unit_symbol(text, parsed);
     report_competing_exact_alias(text, ctx, parsed);
+    withhold_unsupported_lower_bound(text, parsed);
 }
 
 /// Drops readings whose value overflowed to infinity or collapsed to NaN.
@@ -719,6 +720,62 @@ pub(crate) fn note_malformed_compound(parsed: &mut Parsed, text: &str, reason: &
         reason,
         IssueCode::CompoundOverflow,
         span(text),
+    ));
+}
+
+/// Reason reported when the input states a bound this registry cannot read.
+pub(crate) const UNSUPPORTED_LOWER_BOUND_REASON: &str =
+    "input states a lower bound, and this registry reads no lower bound";
+
+/// Refuses an input that states a lower bound, and says that is what it is.
+///
+/// There is no lower-bound grammar here: `≥ 5 mm`, `min 12 mm` and `5mm以上`
+/// have never been readable. Two things follow, and only the first is about
+/// correctness.
+///
+/// A lower bound must not come back as something else. `5mm以上` returned an
+/// area of 5e-6 m2, because did-you-mean matching treated `mm以上` as a
+/// misspelling and found a square millimetre nearby. Refusing to correct
+/// across a bound marker stops that at the source; withholding here is the
+/// backstop, so no other path can reach a reading either.
+///
+/// The rest is honesty rather than correctness. An unread input already
+/// reported `NoValue` with "no supported reading matched", which is true and
+/// useless — it does not distinguish text this parser cannot parse from text
+/// that states something it does not implement. Naming the marker makes the
+/// refusal actionable, and a caller can tell the two apart without guessing.
+pub(crate) fn withhold_unsupported_lower_bound(text: &str, parsed: &mut Parsed) {
+    let Some(marker) = states_lower_bound(text) else {
+        return;
+    };
+    if parsed
+        .findings
+        .skipped
+        .iter()
+        .any(|found| found.reason.starts_with(UNSUPPORTED_LOWER_BOUND_REASON))
+    {
+        return;
+    }
+
+    // Anything read here was read by ignoring the bound or by correcting
+    // across it, and neither is a reading of what the text says.
+    parsed.best = None;
+    parsed.alternatives.clear();
+    parsed.suggestions.clear();
+    parsed.findings.ambiguities.clear();
+
+    // The generic "nothing matched" note is true but says nothing this one does
+    // not say better, and two findings for one cause read as two problems.
+    parsed
+        .findings
+        .skipped
+        .retain(|found| !found.reason.starts_with("no supported "));
+
+    parsed.findings.skipped.push(skipped_with_span(
+        marker,
+        &format!("{UNSUPPORTED_LOWER_BOUND_REASON}: {marker:?}"),
+        IssueCode::NoValue,
+        span_in(text, marker),
     ));
 }
 

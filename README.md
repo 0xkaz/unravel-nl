@@ -556,6 +556,13 @@ let range = bounded.best.unwrap().range.expect("a range");
 assert_eq!(range.from.value, None);
 assert_eq!(range.to.value, Some(0.01));
 
+// A lower bound is refused rather than read as something else: there is no
+// lower-bound grammar here, and `5mm以上` used to come back as an area after
+// `mm以上` was "corrected" to a square millimetre. The finding names the marker.
+let lower = Parser::new(Dimension::Length.into()).parse("5mm以上");
+assert!(lower.best.is_none());
+assert!(lower.findings.skipped[0].reason.contains("以上"));
+
 // Comparators are read in their full-width spellings too: `≦` (U+2266) is how
 // Japanese technical writing ordinarily says "at most". They fold to the ASCII
 // spelling in the normalization table, so spans still address your input.

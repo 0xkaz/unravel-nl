@@ -362,6 +362,21 @@ pub(crate) fn parse_typo_corrected_quantity_ctx(
     if unit_by_alias(unit_text).is_some() {
         return None;
     }
+    // A bound marker is not part of a unit name, so it is not a misspelling of
+    // one. Correcting by edit distance across it read `5mm以上` as an area,
+    // because `mm以上` is a short hop from a square millimetre. No amount of
+    // spelling correction turns "5 mm or more" into an area.
+    //
+    // This is redundant today and deliberately kept: `withhold_unsupported_lower_bound`
+    // discards the same reading afterwards, and removing this changes no
+    // observable behaviour, so no test distinguishes it. It stops being
+    // redundant the moment a lower-bound grammar exists — that guard withholds
+    // *because* the bound cannot be read, so it goes away when the bound can be
+    // read, and then this is the only thing keeping `mm以上` from becoming a
+    // unit again.
+    if states_lower_bound(text).is_some() {
+        return None;
+    }
     let suggestion = suggest_unit(unit_text, ctx.unit_registry)?;
     let corrected = unit_by_alias_in(&suggestion.to, ctx.unit_registry)?;
     let reading = Reading::quantity(

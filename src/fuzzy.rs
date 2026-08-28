@@ -231,6 +231,71 @@ pub(crate) fn parse_plus_minus_range(text: &str, ctx: &ParseCtx) -> Option<Readi
     ))
 }
 
+/// Markers that state a lower bound, in the normalized text.
+///
+/// Prefixes and suffixes are kept apart because two of them are ambiguous in
+/// the other position: `min` is also the minute, so `5 min` must stay a
+/// duration while `min 12 mm` is a bound, and `超` is a bound only as a
+/// suffix. Matching by position rather than by substring is what keeps those
+/// apart.
+const LOWER_BOUND_PREFIXES: &[&str] = &[
+    "at least ",
+    "no less than ",
+    "not less than ",
+    "more than ",
+    "greater than ",
+    "over ",
+    "above ",
+    "min ",
+    "min. ",
+    "minimum ",
+];
+
+const LOWER_BOUND_SYMBOL_PREFIXES: &[&str] = &["≥", ">=", ">"];
+
+// `min` is deliberately absent as a suffix: it is the minute there, and
+// listing it refused `5 min` as a bound. Only the prefix form (`min 12 mm`) is
+// a bound, which is why the two lists are separate in the first place.
+const LOWER_BOUND_SUFFIXES: &[&str] = &["以上", "超", "を超える", "より大きい", "minimum"];
+
+/// Returns the marker by which `text` states a lower bound.
+///
+/// This registry reads no lower bound — there is no grammar for one — so the
+/// only thing this can be used for is to refuse honestly. It exists because
+/// refusing and *misreading* are different failures: `5mm以上` used to come
+/// back as an area, having had `mm以上` corrected to a unit by edit distance,
+/// and an area is a worse answer than no answer.
+pub(crate) fn states_lower_bound(text: &str) -> Option<&'static str> {
+    let trimmed = text.trim();
+    let lower = trimmed.to_ascii_lowercase();
+
+    if let Some(marker) = LOWER_BOUND_SYMBOL_PREFIXES
+        .iter()
+        .find(|marker| trimmed.starts_with(**marker))
+    {
+        return Some(marker);
+    }
+    if let Some(marker) = LOWER_BOUND_PREFIXES
+        .iter()
+        .find(|marker| lower.starts_with(**marker))
+    {
+        return Some(marker);
+    }
+    // A suffix marker needs something in front of it, or the "bound" is the
+    // whole input and there is no quantity being bounded.
+    LOWER_BOUND_SUFFIXES
+        .iter()
+        .find(|marker| {
+            let matched = if marker.is_ascii() {
+                lower.strip_suffix(**marker)
+            } else {
+                trimmed.strip_suffix(**marker)
+            };
+            matched.is_some_and(|rest| !rest.trim().is_empty())
+        })
+        .copied()
+}
+
 pub(crate) fn parse_upper_bound_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     let trimmed = text.trim();
     let rest = ["less than ", "under ", "below ", "up to ", "at most "]
