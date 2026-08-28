@@ -431,6 +431,62 @@ pub(crate) fn parse_lower_bound_range(text: &str, ctx: &ParseCtx) -> Option<Read
     Some(Reading::range(from, to, 0.86))
 }
 
+/// Reads a range whose two ends are each written as a bound.
+///
+/// `5mm以上60mm以下` is how a Japanese technical document ordinarily writes
+/// "between 5 and 60 mm", and `≥5mm ≤60mm` is the same statement in symbols.
+/// Neither is a `X to Y` range and neither is a single bound, so both went
+/// unread while each half on its own parsed perfectly well.
+///
+/// The split point is found rather than assumed: a lower bound can close with
+/// its marker (`以上`) or the upper bound can open with one (`≤`), so both
+/// candidate positions are tried and the pair has to parse as a lower bound
+/// followed by an upper bound. Nothing here reorders or repairs — the ends are
+/// returned as written, and a pair that descends is reported by the finalizers
+/// like any other descending range.
+pub(crate) fn parse_two_sided_bound_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
+    let trimmed = text.trim();
+
+    // Where a lower-bound suffix marker ends, and where an upper-bound prefix
+    // marker begins. Both are byte offsets that split the input in two.
+    let after_lower_marker = LOWER_BOUND_SUFFIXES
+        .iter()
+        .chain(LOWER_BOUND_ANYWHERE.iter())
+        .filter_map(|marker| trimmed.find(*marker).map(|at| at + marker.len()));
+    let before_upper_marker = UPPER_BOUND_PREFIXES
+        .iter()
+        .chain(["≤", "<=", "<", "最大", "上限"].iter())
+        .filter_map(|marker| find_ascii_case(trimmed, marker).filter(|at| *at > 0));
+
+    for split in after_lower_marker.chain(before_upper_marker) {
+        let (left, right) = match (trimmed.get(..split), trimmed.get(split..)) {
+            (Some(left), Some(right)) => (left.trim(), right.trim()),
+            _ => continue,
+        };
+        if left.is_empty() || right.is_empty() {
+            continue;
+        }
+
+        let Some(lower) = parse_lower_bound_range(left, ctx) else {
+            continue;
+        };
+        let Some(upper) = parse_upper_bound_range(right, ctx) else {
+            continue;
+        };
+        let (Some(lower), Some(upper)) = (lower.range, upper.range) else {
+            continue;
+        };
+        let (from, to) = (lower.from, upper.to);
+        // Both ends have to measure the same thing, the same test the two-ended
+        // range grammar applies.
+        if from.kind != to.kind || from.dimension != to.dimension || from.unit != to.unit {
+            continue;
+        }
+        return Some(Reading::range(from, to, 0.9));
+    }
+    None
+}
+
 /// [`strip_prefix_ascii_case`], from the other end.
 fn strip_suffix_ascii_case<'a>(text: &'a str, suffix: &str) -> Option<&'a str> {
     let cut = text.len().checked_sub(suffix.len())?;

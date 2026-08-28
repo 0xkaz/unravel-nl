@@ -268,14 +268,15 @@ fn max_and_min_are_read_on_both_sides() {
 
 /// A lower bound the grammar cannot reach is still refused by name.
 ///
-/// `5mm以上60mm以下` states both ends and nothing here reads the pair, so it goes
-/// unread — but the refusal names the marker rather than saying only that
-/// nothing matched, which is the difference between "cannot parse this" and
-/// "does not implement this".
+/// `5mm以上60mm以下` used to be the example here, and is now read by
+/// `Grammar::TwoSidedBoundRange`. What is left is text where the bound is
+/// stated plainly and the *unit* is the part nothing can resolve — and there
+/// the refusal names the marker rather than saying only that nothing matched,
+/// which is the difference between "cannot parse this" and "does not implement
+/// this".
 #[test]
 fn an_unreachable_lower_bound_is_refused_by_name() {
-    for (input, marker) in [("5mm以上60mm以下", "以上"), ("２５．４ｘ以上", "以上")]
-    {
+    for (input, marker) in [("２５．４ｘ以上", "以上"), ("5ｘ以上", "以上")] {
         let parsed = parse(input, None);
         assert!(unread(&parsed), "{input:?} produced a reading");
         assert!(
@@ -443,4 +444,74 @@ fn a_scoped_parser_offers_nothing_from_outside_its_registry() {
     let scoped = Parser::new(DimensionSet::of(&[Dimension::Length])).parse("5 H");
     assert!(scoped.best.is_none());
     assert!(scoped.alternatives.is_empty());
+}
+
+/// A range whose two ends are each written as a bound.
+///
+/// `5mm以上60mm以下` is how a Japanese technical document ordinarily writes
+/// "between 5 and 60 mm". It is not a `X to Y` range and not a single bound, so
+/// it went unread while each half parsed on its own.
+#[test]
+fn a_range_written_as_two_bounds_reads_both_ends() {
+    for (input, from, to, unit) in [
+        ("5mm以上60mm以下", 0.005, 0.06, "m"),
+        ("5mm以上60mm未満", 0.005, 0.06, "m"),
+        ("12kg以上37kg以下", 12.0, 37.0, "kg"),
+        ("≥5mm ≤60mm", 0.005, 0.06, "m"),
+        ("≥ 5 mm ≤ 60 mm", 0.005, 0.06, "m"),
+        ("min 5 mm max 60 mm", 0.005, 0.06, "m"),
+    ] {
+        let best = parse(input, None)
+            .best
+            .unwrap_or_else(|| panic!("{input:?} was not read"));
+        let range = best.range.as_ref().expect("a range");
+
+        assert_close(range.from.value.expect("a lower end"), from);
+        assert_close(range.to.value.expect("an upper end"), to);
+        assert_eq!(range.from.unit.as_deref(), Some(unit), "{input:?}");
+        assert_eq!(range.to.unit.as_deref(), Some(unit), "{input:?}");
+    }
+
+    // It agrees with the same statement written as an ordinary range.
+    let spelled = parse("5 to 60 mm", None).best.expect("a range");
+    let bounded = parse("5mm以上60mm以下", None).best.expect("a range");
+    let (a, b) = (
+        spelled.range.as_ref().expect("a range"),
+        bounded.range.as_ref().expect("a range"),
+    );
+    assert_eq!(a.from.value, b.from.value);
+    assert_eq!(a.to.value, b.to.value);
+}
+
+/// Two bounds that disagree are not repaired, and neither end is invented.
+#[test]
+fn two_bounds_that_disagree_are_reported_not_reordered() {
+    // Descending: kept as written, and reported.
+    let parsed = parse("60mm以上5mm以下", None);
+    let range = parsed
+        .best
+        .as_ref()
+        .expect("a range")
+        .range
+        .as_ref()
+        .expect("endpoints");
+    assert_close(range.from.value.expect("a value"), 0.06);
+    assert_close(range.to.value.expect("a value"), 0.005);
+    assert!(
+        parsed
+            .findings
+            .ambiguities
+            .iter()
+            .any(|found| found.code == IssueCode::AmbiguousNumber),
+        "a descending pair was not reported"
+    );
+
+    // Ends measuring different things are not a range at all.
+    for input in ["5mm以上60kg以下", "5kg以上60mm以下"] {
+        assert!(unread(&parse(input, None)), "{input:?} crossed dimensions");
+    }
+
+    // A single bound still leaves its other end unstated rather than filling it.
+    let single = parse("5mm以上", None).best.expect("a bound");
+    assert_eq!(single.range.as_ref().expect("a range").to.value, None);
 }
