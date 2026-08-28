@@ -226,6 +226,14 @@ pub fn humanize(value: &Reading, ctx: Option<HumanizeCtx>) -> String {
             || "unresolved range".to_owned(),
             |range| {
                 let endpoint_ctx = range_endpoint_ctx(ctx.as_ref(), range);
+                // A one-sided bound has nothing to render at its open end, and
+                // naming it anyway produced text the parser could not read
+                // back: `under 10 minutes` humanized as "unresolved to 600 s".
+                // `up to` is one of the prefixes `parse_upper_bound_range`
+                // accepts, so this direction stays reversible.
+                if range.from.value.is_none() && range.to.value.is_some() {
+                    return format!("up to {}", humanize(&range.to, endpoint_ctx));
+                }
                 format!(
                     "{} to {}",
                     humanize(&range.from, endpoint_ctx.clone()),

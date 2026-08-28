@@ -40,7 +40,7 @@ The first slice focuses on:
 - Forgiving, confirm, and strict parse modes for correction policy
 - Compact and ISO-style durations such as `1h30`, `2d4h`, and `PT1H30M`
 - Clock times and slots such as `3pm`, `14:30`, and `3pm-4pm`
-- Approximate, tolerance, and bounded input such as `about 20C`, `約20kg`,
+- Approximate, tolerance, and upper-bounded input such as `about 20C`, `約20kg`,
   `10 ± 0.5 mm`, `a few minutes`, `under 10 minutes`, `10mm以下`, and
   temperature phrases like `it's hot`
 - Golden corpus and round-trip tests for every maintained canonical reading,
@@ -547,8 +547,14 @@ use unravel_nl::{Dimension, FuzzyProfile, FuzzyTerm, ParseCtx, Parser};
 let tolerance = Parser::new(Dimension::Length.into()).parse("10 ± 0.5 mm");
 assert!(tolerance.best.unwrap().range.is_some());
 
+// A one-sided bound states one endpoint. The other keeps its unit and leaves
+// its value unstated, because the text does not give one — reading it as zero
+// would report a number the input never wrote, and would be wrong outright for
+// any quantity that goes below zero.
 let bounded = Parser::new(Dimension::Length.into()).parse("10mm以下");
-assert!(bounded.best.unwrap().range.is_some());
+let range = bounded.best.unwrap().range.expect("a range");
+assert_eq!(range.from.value, None);
+assert_eq!(range.to.value, Some(0.01));
 
 let hot_parser = Parser::with_context(
     Dimension::Temperature.into(),

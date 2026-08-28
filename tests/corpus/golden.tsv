@@ -38,8 +38,8 @@ about 20C	en	quantity	temperature	C	20
 3公斤	zh	quantity	mass	kg	3
 100-120㎡	ja	range	area	m2			100	120
 10 ± 0.5 mm	en	range	length	m			0.0095	0.0105
-under 10 minutes	en	range	time	s			0	600
-10mm以下	ja	range	length	m			0	0.01
+under 10 minutes	en	range	time	s			none	600
+10mm以下	ja	range	length	m			none	0.01
 3pm	en	quantity	time	s	54000
 午後3時	ja	quantity	time	s	54000
 午前9時30分	ja	quantity	time	s	34200

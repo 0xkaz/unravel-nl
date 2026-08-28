@@ -24,8 +24,8 @@ fn golden_corpus_matches_canonical_readings() {
         let expected_unit = empty_as_none(columns[4]);
         let expected_value = parse_optional_f64(columns[5]);
         let expected_date = empty_as_none(columns[6]);
-        let expected_range_from = parse_optional_f64(columns[7]);
-        let expected_range_to = parse_optional_f64(columns[8]);
+        let expected_range_from = empty_as_none(columns[7]);
+        let expected_range_to = empty_as_none(columns[8]);
 
         let parsed = parse(
             input,
@@ -81,11 +81,11 @@ fn golden_corpus_matches_canonical_readings() {
         }
         if let Some(range_from) = expected_range_from {
             let range = best.range.as_ref().expect("range");
-            assert_close(range.from.value.expect("range from"), range_from, input);
+            assert_endpoint(range.from.value, range_from, line_no, input);
         }
         if let Some(range_to) = expected_range_to {
             let range = best.range.as_ref().expect("range");
-            assert_close(range.to.value.expect("range to"), range_to, input);
+            assert_endpoint(range.to.value, range_to, line_no, input);
         }
     }
 }
@@ -153,4 +153,21 @@ fn assert_close(actual: f64, expected: f64, label: &str) {
         (actual - expected).abs() < 1e-9,
         "{label}: expected {expected}, got {actual}"
     );
+}
+
+/// Checks one range endpoint against the corpus column.
+///
+/// `none` is spelled out rather than left blank so that a one-sided bound
+/// asserts its open end. A blank column is "not checked here", which would let
+/// an endpoint quietly acquire a value the input never stated — which is the
+/// bug that put this column to work in the first place.
+fn assert_endpoint(actual: Option<f64>, expected: &str, line_no: usize, input: &str) {
+    if expected == "none" {
+        assert_eq!(actual, None, "line {line_no}: {input} stated an endpoint");
+        return;
+    }
+    let expected: f64 = expected
+        .parse()
+        .unwrap_or_else(|_| panic!("line {line_no}: {expected:?} is not a number"));
+    assert_close(actual.expect("range endpoint"), expected, input);
 }

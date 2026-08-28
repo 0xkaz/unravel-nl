@@ -251,22 +251,38 @@ pub(crate) fn parse_upper_bound_range(text: &str, ctx: &ParseCtx) -> Option<Read
     }
 
     let to = parse_endpoint(rest, ctx)?;
-    if to.kind != Kind::Quantity || to.value? < 0.0 {
+    if to.kind != Kind::Quantity || to.value.is_none() {
         return None;
     }
-    let from = zero_like_quantity(&to)?;
+    let from = unstated_bound_quantity(&to)?;
     Some(Reading::range(from, to, 0.86))
 }
 
-pub(crate) fn zero_like_quantity(reading: &Reading) -> Option<Reading> {
-    Some(Reading::quantity(
-        0.0,
-        reading.unit.as_deref()?,
-        reading.dimension?,
-        reading.provenance.unwrap_or(Provenance::TradeCustom),
-        reading.approximate.unwrap_or(false),
-        0.86,
-    ))
+/// The open end of a one-sided bound: the unit is known, the value is not.
+///
+/// `under 40 kg` used to be read as a range from 0.0 kg, which is a number the
+/// text does not contain. That mattered in three ways. It handed a caller a
+/// fabricated bound with no finding to say so; it was wrong wherever the
+/// quantity goes below zero, so `≤ 40 C` excluded every temperature under
+/// freezing; and the refusal that hid the worst of it — declining any bound
+/// whose value was negative — made `≤ -10 C` unreadable for no other reason.
+///
+/// Leaving [`Reading::value`] as `None` says what the text says: there is an
+/// upper bound of 40 kg and no stated lower one. The unit and dimension are
+/// still carried, so the endpoint is usable for everything except the number
+/// that was never written.
+pub(crate) fn unstated_bound_quantity(reading: &Reading) -> Option<Reading> {
+    Some(Reading {
+        value: None,
+        ..Reading::quantity(
+            0.0,
+            reading.unit.as_deref()?,
+            reading.dimension?,
+            reading.provenance.unwrap_or(Provenance::TradeCustom),
+            reading.approximate.unwrap_or(false),
+            0.86,
+        )
+    })
 }
 
 pub(crate) fn mark_approximate(reading: &mut Reading) {
@@ -845,18 +861,60 @@ mod tests {
         assert_close(range.from.value.unwrap(), 0.0095);
         assert_close(range.to.value.unwrap(), 0.0105);
 
+        // A one-sided bound states one endpoint. The other keeps its unit and
+        // leaves its value unstated, because the text does not give one.
         let upper = parse("under 10 minutes", None).best.expect("upper bound");
         assert_eq!(upper.kind, Kind::Range);
         let range = upper.range.expect("range");
         assert_eq!(range.from.unit.as_deref(), Some("s"));
-        assert_close(range.from.value.unwrap(), 0.0);
+        assert_eq!(range.from.value, None);
         assert_close(range.to.value.unwrap(), 600.0);
 
         let japanese_upper = parse("10mm以下", None).best.expect("Japanese upper bound");
         let range = japanese_upper.range.expect("range");
         assert_eq!(range.from.unit.as_deref(), Some("m"));
-        assert_close(range.from.value.unwrap(), 0.0);
+        assert_eq!(range.from.value, None);
         assert_close(range.to.value.unwrap(), 0.01);
+    }
+
+    /// A one-sided bound reports no number the text does not contain.
+    ///
+    /// The lower end used to be filled in with 0.0. Two things follow from
+    /// removing it: a caller can tell "at most 40" from "between 0 and 40",
+    /// and a bound below zero is readable at all — `≤ -10 C` was refused
+    /// outright, because a zero lower bound would have made it descend.
+    #[test]
+    fn one_sided_bound_invents_no_lower_endpoint() {
+        for (input, unit, upper) in [
+            ("≤ 40 C", "C", 40.0),
+            ("< 40 C", "C", 40.0),
+            ("under 40 kg", "kg", 40.0),
+            ("up to 40 kg", "kg", 40.0),
+            ("≤ 5 mm", "m", 0.005),
+            ("≤ -10 C", "C", -10.0),
+        ] {
+            let parsed = parse(input, None);
+            let best = parsed
+                .best
+                .as_ref()
+                .unwrap_or_else(|| panic!("{input:?} was not read"));
+            let range = best.range.as_ref().expect("a range");
+
+            assert_eq!(range.from.value, None, "{input:?} invented a lower bound");
+            assert_eq!(range.from.unit.as_deref(), Some(unit), "{input:?}");
+            assert_close(range.to.value.expect("the stated bound"), upper);
+            assert_eq!(range.to.unit.as_deref(), Some(unit), "{input:?}");
+
+            // An unstated endpoint is not a descending range.
+            assert!(
+                !parsed
+                    .findings
+                    .ambiguities
+                    .iter()
+                    .any(|found| found.code == IssueCode::AmbiguousNumber),
+                "{input:?} was reported as descending"
+            );
+        }
     }
 
     #[test]

@@ -151,12 +151,19 @@ fn assert_same_canonical(first: &Reading, second: &Reading, input: &str, rendere
         Kind::Quantity | Kind::Number => {
             assert_eq!(first.unit, second.unit, "{input} -> {rendered}");
             assert_eq!(first.dimension, second.dimension, "{input} -> {rendered}");
-            assert_close(
-                first.value.expect("first value"),
-                second.value.expect("second value"),
-                input,
-                rendered,
-            );
+            // The open end of a one-sided bound carries no value, and the
+            // reverse direction has to preserve that it carries none: an
+            // endpoint that arrives back with a number would be a number the
+            // original text never stated.
+            match (first.value, second.value) {
+                (Some(first), Some(second)) => {
+                    assert_close(first, second, input, rendered);
+                }
+                (None, None) => {}
+                (first, second) => panic!(
+                    "{input} -> {rendered}: endpoint value {first:?} came back as {second:?}"
+                ),
+            }
         }
         Kind::Date => assert_eq!(first.date, second.date, "{input} -> {rendered}"),
         Kind::Range => {
