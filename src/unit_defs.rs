@@ -19,6 +19,34 @@ pub struct UnitDef {
     pub approximate: bool,
 }
 
+/// One SI-prefixed unit, spelled out so the table stays a table.
+///
+/// Every prefixed unit here is an explicit entry, because there is no prefix
+/// machinery: resolution is a table lookup. That is a fine design until the
+/// table has holes, and it had 57 of them across nine bases — `nm`, `ng`, `μL`,
+/// `nA` and the rest were simply absent. A missing entry is not a missing
+/// reading: the lookup falls through to did-you-mean, which answers with a
+/// different quantity. `590 nm` came back as 1092680 m, having read the
+/// nanometre as the nautical mile, and `7 fg` as 2.1336 m by way of the foot.
+///
+/// This writes the entries rather than deriving them at lookup time, so the
+/// alias index, the exact-before-folded ordering and `unit_definitions()` all
+/// keep working exactly as they did. The macro only spares the reader 57
+/// identical eight-line structs.
+macro_rules! si {
+    ($id:literal, $canon:literal, $dim:ident, $factor:expr, $aliases:expr) => {
+        UnitDef {
+            id: $id,
+            canonical_unit: $canon,
+            aliases: $aliases,
+            dimension: Dimension::$dim,
+            factor: $factor,
+            provenance: Provenance::SiMultiple,
+            approximate: false,
+        }
+    };
+}
+
 pub(crate) const UNIT_DEFS: &[UnitDef] = &[
     UnitDef {
         id: "m",
@@ -1427,6 +1455,120 @@ pub(crate) const UNIT_DEFS: &[UnitDef] = &[
         provenance: Provenance::SiMultiple,
         approximate: false,
     },
+    // SI-prefixed spellings for the bases below, filling the holes that made
+    // the lookup fall through to did-you-mean. `pm` is deliberately absent:
+    // it is the picometre, but `1 pm` is overwhelmingly the afternoon, and the
+    // clock is a reading this crate does return.
+    si!("fm", "m", Length, 1e-15, &["femtometre", "femtometres"]),
+    si!("nm", "m", Length, 1e-9, &["nanometre", "nanometres"]),
+    si!("Mm", "m", Length, 1e6, &["megametre", "megametres"]),
+    si!("Gm", "m", Length, 1e9, &["gigametre", "gigametres"]),
+    si!("fg", "kg", Mass, 1e-18, &["femtogram", "femtograms"]),
+    si!("pg", "kg", Mass, 1e-15, &["picogram", "picograms"]),
+    si!("ng", "kg", Mass, 1e-12, &["nanogram", "nanograms"]),
+    si!("cg", "kg", Mass, 1e-5, &["centigram", "centigrams"]),
+    si!("Mg", "kg", Mass, 1e3, &["megagram", "megagrams"]),
+    si!("Gg", "kg", Mass, 1e6, &["gigagram", "gigagrams"]),
+    si!("fs", "s", Time, 1e-15, &["femtosecond", "femtoseconds"]),
+    si!("ps", "s", Time, 1e-12, &["picosecond", "picoseconds"]),
+    si!("cs", "s", Time, 1e-2, &["centisecond", "centiseconds"]),
+    si!("ks", "s", Time, 1e3, &["kilosecond", "kiloseconds"]),
+    si!("Ms", "s", Time, 1e6, &["megasecond", "megaseconds"]),
+    si!("Gs", "s", Time, 1e9, &["gigasecond", "gigaseconds"]),
+    si!("fA", "A", Current, 1e-15, &["femtoampere", "femtoamperes"]),
+    si!("pA", "A", Current, 1e-12, &["picoampere", "picoamperes"]),
+    si!("nA", "A", Current, 1e-9, &["nanoampere", "nanoamperes"]),
+    si!(
+        "μA",
+        "A",
+        Current,
+        1e-6,
+        &["\u{00b5}A", "uA", "microampere", "microamperes"]
+    ),
+    si!("cA", "A", Current, 1e-2, &["centiampere", "centiamperes"]),
+    si!("kA", "A", Current, 1e3, &["kiloampere", "kiloamperes"]),
+    si!("MA", "A", Current, 1e6, &["megaampere", "megaamperes"]),
+    si!("GA", "A", Current, 1e9, &["gigaampere", "gigaamperes"]),
+    si!("fV", "V", Voltage, 1e-15, &["femtovolt", "femtovolts"]),
+    si!("pV", "V", Voltage, 1e-12, &["picovolt", "picovolts"]),
+    si!("nV", "V", Voltage, 1e-9, &["nanovolt", "nanovolts"]),
+    si!(
+        "μV",
+        "V",
+        Voltage,
+        1e-6,
+        &["\u{00b5}V", "uV", "microvolt", "microvolts"]
+    ),
+    si!("cV", "V", Voltage, 1e-2, &["centivolt", "centivolts"]),
+    si!("MV", "V", Voltage, 1e6, &["megavolt", "megavolts"]),
+    si!("GV", "V", Voltage, 1e9, &["gigavolt", "gigavolts"]),
+    si!("fW", "W", Power, 1e-15, &["femtowatt", "femtowatts"]),
+    si!("pW", "W", Power, 1e-12, &["picowatt", "picowatts"]),
+    si!("nW", "W", Power, 1e-9, &["nanowatt", "nanowatts"]),
+    si!(
+        "μW",
+        "W",
+        Power,
+        1e-6,
+        &["\u{00b5}W", "uW", "microwatt", "microwatts"]
+    ),
+    si!("cW", "W", Power, 1e-2, &["centiwatt", "centiwatts"]),
+    si!("fN", "N", Force, 1e-15, &["femtonewton", "femtonewtons"]),
+    si!("pN", "N", Force, 1e-12, &["piconewton", "piconewtons"]),
+    si!("nN", "N", Force, 1e-9, &["nanonewton", "nanonewtons"]),
+    si!(
+        "μN",
+        "N",
+        Force,
+        1e-6,
+        &["\u{00b5}N", "uN", "micronewton", "micronewtons"]
+    ),
+    si!("cN", "N", Force, 1e-2, &["centinewton", "centinewtons"]),
+    si!("GN", "N", Force, 1e9, &["giganewton", "giganewtons"]),
+    si!(
+        "fPa",
+        "Pa",
+        Pressure,
+        1e-15,
+        &["femtopascal", "femtopascals"]
+    ),
+    si!("pPa", "Pa", Pressure, 1e-12, &["picopascal", "picopascals"]),
+    si!("nPa", "Pa", Pressure, 1e-9, &["nanopascal", "nanopascals"]),
+    si!(
+        "μPa",
+        "Pa",
+        Pressure,
+        1e-6,
+        &["\u{00b5}Pa", "uPa", "micropascal", "micropascals"]
+    ),
+    si!(
+        "mPa",
+        "Pa",
+        Pressure,
+        1e-3,
+        &["millipascal", "millipascals"]
+    ),
+    si!(
+        "cPa",
+        "Pa",
+        Pressure,
+        1e-2,
+        &["centipascal", "centipascals"]
+    ),
+    si!("fL", "L", Volume, 1e-15, &["femtolitre", "femtolitres"]),
+    si!("pL", "L", Volume, 1e-12, &["picolitre", "picolitres"]),
+    si!("nL", "L", Volume, 1e-9, &["nanolitre", "nanolitres"]),
+    si!(
+        "μL",
+        "L",
+        Volume,
+        1e-6,
+        &["\u{00b5}L", "uL", "microlitre", "microlitres"]
+    ),
+    si!("cL", "L", Volume, 1e-2, &["centilitre", "centilitres"]),
+    si!("kL", "L", Volume, 1e3, &["kilolitre", "kilolitres"]),
+    si!("ML", "L", Volume, 1e6, &["megalitre", "megalitres"]),
+    si!("GL", "L", Volume, 1e9, &["gigalitre", "gigalitres"]),
 ];
 
 /// Unit symbols this registry can recognize as units but cannot measure.

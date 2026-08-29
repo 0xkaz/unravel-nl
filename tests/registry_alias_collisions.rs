@@ -17,7 +17,7 @@
 mod support;
 use support::{parse, parse_quantity_fast};
 
-use unravel_nl::{Dimension, DimensionSet, IssueCode, Parsed, Parser};
+use unravel_nl::{Dimension, DimensionSet, IssueCode, Parsed, Parser, unit_definitions};
 
 fn assert_close(actual: f64, expected: f64) {
     assert!(
@@ -558,4 +558,76 @@ fn withheld_symbols_report_exactly_one_finding() {
             assert!(parsed.alternatives.len() <= 1, "{input:?}");
         }
     }
+}
+
+/// Every SI-prefixed spelling of a common base reads as that base, scaled.
+///
+/// This registry resolves by table lookup and has no prefix machinery, which is
+/// fine until the table has holes. It had 57, across nine bases. A missing
+/// entry is not a missing reading: the lookup falls through to did-you-mean,
+/// which answers with a different quantity — `590 nm` came back as 1092680 m,
+/// having read the nanometre as the nautical mile, and `7 fg` as 2.1336 m by
+/// way of the foot.
+///
+/// The check is on the value, not only the dimension. `nm` resolved to the
+/// nautical mile, which is a Length, so a dimension-only check called it
+/// correct while it was wrong by a factor of 1.85e12.
+#[test]
+fn si_prefixed_spellings_read_as_their_base_scaled() {
+    // base symbol, canonical unit, dimension, value of one base unit in it
+    let bases: &[(&str, &str, Dimension, f64)] = &[
+        ("m", "m", Dimension::Length, 1.0),
+        ("g", "kg", Dimension::Mass, 1e-3),
+        ("s", "s", Dimension::Time, 1.0),
+        ("A", "A", Dimension::Current, 1.0),
+        ("V", "V", Dimension::Voltage, 1.0),
+        ("W", "W", Dimension::Power, 1.0),
+        ("N", "N", Dimension::Force, 1.0),
+        ("Pa", "Pa", Dimension::Pressure, 1.0),
+        ("L", "L", Dimension::Volume, 1.0),
+    ];
+    let prefixes: &[(&str, f64)] = &[
+        ("f", 1e-15),
+        ("n", 1e-9),
+        ("μ", 1e-6),
+        ("m", 1e-3),
+        ("c", 1e-2),
+        ("k", 1e3),
+        ("M", 1e6),
+        ("G", 1e9),
+    ];
+
+    for (base, canonical, dimension, base_value) in bases {
+        for (prefix, scale) in prefixes {
+            let input = format!("7 {prefix}{base}");
+            let expected = 7.0 * scale * base_value;
+
+            let best = parse(&input, None)
+                .best
+                .unwrap_or_else(|| panic!("{input:?} was not read"));
+            assert_eq!(best.dimension, Some(*dimension), "{input:?}");
+            assert_eq!(best.unit.as_deref(), Some(*canonical), "{input:?}");
+
+            let got = best.value.expect("a value");
+            assert!(
+                (got - expected).abs() <= expected.abs() * 1e-9,
+                "{input:?}: expected {expected:e}, got {got:e}"
+            );
+        }
+    }
+}
+
+/// The picometre is deliberately absent, because `1 pm` is the afternoon.
+///
+/// Same call as the bare `F` and `T`: a rare correct reading is not worth a
+/// common lost one. Pinned so that adding `pm` has to be a decision.
+#[test]
+fn the_picometre_yields_to_the_clock() {
+    let parsed = parse("1 pm", None);
+    let best = parsed.best.as_ref().expect("a clock reading");
+    assert_eq!(best.dimension, Some(Dimension::Time));
+    assert!(
+        !unit_definitions().iter().any(|unit| unit.id == "pm"),
+        "the picometre was added; decide about `1 pm` before pinning this"
+    );
 }
