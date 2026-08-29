@@ -295,6 +295,39 @@ const LOWER_BOUND_JA_PREFIXES: &[&str] = &["最小", "下限"];
 // a bound, which is why the two lists are separate in the first place.
 const LOWER_BOUND_SUFFIXES: &[&str] = &["以上", "超", "を超える", "より大きい", "minimum"];
 
+/// Returns the marker by which `text` states a bound, upper or lower.
+///
+/// Used only to stop spelling correction crossing one. `mm以下` is not a
+/// misspelling of a micrometre, and the corrector had no way to know that: the
+/// upper-bound grammar reads `60mm以下` before the corrector ever sees it on
+/// the whole-input path, but `Entry::Quantity` reads the corrector and no bound
+/// grammar at all, so anything scanning a fragment could still be handed
+/// `60mm以下` and get 6e-5 m back. Guarding the corrector rather than the
+/// caller means it cannot happen down any path.
+pub(crate) fn states_bound(text: &str) -> Option<&'static str> {
+    let trimmed = text.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    states_lower_bound(text)
+        .or_else(|| {
+            UPPER_BOUND_PREFIXES
+                .iter()
+                .find(|marker| lower.starts_with(**marker))
+                .copied()
+        })
+        .or_else(|| {
+            UPPER_BOUND_SUFFIXES
+                .iter()
+                .find(|marker| lower.ends_with(**marker))
+                .copied()
+        })
+        .or_else(|| {
+            ["以下", "未満", "まで", "最大", "上限"]
+                .iter()
+                .find(|marker| trimmed.contains(**marker))
+                .copied()
+        })
+}
+
 /// Returns the marker by which `text` states a lower bound.
 ///
 /// This registry reads no lower bound — there is no grammar for one — so the
@@ -447,6 +480,15 @@ pub(crate) fn parse_lower_bound_range(text: &str, ctx: &ParseCtx) -> Option<Read
 pub(crate) fn parse_two_sided_bound_range(text: &str, ctx: &ParseCtx) -> Option<Reading> {
     let trimmed = text.trim();
 
+    // Two bounds state two numbers. Everything below is expensive — fifteen
+    // case-insensitive substring searches, then a sub-parse per candidate split
+    // — and the range gate that reaches this grammar opens on any `-`, so every
+    // negative number was paying for all of it. One pass to count numbers first
+    // turns that back into one pass.
+    if !states_two_numbers(trimmed) {
+        return None;
+    }
+
     // Where a lower-bound suffix marker ends, and where an upper-bound prefix
     // marker begins. Both are byte offsets that split the input in two.
     let after_lower_marker = LOWER_BOUND_SUFFIXES
@@ -485,6 +527,30 @@ pub(crate) fn parse_two_sided_bound_range(text: &str, ctx: &ParseCtx) -> Option<
         return Some(Reading::range(from, to, 0.9));
     }
     None
+}
+
+/// True when `text` holds at least two separate runs of digits.
+///
+/// The cheap precondition for a two-sided bound, which always states both of
+/// its ends. One pass, no allocation, and it rejects the overwhelming majority
+/// of what reaches the range grammars.
+fn states_two_numbers(text: &str) -> bool {
+    let mut runs = 0usize;
+    let mut in_run = false;
+    for byte in text.bytes() {
+        if byte.is_ascii_digit() {
+            if !in_run {
+                in_run = true;
+                runs += 1;
+                if runs == 2 {
+                    return true;
+                }
+            }
+        } else {
+            in_run = false;
+        }
+    }
+    false
 }
 
 /// [`strip_prefix_ascii_case`], from the other end.

@@ -367,14 +367,13 @@ pub(crate) fn parse_typo_corrected_quantity_ctx(
     // because `mm以上` is a short hop from a square millimetre. No amount of
     // spelling correction turns "5 mm or more" into an area.
     //
-    // This is redundant today and deliberately kept: `withhold_unsupported_lower_bound`
-    // discards the same reading afterwards, and removing this changes no
-    // observable behaviour, so no test distinguishes it. It stops being
-    // redundant the moment a lower-bound grammar exists — that guard withholds
-    // *because* the bound cannot be read, so it goes away when the bound can be
-    // read, and then this is the only thing keeping `mm以上` from becoming a
-    // unit again.
-    if states_lower_bound(text).is_some() {
+    // Both directions, not just the lower one. On the whole-input path a bound
+    // grammar reads these before the corrector is reached, so this looks
+    // redundant — but `Entry::Quantity` reads the corrector and no bound
+    // grammar at all, so a caller scanning a fragment can hand `60mm以下`
+    // straight here, and did: it came back as 6e-5 m, a micrometre invented
+    // from `mm以下`.
+    if states_bound(text).is_some() {
         return None;
     }
     let suggestion = suggest_unit(unit_text, ctx.unit_registry)?;
