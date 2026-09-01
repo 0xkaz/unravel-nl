@@ -126,13 +126,22 @@ pub enum Dimension {
     Angle,
     /// Mass per unit volume.
     Density,
+    /// A dimensionless ratio, written as a percentage.
+    ///
+    /// A dimension names the *kind* of quantity, not what is being measured:
+    /// `5 m` of pipe and `5 m` of cable are both lengths, and nothing here ever
+    /// claimed they measure the same object. Percentages are the same — two of
+    /// them are both ratios, and what each is a ratio *of* is as much outside
+    /// the reading as what is five metres long. The corpus writes `%` 611
+    /// times, more than any other unit.
+    Ratio,
 }
 
 /// Every [`Dimension`], in declaration order.
 ///
 /// The order is the bit order of [`DimensionSet`], so it is also the order in
 /// which a set reports its members.
-pub(crate) const ALL_DIMENSIONS: [Dimension; 26] = [
+pub(crate) const ALL_DIMENSIONS: [Dimension; 27] = [
     Dimension::Length,
     Dimension::Area,
     Dimension::Mass,
@@ -159,6 +168,7 @@ pub(crate) const ALL_DIMENSIONS: [Dimension; 26] = [
     Dimension::Radioactivity,
     Dimension::Angle,
     Dimension::Density,
+    Dimension::Ratio,
 ];
 
 impl Dimension {
@@ -196,6 +206,7 @@ impl Dimension {
             Self::Radioactivity => "radioactivity",
             Self::Angle => "angle",
             Self::Density => "density",
+            Self::Ratio => "ratio",
         }
     }
 }

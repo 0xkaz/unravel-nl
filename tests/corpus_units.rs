@@ -114,46 +114,63 @@ fn energy_is_refused_rather_than_guessed() {
     }
 }
 
-/// Percent is refused, and the refusal says what is missing.
+/// Percent reads as a ratio, with the value the document wrote.
 ///
-/// The value is not in doubt — `10%` is ten percent — but a Dimension asserts
-/// that two readings carrying it are the same kind of quantity, and two bare
-/// percentages are not: 13.30% of an area and 74.68% of a mass share a sign and
-/// nothing else. A reading with no Dimension is not available either, because
-/// the registry is scoped by `DimensionSet`, so a dimensionless reading is one
-/// no caller could admit or refuse. Refusing at least says why.
+/// This reverses an earlier judgement here, and the reason it was wrong is
+/// worth keeping. The argument for refusing was that a dimension asserts two
+/// readings are the same kind of quantity, and 13.30% of an area and 74.68% of
+/// a mass are not. But a dimension names the *kind* of quantity, never the
+/// referent: `5 m` of pipe and `5 m` of cable are both lengths and nothing here
+/// claimed otherwise. By that argument Length would have to go too.
+///
+/// The value stays as written — `10%` is ten percent, not 0.1 — because
+/// converting to a fraction invites a caller to multiply it by whatever is to
+/// hand, and what it is a fraction of is not in the reading.
 #[test]
-fn percent_is_refused_because_the_basis_is_not_in_the_text() {
-    for input in ["10%", "10 %", "13.30%", "-7.5%", "74.68%"] {
-        let parsed = parse(input, None);
-        assert!(parsed.best.is_none(), "{input:?} produced a reading");
-
-        let found = parsed
-            .findings
-            .skipped
-            .iter()
-            .find(|found| found.code == IssueCode::UnknownUnit)
-            .unwrap_or_else(|| panic!("{input:?} did not say why"));
-        assert!(
-            found.reason.contains("ratio"),
-            "{input:?}: {}",
-            found.reason
-        );
-        // One cause, one finding.
-        assert_eq!(parsed.findings.skipped.len(), 1, "{input:?}");
+fn percent_reads_as_a_ratio_with_the_written_value() {
+    for (input, expected) in [
+        ("10%", 10.0),
+        ("10 %", 10.0),
+        ("13.30%", 13.3),
+        ("-7.5%", -7.5),
+        ("1.5%", 1.5),
+        ("60%", 60.0),
+    ] {
+        let best = parse(input, None)
+            .best
+            .unwrap_or_else(|| panic!("{input:?} was not read"));
+        assert_eq!(best.dimension, Some(Dimension::Ratio), "{input:?}");
+        assert_eq!(best.unit.as_deref(), Some("%"), "{input:?}");
+        close(best.value.expect("a value"), expected, input);
     }
 
-    // A stated basis is named as such, and is still not commensurable with a
-    // bare percentage, so it is refused too rather than folded in with it.
-    for (input, basis) in [("7 wt%", "weight"), ("7 vol%", "volume")] {
+    // A bound over a percentage reads like any other bound.
+    let bounded = parse("≥ 25%", None).best.expect("a bound");
+    let range = bounded.range.as_ref().expect("a range");
+    close(range.from.value.expect("a value"), 25.0, "≥ 25%");
+    assert_eq!(range.to.value, None);
+}
+
+/// A percentage that states its basis is not folded into a bare one.
+///
+/// `wt%` and `vol%` of the same material are different numbers, and recording
+/// either as a plain `%` would drop the part that says which. They are refused
+/// with the basis named, until there is somewhere to put it.
+#[test]
+fn a_percentage_with_a_stated_basis_is_not_flattened() {
+    for (input, basis) in [
+        ("7 wt%", "weight"),
+        ("7 vol%", "volume"),
+        ("7 at%", "atom count"),
+    ] {
         let parsed = parse(input, None);
-        assert!(parsed.best.is_none(), "{input:?}");
+        assert!(parsed.best.is_none(), "{input:?} was read as a bare ratio");
         assert!(
             parsed
                 .findings
                 .skipped
                 .iter()
-                .any(|found| found.reason.contains(basis)),
+                .any(|found| found.code == IssueCode::UnknownUnit && found.reason.contains(basis)),
             "{input:?} did not name its basis"
         );
     }

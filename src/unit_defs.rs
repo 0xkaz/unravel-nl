@@ -1497,6 +1497,26 @@ pub(crate) const UNIT_DEFS: &[UnitDef] = &[
         provenance: Provenance::InternationalExact,
         approximate: false,
     },
+    // Percent. The value is kept as written — `10%` is ten percent, not 0.1 —
+    // because converting to a fraction invites a caller to multiply it by
+    // whatever is to hand, and the thing it is a fraction of is not in the
+    // reading.
+    UnitDef {
+        id: "%",
+        canonical_unit: "%",
+        aliases: &[
+            "%",
+            "\u{ff05}",
+            "percent",
+            "pct",
+            "per cent",
+            "\u{30d1}\u{30fc}\u{30bb}\u{30f3}\u{30c8}",
+        ],
+        dimension: Dimension::Ratio,
+        factor: 1.0,
+        provenance: Provenance::InternationalExact,
+        approximate: false,
+    },
     si!("mrad", "rad", Angle, 1e-3, &["milliradian", "milliradians"]),
     // Density. kg/m3 is canonical; g/cm3 and g/mL are the same thing and are
     // exactly 1000 of it.
@@ -1681,36 +1701,25 @@ pub(crate) const UNMODELLED_UNIT_SYMBOLS: &[(&str, &str)] = &[
     // Energy, and the quantities built from it. There is no Dimension for any
     // of them, and did-you-mean was answering anyway: `7 J/m²` came back as
     // 7 m/s2 and `7 kJ` as 7000 m, by edit distance to `m/s2` and `km`.
-    // Percent, and the spellings that name what they are a percentage of.
-    //
-    // A Dimension asserts that two readings carrying it are the same kind of
-    // quantity, and two bare percentages are not: 13.30% of an area and 74.68%
-    // of a mass share a sign and nothing else. Giving `%` a Dimension would let
-    // a caller add, compare and convert them as though they were commensurable,
-    // which is the claim the document does not make. The value is not in doubt
-    // — `10%` is ten percent — but the basis is not in the text, and no parser
-    // can recover it from the token.
-    //
-    // A reading with no Dimension is not an option either: the whole registry
-    // is scoped by `DimensionSet`, so a dimensionless reading is one no caller
-    // can admit or refuse. That leaves refusing, which at least says why.
-    ("%", "a ratio, and the text does not state what of"),
-    ("percent", "a ratio, and the text does not state what of"),
+    // The spellings that name what they are a percentage of. A bare `%` is a
+    // `Dimension::Ratio` reading; these are not folded into it, because the
+    // basis is stated here and folding would drop it. A mass fraction and a
+    // volume fraction of the same material are different numbers.
     (
         "wt%",
-        "a ratio by weight, which is not commensurable with other ratios",
+        "a ratio by weight, which a bare percentage would not record",
     ),
     (
         "vol%",
-        "a ratio by volume, which is not commensurable with other ratios",
+        "a ratio by volume, which a bare percentage would not record",
     ),
     (
         "at%",
-        "a ratio by atom count, which is not commensurable with other ratios",
+        "a ratio by atom count, which a bare percentage would not record",
     ),
     (
         "mol%",
-        "a ratio by mole fraction, which is not commensurable with other ratios",
+        "a ratio by mole fraction, which a bare percentage would not record",
     ),
     ("J", "energy"),
     ("mJ", "energy"),
