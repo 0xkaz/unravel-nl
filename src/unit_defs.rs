@@ -1459,6 +1459,79 @@ pub(crate) const UNIT_DEFS: &[UnitDef] = &[
     // the lookup fall through to did-you-mean. `pm` is deliberately absent:
     // it is the picometre, but `1 pm` is overwhelmingly the afternoon, and the
     // clock is a reading this crate does return.
+    // The angstrom: 90 occurrences in the corpus and no entry at all. Exactly
+    // 1e-10 m by definition, so the conversion is exact though it is not SI.
+    UnitDef {
+        id: "\u{00c5}",
+        canonical_unit: "m",
+        aliases: &[
+            "\u{00c5}",
+            "\u{212b}",
+            "angstrom",
+            "angstroms",
+            "\u{00e5}ngstr\u{00f6}m",
+        ],
+        dimension: Dimension::Length,
+        factor: 1e-10,
+        provenance: Provenance::InternationalExact,
+        approximate: false,
+    },
+    // Above giga. The earlier pass stopped at G, so `TPa` was unread while
+    // `GPa` read — and graphene's stiffness is quoted in TPa.
+    // Plane angle. The radian is canonical; the degree converts exactly.
+    UnitDef {
+        id: "rad",
+        canonical_unit: "rad",
+        aliases: &["rad", "radian", "radians"],
+        dimension: Dimension::Angle,
+        factor: 1.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "\u{00b0}",
+        canonical_unit: "rad",
+        aliases: &["\u{00b0}", "deg", "degree", "degrees"],
+        dimension: Dimension::Angle,
+        factor: core::f64::consts::PI / 180.0,
+        provenance: Provenance::InternationalExact,
+        approximate: false,
+    },
+    si!("mrad", "rad", Angle, 1e-3, &["milliradian", "milliradians"]),
+    // Density. kg/m3 is canonical; g/cm3 and g/mL are the same thing and are
+    // exactly 1000 of it.
+    UnitDef {
+        id: "kg/m3",
+        canonical_unit: "kg/m3",
+        aliases: &["kg/m3", "kg/m^3", "kg/m\u{00b3}"],
+        dimension: Dimension::Density,
+        factor: 1.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "g/cm3",
+        canonical_unit: "kg/m3",
+        aliases: &["g/cm3", "g/cm^3", "g/cm\u{00b3}", "g/mL", "g/ml"],
+        dimension: Dimension::Density,
+        factor: 1000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    UnitDef {
+        id: "t/m3",
+        canonical_unit: "kg/m3",
+        aliases: &["t/m3", "t/m^3", "t/m\u{00b3}"],
+        dimension: Dimension::Density,
+        factor: 1000.0,
+        provenance: Provenance::SiMultiple,
+        approximate: false,
+    },
+    si!("TPa", "Pa", Pressure, 1e12, &["terapascal", "terapascals"]),
+    si!("TW", "W", Power, 1e12, &["terawatt", "terawatts"]),
+    si!("TN", "N", Force, 1e12, &["teranewton", "teranewtons"]),
+    si!("Tm", "m", Length, 1e12, &["terametre", "terametres"]),
+    si!("PPa", "Pa", Pressure, 1e15, &["petapascal", "petapascals"]),
     si!("fm", "m", Length, 1e-15, &["femtometre", "femtometres"]),
     si!("nm", "m", Length, 1e-9, &["nanometre", "nanometres"]),
     si!("Mm", "m", Length, 1e6, &["megametre", "megametres"]),
@@ -1605,6 +1678,56 @@ pub(crate) const UNMODELLED_UNIT_SYMBOLS: &[(&str, &str)] = &[
     ("nF", "capacitance"),
     ("pF", "capacitance"),
     ("Wb", "magnetic flux"),
+    // Energy, and the quantities built from it. There is no Dimension for any
+    // of them, and did-you-mean was answering anyway: `7 J/m²` came back as
+    // 7 m/s2 and `7 kJ` as 7000 m, by edit distance to `m/s2` and `km`.
+    // Percent, and the spellings that name what they are a percentage of.
+    //
+    // A Dimension asserts that two readings carrying it are the same kind of
+    // quantity, and two bare percentages are not: 13.30% of an area and 74.68%
+    // of a mass share a sign and nothing else. Giving `%` a Dimension would let
+    // a caller add, compare and convert them as though they were commensurable,
+    // which is the claim the document does not make. The value is not in doubt
+    // — `10%` is ten percent — but the basis is not in the text, and no parser
+    // can recover it from the token.
+    //
+    // A reading with no Dimension is not an option either: the whole registry
+    // is scoped by `DimensionSet`, so a dimensionless reading is one no caller
+    // can admit or refuse. That leaves refusing, which at least says why.
+    ("%", "a ratio, and the text does not state what of"),
+    ("percent", "a ratio, and the text does not state what of"),
+    (
+        "wt%",
+        "a ratio by weight, which is not commensurable with other ratios",
+    ),
+    (
+        "vol%",
+        "a ratio by volume, which is not commensurable with other ratios",
+    ),
+    (
+        "at%",
+        "a ratio by atom count, which is not commensurable with other ratios",
+    ),
+    (
+        "mol%",
+        "a ratio by mole fraction, which is not commensurable with other ratios",
+    ),
+    ("J", "energy"),
+    ("mJ", "energy"),
+    ("kJ", "energy"),
+    ("MJ", "energy"),
+    ("GJ", "energy"),
+    ("eV", "energy"),
+    ("keV", "energy"),
+    ("MeV", "energy"),
+    ("kWh", "energy"),
+    ("J/m\u{00b2}", "energy per area"),
+    ("J/m2", "energy per area"),
+    ("J/mol", "molar energy"),
+    ("W/m\u{00b2}", "irradiance"),
+    ("W/m2", "irradiance"),
+    ("J/K", "heat capacity"),
+    ("W/mK", "thermal conductivity"),
     // The bare `F` and `T` are deliberately absent. They are the farad and the
     // tesla, but `72 F` is overwhelmingly Fahrenheit and `7 T` the tonne, and
     // both of those readings are ones this registry does measure. Refusing them

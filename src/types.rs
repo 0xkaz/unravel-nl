@@ -117,13 +117,22 @@ pub enum Dimension {
     RadiationEquivalentDose,
     /// Radioactivity.
     Radioactivity,
+    /// Plane angle.
+    ///
+    /// SI counts this as dimensionless, but `°` and `rad` convert into one
+    /// another, and a reading that carries the conversion is more honest than
+    /// one that drops the unit for being dimensionless. The corpus writes `°`
+    /// 154 times.
+    Angle,
+    /// Mass per unit volume.
+    Density,
 }
 
 /// Every [`Dimension`], in declaration order.
 ///
 /// The order is the bit order of [`DimensionSet`], so it is also the order in
 /// which a set reports its members.
-pub(crate) const ALL_DIMENSIONS: [Dimension; 24] = [
+pub(crate) const ALL_DIMENSIONS: [Dimension; 26] = [
     Dimension::Length,
     Dimension::Area,
     Dimension::Mass,
@@ -148,6 +157,8 @@ pub(crate) const ALL_DIMENSIONS: [Dimension; 24] = [
     Dimension::Illuminance,
     Dimension::RadiationEquivalentDose,
     Dimension::Radioactivity,
+    Dimension::Angle,
+    Dimension::Density,
 ];
 
 impl Dimension {
@@ -183,6 +194,8 @@ impl Dimension {
             Self::Illuminance => "illuminance",
             Self::RadiationEquivalentDose => "radiation_equivalent_dose",
             Self::Radioactivity => "radioactivity",
+            Self::Angle => "angle",
+            Self::Density => "density",
         }
     }
 }

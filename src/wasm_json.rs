@@ -294,6 +294,8 @@ pub(crate) fn parse_dimension_tag(text: &str) -> Option<Dimension> {
         "illuminance" => Some(Dimension::Illuminance),
         "radiation_equivalent_dose" => Some(Dimension::RadiationEquivalentDose),
         "radioactivity" => Some(Dimension::Radioactivity),
+        "angle" => Some(Dimension::Angle),
+        "density" => Some(Dimension::Density),
         _ => None,
     }
 }
@@ -323,7 +325,7 @@ mod wasm_tests {
     /// Every `Dimension` variant, written out rather than derived, so that
     /// adding a variant without teaching `parse_dimension_tag` about it fails
     /// here instead of silently becoming an ignored tag.
-    const ALL_DIMENSIONS: [Dimension; 24] = [
+    const ALL_DIMENSIONS: [Dimension; 26] = [
         Dimension::Length,
         Dimension::Area,
         Dimension::Mass,
@@ -348,6 +350,8 @@ mod wasm_tests {
         Dimension::Illuminance,
         Dimension::RadiationEquivalentDose,
         Dimension::Radioactivity,
+        Dimension::Angle,
+        Dimension::Density,
     ];
 
     /// `parse_dimension_tag` hand-mirrors `Dimension::as_str`, and a missing arm

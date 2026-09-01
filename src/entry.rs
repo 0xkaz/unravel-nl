@@ -828,6 +828,13 @@ pub(crate) fn withhold_unmodelled_unit_symbol(text: &str, parsed: &mut Parsed) {
     // reading matched; this one says which quantity the symbol asked for and
     // that this registry does not measure it.
     if parsed.best.is_none() && parsed.alternatives.is_empty() {
+        // The generic "nothing matched" note says less than the one below and
+        // reads as a second problem, so it goes the same way it does for a
+        // refused bound.
+        parsed
+            .findings
+            .skipped
+            .retain(|found| !found.reason.starts_with("no supported "));
         parsed.findings.skipped.push(skipped_with_span(
             unit_text,
             &format!("{UNMODELLED_UNIT_REASON}: {quantity}"),
